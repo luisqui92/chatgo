@@ -85,10 +85,9 @@ function calcularPrecio(km) {
   if (km < 4) precioPorKm = 4.0;
   else if (km < 10) precioPorKm = 3.5;
   else precioPorKm = 2.5;
-  return {
-    total: Math.round(km * precioPorKm * 10) / 10,
-    precioPorKm,
-  };
+  const calculado = km * precioPorKm;
+  const total = Math.round(Math.max(calculado, 6));
+  return { total, precioPorKm };
 }
 
 // ─── GOOGLE MAPS DISTANCIA ────────────────────────────────────────────────────
