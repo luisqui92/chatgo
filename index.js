@@ -104,8 +104,27 @@ async function calcularDistancia(origen, destino) {
       },
     }
   );
-  const element = res.data.rows[0].elements[0];
-  if (element.status !== "OK") throw new Error("Ruta no encontrada");
+
+  // Verificar errores de la API
+  if (res.data.status !== "OK") {
+    console.error("Google Maps API error:", res.data.status, res.data.error_message);
+    // Fallback: calcular distancia con Haversine si Google Maps falla
+    const km = distanciaEntrePuntos(origen.lat, origen.lng, destino.lat, destino.lng);
+    const kmRedondeado = Math.round(km * 10) / 10;
+    return { km: kmRedondeado, duracion: "~" + Math.round(km * 3) + " min" };
+  }
+
+  const row = res.data.rows?.[0];
+  const element = row?.elements?.[0];
+
+  if (!element || element.status !== "OK") {
+    console.error("Google Maps element error:", element?.status);
+    // Fallback con Haversine
+    const km = distanciaEntrePuntos(origen.lat, origen.lng, destino.lat, destino.lng);
+    const kmRedondeado = Math.round(km * 10) / 10;
+    return { km: kmRedondeado, duracion: "~" + Math.round(km * 3) + " min" };
+  }
+
   return {
     km: Math.round((element.distance.value / 1000) * 10) / 10,
     duracion: element.duration.text,
