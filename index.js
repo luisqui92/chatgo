@@ -880,6 +880,11 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
         break;
       }
       session.destino = coords;
+      // Obtener nombre de la dirección
+      try {
+        const geo = await geocodificarDireccion(`${coords.lat},${coords.lng}`);
+        if (geo) session.destino.nombre = geo.nombre;
+      } catch(e) {}
       await procesarCalculoViaje(phone, session);
       break;
     }
