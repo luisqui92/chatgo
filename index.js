@@ -1118,19 +1118,22 @@ Solo JSON.`,
 
 async function enviarMensaje(to, texto) {
   try {
-    await axios.post(
+    const res = await axios.post(
       `https://graph.facebook.com/v19.0/${CONFIG.WHATSAPP_PHONE_ID}/messages`,
       { messaging_product: "whatsapp", to, type: "text", text: { body: texto } },
       { headers: { Authorization: `Bearer ${CONFIG.WHATSAPP_TOKEN}` }, timeout: CONFIG.TIMEOUT_META }
     );
+    const msgId = res.data?.messages?.[0]?.id || "sin-id";
+    const preview = (texto || "").replace(/\n/g, " ").substring(0, 60);
+    log.info(`[WSP] ✅ TEXT → +${to} | "${preview}${texto.length > 60 ? "..." : ""}" | ${msgId}`);
   } catch (e) {
-    log.error("[WSP] enviarMensaje:", e.response?.data?.error?.message || e.message);
+    log.error(`[WSP] ❌ TEXT → +${to} | ${e.response?.data?.error?.message || e.message}`);
   }
 }
 
 async function enviarBotones(to, texto, botones) {
   try {
-    await axios.post(
+    const res = await axios.post(
       `https://graph.facebook.com/v19.0/${CONFIG.WHATSAPP_PHONE_ID}/messages`,
       {
         messaging_product: "whatsapp",
@@ -1149,8 +1152,12 @@ async function enviarBotones(to, texto, botones) {
       },
       { headers: { Authorization: `Bearer ${CONFIG.WHATSAPP_TOKEN}` }, timeout: CONFIG.TIMEOUT_META }
     );
+    const msgId = res.data?.messages?.[0]?.id || "sin-id";
+    const preview = (texto || "").replace(/\n/g, " ").substring(0, 60);
+    const btns = botones.slice(0, 3).map(b => b.id).join("|");
+    log.info(`[WSP] ✅ BTN → +${to} | "${preview}${texto.length > 60 ? "..." : ""}" | btns: [${btns}] | ${msgId}`);
   } catch (e) {
-    log.error("[WSP] enviarBotones:", e.response?.data?.error?.message || e.message);
+    log.error(`[WSP] ❌ BTN → +${to} | ${e.response?.data?.error?.message || e.message}`);
   }
 }
 
@@ -1487,7 +1494,9 @@ setInterval(async () => {
         await enviarMensaje(viaje.choferPhone, "⏰ Se te pasó el tiempo para aceptar el viaje. Pasamos al siguiente chofer.");
         const session = await getSession(viaje.usuarioPhone);
         if (session && session.step === "esperando_chofer") {
-          await enviarMensaje(viaje.usuarioPhone, "⏳ El chofer no respondió a tiempo. Buscando otro...");
+          // FIX UX: NO avisar al pasajero por cada timeout — genera spam invasivo
+          // Solo loguear y reintentar silenciosamente con el siguiente chofer
+          log.info(`[REINTENTO] Buscando siguiente chofer para ${viaje.usuarioPhone} (excluyendo ${viaje.choferWialonId})`);
           await asignarChofer(viaje.usuarioPhone, session, [viaje.choferWialonId]);
         }
       } catch (eInner) {
@@ -1593,6 +1602,7 @@ async function asignarChofer(userPhone, session, excludeWialonIds = [], intento 
   const textoObs = session.observaciones ? `\n📝 *Notas del pasajero:*\n_${session.observaciones}_\n` : "";
   const textoDesc = session.descuentoBs > 0 ? `\n🎁 _Pasajero usó código de descuento (Bs ${session.descuentoBs} off)_\n` : "";
 
+  log.info(`[ASIGNAR] → enviando viaje a chofer ${chofer.nombre} (+${chofer.phone}) | viajeId: ${viaje._id} | intento: ${intento + 1}`);
   await enviarBotones(
     chofer.phone,
     `🚖 *NUEVO VIAJE*\n\n` +
@@ -1612,10 +1622,17 @@ async function asignarChofer(userPhone, session, excludeWialonIds = [], intento 
     ]
   );
 
-  await enviarMensaje(
-    userPhone,
-    `🔍 Encontramos un chofer cerca.\n_Esperando confirmación (máx ${CONFIG.TIMEOUT_ACEPTACION_CHOFER}s)..._\n\n_Escribe CANCELAR si quieres cancelar._`
-  );
+  // FIX UX: solo avisar al pasajero en el PRIMER intento
+  // En reintentos (timeout/rechazo de chofer anterior) se mantiene en silencio
+  if (intento === 0) {
+    log.info(`[ASIGNAR] → notificando pasajero +${userPhone} que se encontró chofer (primer intento)`);
+    await enviarMensaje(
+      userPhone,
+      `🔍 Encontramos un chofer cerca.\n_Esperando confirmación..._\n\n_Escribe CANCELAR si quieres cancelar._`
+    );
+  } else {
+    log.info(`[ASIGNAR] Reintento ${intento + 1} silencioso para +${userPhone} (no se notifica para evitar spam)`);
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1866,7 +1883,8 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
         await enviarMensaje(phone, "Ok, buscaremos otro chofer para ese pasajero.");
         const session = await getSession(viaje.usuarioPhone);
         if (session) {
-          await enviarMensaje(viaje.usuarioPhone, "⏳ Buscando otro chofer...");
+          // FIX UX: NO avisar al pasajero — silencioso para evitar spam de "Buscando otro..."
+          log.info(`[RECHAZO] ${chofer.nombre} rechazó viaje ${viaje._id}, reintentando silenciosamente para +${viaje.usuarioPhone}`);
           await asignarChofer(viaje.usuarioPhone, session, [chofer.wialonId]);
         }
       }
