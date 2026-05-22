@@ -167,12 +167,11 @@ const FormData = require("form-data");
 const crypto = require("crypto");
 
 // ─── MÓDULOS DE IA ────────────────────────────────────────────────────────
-const { seleccionarMejorChofer, registrarEventoChofer } = require("./chatgo/ai/despacho");
-const { calcularMultiplierSurge, aplicarSurge, textoSurge } = require("./chatgo/ai/pricing");
-const { registrarViajeEnDemanda, enviarAlertasChoferes } = require("./chatgo/ai/prediccion");
-const { monitorearViajeEnCurso, verificarComportamientoChofer } = require("./chatgo/ai/seguridad");
-const { procesarReactivaciones, actualizarUltimoViaje } = require("./chatgo/ai/reactivacion");
-
+const { seleccionarMejorChofer, registrarEventoChofer } = require("./chatgo/chatgo/despacho");
+const { calcularMultiplierSurge, aplicarSurge, textoSurge } = require("./chatgo/chatgo/pricing");
+const { registrarViajeEnDemanda, enviarAlertasChoferes } = require("./chatgo/chatgo/prediccion");
+const { monitorearViajeEnCurso, verificarComportamientoChofer } = require("./chatgo/chatgo/seguridad");
+const { procesarReactivaciones, actualizarUltimoViaje } = require("./chatgo/chatgo/reactivacion");
 const app = express();
 
 // ─── CONFIGURACIÓN ─────────────────────────────────────────────────────────
