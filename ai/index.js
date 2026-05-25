@@ -65,9 +65,6 @@ async function actualizarUltimoViaje(phone) {
   try { await Usuario.findOneAndUpdate({ phone }, { ultimoViajeAt: new Date() }); } catch { }
 }
 
-// ─── CONFIGURACIÓN ─────────────────────────────────────────────────────────
-  WHATSAPP_TOKEN: process.env.WHATSAPP_TOKEN,
-
 async function monitorearSeguridad(viaje, posChofer, posAnterior, enviarFn) {
   try {
     const alertas = [];
