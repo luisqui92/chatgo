@@ -1,5 +1,8 @@
 // ChatGo — Wialon GPS
 const axios = require("axios");
+const https = require("https");
+const http = require("http");
+const os = require("os");
 const { CONFIG, log } = require("../config");
 const { Chofer } = require("../db/models");
 
