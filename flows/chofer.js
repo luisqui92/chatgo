@@ -1,5 +1,8 @@
 // ChatGo — Flow chofer
 const mongoose = require("mongoose");
+const https = require("https");
+const http = require("http");
+const os = require("os");
 const { CONFIG, log } = require("../config");
 const { Usuario, Chofer, Viaje, LocationReference } = require("../db/models");
 const { getSession, setSession, updateSession, deleteSession } = require("../services/session");
