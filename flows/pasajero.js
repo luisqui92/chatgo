@@ -1,0 +1,1251 @@
+// ChatGo — Flow pasajero
+const mongoose = require("mongoose");
+const { CONFIG, log, CIUDADES, detectarCiudadPorCoords } = require("../config");
+const { Usuario, Chofer, Viaje, ListaEspera, CodigoPromo, LocationReference } = require("../db/models");
+const { getSession, setSession, updateSession, deleteSession, ensureSession, removeListaEspera } = require("../services/session");
+const { enviarMensaje, enviarBotones, relayMensajeChat, obtenerUrlMedia } = require("../services/whatsapp");
+const { evaluarPrecisionReferencia, detectarYExtrarCoordsMaps, normalizarReferencia, guardarReferenciaVoz, geocodificarConMemoria, calcularDistancia, calcularDistanciaConParadas, obtenerDireccion } = require("../services/google");
+const { transcribirAudio, extraerUbicaciones } = require("../services/openai");
+const { promoCodigosActiva, crearCodigoPromo, validarCodigoPromo, enviarCodigoDescuento, esIntentoCancelar, esPedidoAyuda, detectarIncompatibilidadMoto, construirBotonesHistorial } = require("../services/utils");
+const { calcularMultiplierSurge, aplicarSurge, textoSurge } = require("../ai");
+const { asignarChofer, procesarCancelacionPasajero, procesarPedidoAyuda, registrarRating } = require("../flows/viaje");
+const { procesarMensajeChofer } = require("../flows/chofer");
+
+async function preguntarOpcionesViaje(phone, session) {
+  // Guard: si falta origen o destino, pedir lo que falta en lugar de crashear
+  if (!session.origen?.lat) {
+    await updateSession(phone, { ...session, step: "esperando_origen" });
+    await enviarMensaje(phone, "📍 Necesito tu *ubicación de origen* para continuar.\n\nUsa el 📎 adjunto → Ubicación.");
+    return;
+  }
+  if (!session.destino?.lat) {
+    await updateSession(phone, { ...session, step: "esperando_destino" });
+    await enviarMensaje(phone, "🏁 Necesito tu *ubicación de destino* para continuar.\n\nUsa el 📎 adjunto → Ubicación.");
+    return;
+  }
+
+  await updateSession(phone, { ...session, step: "preguntando_opciones" });
+  const numParadas = (session.paradas || []).length;
+  const yaTieneObs = !!session.observaciones;
+
+  let resumen = `🗺️ *Resumen del viaje*\n\n`;
+  resumen += `📍 Origen: ${session.origen?.nombre || "Tu ubicación"}\n`;
+  if (numParadas > 0) session.paradas.forEach((p, i) => { resumen += `🚏 Parada ${i + 1}: ${p.nombre || "ubicación"}\n`; });
+  resumen += `🏁 Destino: ${session.destino?.nombre || "Tu destino"}\n`;
+  if (yaTieneObs) resumen += `\n📝 Notas: _${session.observaciones}_\n`;
+  resumen += `\n¿Quieres agregar algo más antes de calcular el precio?`;
+
+  const botones = [];
+  if (numParadas < CONFIG.MAX_PARADAS) botones.push({ id: "agregar_parada", title: "🚏 Agregar parada" });
+  if (!yaTieneObs) botones.push({ id: "agregar_observacion", title: "📝 Notas" });
+  botones.push({ id: "ver_precio", title: "💰 Ver precio" });
+
+  await enviarBotones(phone, resumen, botones);
+}
+
+async function procesarCalculoViaje(phone, session) {
+  await updateSession(phone, { ...session, step: "calculando" });
+  await enviarMensaje(phone, "⏳ Calculando ruta y precio...");
+
+  try {
+    const paradas = session.paradas || [];
+    const { km, duracion, esAproximado } = paradas.length > 0
+      ? await calcularDistanciaConParadas(session.origen, paradas, session.destino)
+      : await calcularDistancia(session.origen, session.destino);
+
+    const auto = calcularPrecio(km, "auto");
+    const moto = calcularPrecio(km, "moto");
+
+    // IA PRICING: calcular surge según demanda y hora
+    const { multiplier, motivos } = await calcularMultiplierSurge(session.origen?.lat, session.origen?.lng);
+    const precioAutoFinal = aplicarSurge(auto.total, multiplier);
+    const precioMotoFinal = aplicarSurge(moto.total, multiplier);
+    const textoSurgeMsg = textoSurge(multiplier, motivos);
+
+    const nuevaSession = {
+      ...session,
+      distancia: km,
+      precioAuto: precioAutoFinal,
+      precioMoto: precioMotoFinal,
+      precioPorKmAuto: auto.precioPorKm,
+      precioPorKmMoto: moto.precioPorKm,
+      surgeMultiplier: multiplier,
+      step: "eligiendo_tipo_vehiculo",
+    };
+    await setSession(phone, nuevaSession);
+
+    const avisoAprox = esAproximado ? "\n_(distancia aproximada)_" : "";
+    let extras = "";
+    if (paradas.length > 0) extras += `🚏 ${paradas.length} parada(s)\n`;
+    if (session.observaciones) extras += `📝 _${session.observaciones}_\n`;
+    const avisoSurge = textoSurgeMsg ? `\n${textoSurgeMsg}\n` : "";
+
+    await enviarBotones(
+      phone,
+      `🗺️ *Resumen del viaje*\n\n` +
+        `📍 Origen: ${session.origen.nombre || "Tu ubicación"}\n` +
+        `🏁 Destino: ${session.destino.nombre || "Tu destino"}\n` +
+        (extras ? `\n${extras}` : "") +
+        `\n📏 Distancia: ${km} km${avisoAprox}\n` +
+        `⏱️ Tiempo: ${duracion}\n` +
+        avisoSurge +
+        `\n*Elige tu tipo de viaje:*\n\n` +
+        `🚗 *Auto* — Bs ${precioAutoFinal}\n` +
+        `🏍️ *Moto* — Bs ${precioMotoFinal}\n\n` +
+        `_(Si eliges Moto te llegará una motocicleta. Recuerda llevar casco si tienes uno.)_`,
+      [
+        { id: "elegir_auto", title: "🚗 Pedir Auto" },
+        { id: "elegir_moto", title: "🏍️ Pedir Moto" },
+        { id: "cancelar_viaje", title: "❌ Cancelar" },
+      ]
+    );
+  } catch (e) {
+    log.error("[CALCULO]", e.message);
+    await enviarMensaje(phone, "❌ Error calculando. Intenta de nuevo.");
+    await updateSession(phone, { ...session, step: "esperando_origen" });
+  }
+}
+
+async function procesarMensajeUsuario(phone, mensaje, buttonId) {
+  let usuario = await Usuario.findOne({ phone });
+
+  // Términos y condiciones
+  if (!usuario || !usuario.aceptoTerminos) {
+    let session = (await getSession(phone)) || { step: "usuario_terminos" };
+
+    if (session.step === "usuario_terminos" && !buttonId) {
+      await enviarBotones(
+        phone,
+        `👋 ¡Bienvenido a *ChatGo*!\n\n¿Cómo quieres usar la plataforma?`,
+        [
+          { id: "soy_pasajero", title: "🧍 Pasajero" },
+          { id: "soy_chofer", title: "🚖 Chofer" },
+        ]
+      );
+      await setSession(phone, { ...session, step: "eligiendo_rol" });
+      return;
+    }
+
+    if (session.step === "eligiendo_rol") {
+      if (buttonId === "soy_chofer") { await deleteSession(phone); await procesarMensajeChofer(phone, "", null); return; }
+      session = { ...session, step: "usuario_terminos" };
+    }
+
+    if (session.step === "usuario_terminos" || buttonId === "soy_pasajero") {
+      await enviarBotones(
+        phone,
+        `👋 Bienvenido a *ChatGo* de RastreoPlus.\n\nTérminos y Condiciones:\n\n• ChatGo es intermediación tecnológica\n• Tu ubicación GPS se usa solo para el viaje\n• No compartimos tu info con terceros\n• Pago directo al conductor\n• Jurisdicción: Cochabamba, Bolivia\n\n¿Aceptas?`,
+        [
+          { id: "usuario_acepta_tc", title: "✅ Acepto" },
+          { id: "usuario_rechaza_tc", title: "❌ No acepto" },
+        ]
+      );
+      await setSession(phone, { ...session, step: "usuario_esperando_tc" });
+      return;
+    }
+
+    if (session.step === "usuario_esperando_tc") {
+      if (buttonId === "usuario_acepta_tc") {
+        await Usuario.findOneAndUpdate({ phone }, { phone, aceptoTerminos: true }, { upsert: true, new: true, setDefaultsOnInsert: true });
+        await setSession(phone, { step: "esperando_nombre_usuario" });
+        await enviarMensaje(phone, `✅ ¡Bienvenido a ChatGo!\n\n¿Cuál es tu nombre? Así el chofer sabrá a quién buscar cuando llegue. 😊`);
+      } else {
+        await enviarMensaje(phone, "Para usar ChatGo debes aceptar los términos.");
+        await deleteSession(phone);
+      }
+      return;
+    }
+
+    if (session.step === "esperando_nombre_usuario") {
+      const nombreIngresado = mensaje.text?.body?.trim() || "";
+      if (!nombreIngresado || nombreIngresado.length < 2) {
+        await enviarMensaje(phone, "Por favor escribe tu nombre para continuar.");
+        return;
+      }
+      const nombreLimpio = nombreIngresado.slice(0, 40);
+      await Usuario.findOneAndUpdate({ phone }, { nombre: nombreLimpio });
+      await deleteSession(phone);
+      await enviarMensaje(
+        phone,
+        `👋 ¡Hola, ${nombreLimpio}! Ya estás listo para pedir tu taxi.\n\n` +
+        `📍 Envía tu ubicación de origen usando el pin de WhatsApp.\n\n` +
+        `También puedes:\n• Enviar un 🎤 audio de voz diciendo a dónde quieres ir\n• Compartir un link de 🗺️ Google Maps\n\n` +
+        `_⚠️ La función de audio está en desarrollo — puede cometer errores. Si algo falla usa el pin._`
+      );
+      if (promoCodigosActiva()) {
+        try {
+          const codigo = await crearCodigoPromo(phone, "bienvenida");
+          if (codigo) await enviarCodigoDescuento(phone, codigo, "tu primer viaje");
+        } catch (e) { log.error("[PROMO] Error código bienvenida:", e.message); }
+      }
+      return;
+    }
+  }
+
+  // ⚡ MEJORA: usuarios ANTIGUOS que aceptaron términos en el bot viejo pero
+  // nunca dieron su nombre. Se lo pedimos antes de dejarlos pedir viaje, así
+  // el chofer siempre sabe a quién busca.
+  if (usuario && usuario.aceptoTerminos && (!usuario.nombre || usuario.nombre.trim().length < 2)) {
+    let sName = await getSession(phone);
+    // Evitar pedir nombre si ya está en el flujo nuevo de nombre
+    if (sName && (sName.step === "esperando_nombre_usuario" || sName.step === "usuario_esperando_tc")) {
+      // Ya está en el flujo correcto — no interrumpir
+    } else if (sName && sName.step === "esperando_nombre_usuario_legacy") {
+      const nombreIngresado = mensaje.text?.body?.trim() || "";
+      if (!nombreIngresado || nombreIngresado.length < 2) {
+        await enviarMensaje(phone, "Por favor escribe tu nombre para continuar. 😊");
+        return;
+      }
+      const nombreLimpio = nombreIngresado.slice(0, 40);
+      await Usuario.findOneAndUpdate({ phone }, { nombre: nombreLimpio });
+      await deleteSession(phone);
+      await enviarMensaje(
+        phone,
+        `👋 ¡Gracias, ${nombreLimpio}! Ya podemos continuar.\n\n` +
+        `📍 Envía tu ubicación de origen usando el pin de WhatsApp.\n\n` +
+        `También puedes:\n• Enviar un 🎤 audio diciendo a dónde quieres ir\n• Compartir un link de 🗺️ Google Maps`
+      );
+      return;
+    } else {
+      // Primera vez que lo detectamos sin nombre: se lo pedimos
+      await setSession(phone, { step: "esperando_nombre_usuario_legacy" });
+    await enviarMensaje(
+      phone,
+      `👋 ¡Hola de nuevo! Antes de continuar necesitamos un dato:\n\n` +
+      `¿Cuál es tu nombre? Así el chofer sabe a quién buscar cuando llegue. 😊`
+    );
+    return;
+    } // cierre else
+  }
+
+  let session = await ensureSession(phone, { step: "inicio" });
+  const texto = mensaje.text?.body?.trim() || "";
+  const textoUpper = texto.toUpperCase();
+
+  // ─── CANCELACIÓN por palabra clave ──────────────────────────────────────
+  if (texto && !buttonId && esIntentoCancelar(texto)) {
+    // Estados con viaje activo → confirmar antes de cancelar
+    const stepsViaje = ["esperando_chofer","chofer_en_camino","chofer_esperando_pasajero","sin_chofer","confirmado","esperando_confirmacion","en_curso"];
+    // Estados de flujo de pedido → cancelar directo sin confirmar
+    const stepsPedido = ["esperando_origen","esperando_origen_con_destino","esperando_destino","eligiendo_historial","preguntando_opciones","calculando","eligiendo_tipo_vehiculo","confirmando_moto_incompatible","ofreciendo_codigo","esperando_codigo","esperando_parada","esperando_observacion","confirmando_ubicaciones_voz","aprendiendo_origen_voz","aprendiendo_destino_voz"];
+
+    if (stepsViaje.includes(session.step)) {
+      await updateSession(phone, { ...session, step: "confirmando_cancelacion" });
+      await enviarBotones(phone, `⚠️ ¿Estás seguro de cancelar tu viaje?`, [
+        { id: "confirmar_cancelacion", title: "✅ Sí, cancelar" },
+        { id: "no_cancelar", title: "❌ No, seguir" },
+      ]);
+      return;
+    }
+    if (stepsPedido.includes(session.step)) {
+      await deleteSession(phone);
+      await enviarMensaje(phone, "❌ Pedido cancelado. Escribe cuando quieras pedir un taxi. 🚖");
+      return;
+    }
+  }
+
+  // ─── AYUDA por palabra clave ─────────────────────────────────────────────
+  if (texto && !buttonId && esPedidoAyuda(texto)) {
+    await procesarPedidoAyuda(phone, false);
+    return;
+  }
+
+  // ─── Botones post-rating ─────────────────────────────────────────────────
+  if (buttonId === "pedir_otro_taxi") {
+    await deleteSession(phone);
+    // Redirigir al flujo normal de inicio
+    await procesarMensajeUsuario(phone, mensaje, null);
+    return;
+  }
+  if (buttonId === "no_por_ahora") {
+    await enviarMensaje(phone, `👍 ¡Hasta la próxima! Escribe cuando necesites taxi. 🚖`);
+    return;
+  }
+  if (buttonId === "contactar_soporte") {
+    await procesarPedidoAyuda(phone, false);
+    return;
+  }
+
+  // ─── Botones historial ───────────────────────────────────────────────────
+  if (buttonId === "hist_ultimo") {
+    const histData = session.historial;
+    if (histData?.ultimo?.destino) {
+      const destino = histData.ultimo.destino;
+      await updateSession(phone, { ...session, destino, step: "esperando_origen_con_destino" });
+      await enviarMensaje(phone, `✅ Repetimos el viaje a: *${destino.nombre || "tu último destino"}*\n\n📍 Ahora envíame tu *ubicación actual* (con el pin de WhatsApp) para que sepamos desde dónde recogerte.`);
+    } else {
+      await updateSession(phone, { ...session, step: "esperando_origen" });
+      await enviarMensaje(phone, "📍 Envía tu ubicación de origen con el pin.");
+    }
+    return;
+  }
+
+  if (buttonId?.startsWith("hist_freq_")) {
+    const idx = parseInt(buttonId.replace("hist_freq_", ""));
+    const histData = session.historial;
+    if (histData?.rutas?.[idx]?.destino) {
+      const destino = histData.rutas[idx].destino;
+      await updateSession(phone, { ...session, destino, step: "esperando_origen_con_destino" });
+      await enviarMensaje(phone, `✅ Vamos a: *${destino.nombre || "tu destino guardado"}*\n\n📍 Ahora envíame tu *ubicación actual* (con el pin de WhatsApp) para que sepamos desde dónde recogerte.`);
+    } else {
+      await updateSession(phone, { ...session, step: "esperando_origen" });
+      await enviarMensaje(phone, "📍 Envía tu ubicación de origen con el pin.");
+    }
+    return;
+  }
+
+  if (buttonId === "hist_nueva") {
+    await updateSession(phone, { ...session, step: "esperando_origen" });
+    await enviarMensaje(phone, "📍 Envía tu *ubicación de origen* con el pin de WhatsApp.");
+    return;
+  }
+
+  // ─── Confirmación/cancelación ────────────────────────────────────────────
+  if (session.step === "confirmando_cancelacion") {
+    if (buttonId === "confirmar_cancelacion") { await procesarCancelacionPasajero(phone, session); return; }
+    if (buttonId === "no_cancelar") {
+      const viaje = await Viaje.findOne({ usuarioPhone: phone, estado: { $in: ["pendiente","en_camino","esperando_pasajero","en_curso"] } });
+      const pasoRestaurar = viaje
+        ? viaje.estado === "pendiente" ? "esperando_chofer"
+          : viaje.estado === "en_camino" ? "chofer_en_camino"
+          : viaje.estado === "esperando_pasajero" ? "chofer_esperando_pasajero"
+          : "en_curso"
+        : "inicio";
+      await updateSession(phone, { ...session, step: pasoRestaurar });
+      await enviarMensaje(phone, "✅ Seguimos con tu viaje.");
+      return;
+    }
+  }
+
+  // ─── Rating ──────────────────────────────────────────────────────────────
+  if (session.step === "esperando_rating" && buttonId?.startsWith("rating_")) {
+    const rating = parseInt(buttonId.replace("rating_", ""));
+    if (rating && session.viajeIdRating) await registrarRating(phone, rating, session.viajeIdRating);
+    return;
+  }
+
+  // ─── Extraer coordenadas de pin de WhatsApp ──────────────────────────────
+  let coords = null;
+  if (mensaje.location) {
+    const lat = parseFloat(mensaje.location.latitude ?? mensaje.location.lat);
+    const lng = parseFloat(mensaje.location.longitude ?? mensaje.location.lng ?? mensaje.location.lon);
+    if (!isNaN(lat) && !isNaN(lng)) coords = { lat, lng };
+  }
+
+  // FEATURE: Detectar link de Google Maps en texto ──────────────────────────
+  if (!coords && texto && (texto.includes("google.com/maps") || texto.includes("maps.app.goo.gl") || texto.includes("maps.google.com"))) {
+    try {
+      const coordsMaps = await detectarYExtrarCoordsMaps(texto);
+      if (coordsMaps) {
+        coords = coordsMaps;
+        log.info(`[GMAPS_URL] Coordenadas extraídas de URL: (${coords.lat}, ${coords.lng})`);
+        await enviarMensaje(phone, "📍 Detecté un link de Google Maps. Procesando ubicación...");
+      }
+    } catch (e) {
+      log.error("[GMAPS_URL]", e.message);
+    }
+  }
+
+  // ─── FIX BUG#6: Chat multimedia en TODOS los estados activos ────────────
+  // Incluye "esperando_chofer" que antes solo hacía relay de texto
+  if (
+    !buttonId &&
+    ["esperando_chofer","chofer_en_camino","chofer_esperando_pasajero","en_curso"].includes(session.step)
+  ) {
+    if (session.choferPhone) {
+      const reenviado = await relayMensajeChat(phone, session.choferPhone, mensaje, "tu pasajero");
+      if (reenviado) {
+        await enviarMensaje(phone, "✅ Enviado al chofer");
+        return;
+      }
+    }
+  }
+
+  // ─── Audio / voz ─────────────────────────────────────────────────────────
+  if (mensaje.type === "audio" || mensaje.type === "voice") {
+    // Onboarding de audio: explicar UNA SOLA VEZ cómo funciona y que ayudan a construir el mapa
+    const usuarioParaAudio = await Usuario.findOne({ phone }).lean();
+    if (!usuarioParaAudio?.audioOnboardingHecho) {
+      await enviarMensaje(phone,
+        `🎤 *¡Podés pedir tu taxi por voz!*\n\n` +
+        `🗺️ Estamos construyendo el mapa de Cochabamba con la ayuda de usuarios como vos.\n\n` +
+        `*Para que funcione bien, danos referencias exactas:*\n\n` +
+        `✅ *Bien:*\n` +
+        `_"Recógeme de la Cancha, esquina Punata y San Martín, y llevame al Stadium en Juan de la Rosa y Libertador"_\n\n` +
+        `⚠️ *Menos preciso:*\n` +
+        `_"De la Cancha al Stadium"_ ← no sabemos de qué parte exacta\n\n` +
+        `*Cómo funciona:*\n` +
+        `• Lugar conocido → lo proceso directo ✅\n` +
+        `• Lugar desconocido → te pido el pin para mapearlo 📍\n` +
+        `• Próxima vez → ya lo sé sin pedir pin 🙌\n\n` +
+        `_Gracias por tu paciencia. Cada pin ayuda a todos los usuarios futuros._\n\n` +
+        `⏳ Procesando tu audio...`
+      );
+      // Marcar que ya se explicó — no volver a mostrar este mensaje
+      await Usuario.findOneAndUpdate({ phone }, { audioOnboardingHecho: true });
+    } else {
+      await enviarMensaje(phone, "🎤 _Procesando tu audio..._");
+    }
+    try {
+      const audioUrl = await obtenerUrlMedia(mensaje.audio?.id || mensaje.voice?.id);
+      const transcripcion = await transcribirAudio(audioUrl);
+      await enviarMensaje(phone, `🎤 Escuché: _"${transcripcion}"_`);
+      const ubicaciones = await extraerUbicaciones(transcripcion);
+      // Ciudad del usuario para geocoding correcto
+      const usuarioParaGeocode = await Usuario.findOne({ phone }).lean();
+      const ciudadParaAudio = session.ciudadUsuario || usuarioParaGeocode?.ciudad || "Cochabamba";
+
+      // Evaluar precisión de las referencias extraídas
+      // Si son imprecisas advertimos pero NO bloqueamos — el viaje puede continuar
+      // con el precio que se calcule, pero el pasajero sabe que puede haber diferencia
+      if (ubicaciones.origen || ubicaciones.destino) {
+        const evalOrigen = ubicaciones.origen ? evaluarPrecisionReferencia(ubicaciones.origen) : null;
+        const evalDestino = ubicaciones.destino ? evaluarPrecisionReferencia(ubicaciones.destino) : null;
+        const advertencias = [];
+
+        if (evalOrigen && !evalOrigen.precisa) {
+          advertencias.push(
+            `⚠️ *Origen poco preciso:* _"${ubicaciones.origen}"_\n` +
+            `${evalOrigen.sugerencia || "Intentá dar una esquina o referencia exacta."}`
+          );
+        }
+        if (evalDestino && !evalDestino.precisa) {
+          advertencias.push(
+            `⚠️ *Destino poco preciso:* _"${ubicaciones.destino}"_\n` +
+            `${evalDestino.sugerencia || "Intentá dar una esquina o referencia exacta."}`
+          );
+        }
+
+        if (advertencias.length > 0) {
+          await enviarMensaje(phone,
+            advertencias.join("\n\n") +
+            `\n\n💰 _Si el lugar no es exacto, el precio calculado podría variar con el real._\n` +
+            `_Podés cancelar y mandar el audio de nuevo con más referencias, o continuar._`
+          );
+        }
+      }
+
+      if (!ubicaciones.origen && !ubicaciones.destino) {
+        await updateSession(phone, { ...session, step: "esperando_origen" });
+        await enviarMensaje(phone,
+          "No pude identificar ninguna ubicación en tu audio.\n\n" +
+          "📍 Envía el pin de tu origen con el 📎 adjunto → Ubicación."
+        );
+        return;
+      }
+
+      // Función interna: intenta geocodificar, si falla activa aprendizaje colaborativo
+      async function resolverUbicacionVoz(referencia, tipoUbic) {
+        if (!referencia) return { coords: null, aprender: false };
+        const coords = await geocodificarConMemoria(referencia);
+        if (!coords) {
+          // No se pudo mapear — pedir pin al usuario para aprenderlo
+          log.info(`[APRENDIZAJE] "${referencia}" no mapeado — solicitando pin al usuario`);
+          return { coords: null, aprender: true, referencia, tipoUbic };
+        }
+        if (coords._incierto) {
+          // Google encontró algo pero es una calle genérica — pedir pin para confirmar
+          log.info(`[APRENDIZAJE] "${referencia}" incierto — solicitando pin para confirmar`);
+          return { coords: null, aprender: true, referencia, tipoUbic, inciertoLink: `https://www.google.com/maps?q=${coords.lat},${coords.lng}` };
+        }
+        return { coords, aprender: false };
+      }
+
+      // Caso: solo origen en el audio
+      if (ubicaciones.origen && !ubicaciones.destino) {
+        const resultOrigen = await resolverUbicacionVoz(ubicaciones.origen, "origen");
+        const { coords, aprender, referencia } = resultOrigen;
+        const nombreOrigen = referencia || ubicaciones.origen;
+        if (coords) {
+          await updateSession(phone, { ...session, origen: { ...coords, nombre: coords.nombre || nombreOrigen }, step: "esperando_destino" });
+          await enviarMensaje(phone, `✅ *Origen:* ${nombreOrigen}\n\n🏁 Ahora envía el pin de tu *destino*.`);
+        } else if (aprender) {
+          const linkVerif = resultOrigen.inciertoLink ? `\n\n🗺️ Google lo encontró aquí: ${resultOrigen.inciertoLink}\nSi no es correcto, mandame el pin exacto.` : "";
+          await updateSession(phone, { ...session, step: "aprendiendo_origen_voz", referenciaVozOrigen: nombreOrigen });
+          await enviarMensaje(phone,
+            `🎤 Entendí: *"${nombreOrigen}"*${linkVerif}\n\n` +
+            `📍 *ORIGEN — de dónde te recogemos*\n` +
+            `Mandame el pin exacto de *${nombreOrigen}*\n` +
+            `Usa el 📎 adjunto → Ubicación y mueve el pin al lugar exacto.`
+          );
+        }
+        return;
+      }
+
+      // Caso: solo destino en el audio
+      if (!ubicaciones.origen && ubicaciones.destino) {
+        const { coords, aprender, referencia } = await resolverUbicacionVoz(ubicaciones.destino, "destino");
+        const nombreDestino = referencia || ubicaciones.destino; // fallback a lo que dijo el usuario
+        if (coords) {
+          await updateSession(phone, { ...session, destino: { ...coords, nombre: coords.nombre || nombreDestino }, step: "esperando_origen" });
+          await enviarMensaje(phone, `✅ *Destino:* ${nombreDestino}\n\n📍 Ahora envía el pin de tu *origen* (de dónde te recogemos).`);
+        } else if (aprender) {
+          await updateSession(phone, { ...session, step: "aprendiendo_destino_voz", referenciaVozDestino: referencia });
+          await enviarMensaje(phone,
+            `🎤 Entendí: *"${referencia}"*\n\n` +
+            `🗺️ Todavía no tengo ese lugar mapeado.\n` +
+            `¿Me mandas el pin de *${referencia}*? Así lo aprendo y la próxima vez ya lo sé. 📍`
+          );
+        }
+        return;
+      }
+
+      // Caso: tiene ambos
+      const result1 = await resolverUbicacionVoz(ubicaciones.origen, "origen");
+      const result2 = await resolverUbicacionVoz(ubicaciones.destino, "destino");
+      const { coords: origenCoords, aprender: aprenderOrigen, referencia: refOrigen } = result1;
+      const { coords: destinoCoords, aprender: aprenderDestino, referencia: refDestino } = result2;
+
+      if (origenCoords && destinoCoords) {
+        // Ambos resueltos — confirmar con el usuario
+        origenCoords.nombre = origenCoords.nombre || ubicaciones.origen;
+        destinoCoords.nombre = destinoCoords.nombre || ubicaciones.destino;
+        await updateSession(phone, {
+          ...session,
+          origenPendiente: origenCoords,
+          destinoPendiente: destinoCoords,
+          step: "confirmando_ubicaciones_voz",
+        });
+        await enviarBotones(
+          phone,
+          `📍 *¿Confirmas estas ubicaciones?*\n\n🚀 Origen: ${ubicaciones.origen}\n🏁 Destino: ${ubicaciones.destino}`,
+          [
+            { id: "confirmar_ubicaciones", title: "✅ Sí" },
+            { id: "corregir_origen", title: "Cambiar origen" },
+            { id: "corregir_destino", title: "Cambiar destino" },
+          ]
+        );
+      } else if (origenCoords && !destinoCoords) {
+        // Origen OK, destino no mapeado — pedir pin del destino para aprender
+        const refD2 = refDestino || ubicaciones.destino;
+        const linkD2 = result2?.inciertoLink ? `\n🗺️ Google lo puso aquí: ${result2.inciertoLink} — si no es correcto, mandame el pin exacto.` : "";
+        await updateSession(phone, {
+          ...session,
+          origen: { ...origenCoords, nombre: origenCoords.nombre || ubicaciones.origen },
+          step: "aprendiendo_destino_voz",
+          referenciaVozDestino: refD2,
+        });
+        await enviarMensaje(phone,
+          `✅ *Origen:* ${ubicaciones.origen}\n\n` +
+          `🏁 *DESTINO — a dónde vas*\n` +
+          `Mandame el pin de: *${refD2}*${linkD2}\n` +
+          `Usa el 📎 adjunto → Ubicación y mueve el pin al lugar exacto.`
+        );
+      } else if (!origenCoords && destinoCoords) {
+        // Destino OK, origen no mapeado — pedir pin del origen para aprender
+        const refO2 = refOrigen || ubicaciones.origen;
+        const linkO2 = result1?.inciertoLink ? `\n🗺️ Google lo puso aquí: ${result1.inciertoLink} — si no es correcto, mandame el pin exacto.` : "";
+        await updateSession(phone, {
+          ...session,
+          destino: { ...destinoCoords, nombre: destinoCoords.nombre || ubicaciones.destino },
+          step: "aprendiendo_origen_voz",
+          referenciaVozOrigen: refO2,
+        });
+        await enviarMensaje(phone,
+          `✅ *Destino:* ${ubicaciones.destino}\n\n` +
+          `📍 *ORIGEN — de dónde te recogemos*\n` +
+          `Mandame el pin de: *${refO2}*${linkO2}\n` +
+          `Usa el 📎 adjunto → Ubicación y mueve el pin al lugar exacto.`
+        );
+      } else {
+        // Ninguno mapeado — pedir ambos pins en secuencia (paso 1 de 2, paso 2 de 2)
+        const refO = refOrigen || ubicaciones.origen;
+        const refD = refDestino || ubicaciones.destino;
+        await updateSession(phone, {
+          ...session,
+          step: "aprendiendo_origen_voz",
+          referenciaVozOrigen: refO,
+          referenciaVozDestino: refD,
+        });
+        await enviarMensaje(phone,
+          `🎤 Entendí:\n` +
+          `📍 *Origen:* ${ubicaciones.origen}\n` +
+          `🏁 *Destino:* ${ubicaciones.destino}\n\n` +
+          `🗺️ Esos dos lugares no los tengo mapeados todavía.\n` +
+          `¡Ayudame a aprenderlos! Necesito 2 pins.\n\n` +
+          `📍 *ORIGEN — de dónde te recogemos* _(paso 1 de 2)_\n` +
+          `Mandame el pin de: *${refO}*\n` +
+          `Usa el 📎 adjunto → Ubicación y mueve el pin al lugar exacto.`
+        );
+      }
+
+    } catch (e) {
+      log.error("[AUDIO]", e.message);
+      await enviarMensaje(phone, "❌ Error procesando audio. Envía el pin de ubicación.");
+      await updateSession(phone, { ...session, step: "esperando_origen" });
+    }
+    return;
+  }
+
+  // ─── Detección de nuevo pedido por texto libre ────────────────────────────
+  // Si el usuario escribe algo que claramente indica querer un nuevo viaje
+  // y tiene una sesión de pedido abandonada, la reseteamos
+  const stepsPedidoAbandonable = [
+    "esperando_origen","esperando_destino","esperando_origen_con_destino",
+    "eligiendo_historial","preguntando_opciones","calculando",
+    "eligiendo_tipo_vehiculo","confirmando_moto_incompatible",
+    "ofreciendo_codigo","esperando_codigo","esperando_parada","esperando_observacion",
+    "confirmando_ubicaciones_voz","aprendiendo_origen_voz","aprendiendo_destino_voz",
+    "confirmando_ciudad"
+  ];
+
+  if (texto && !buttonId && !coords && stepsPedidoAbandonable.includes(session.step)) {
+    // Verificar si la sesión está vencida (más de 2 horas sin actividad)
+    const sesionVencida = session.updatedAt &&
+      (Date.now() - new Date(session.updatedAt).getTime()) > CONFIG.SESSION_PEDIDO_TIMEOUT_MS;
+
+    // Detectar frases que indican nuevo pedido
+    const t = texto.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    const esNuevoPedido = /\b(nueva|nuevo|otra|otro|quiero|necesito|pedir|pedido|carrera|taxi|viaje)\b/.test(t);
+
+    if (sesionVencida || (esNuevoPedido && stepsPedidoAbandonable.includes(session.step))) {
+      log.info(`[SESSION] Reset por ${sesionVencida ? "timeout" : "nuevo pedido"} — phone: ${phone}, step: ${session.step}`);
+      await deleteSession(phone);
+      await procesarMensajeUsuario(phone, mensaje, buttonId);
+      return;
+    }
+  }
+
+  // ─── Switch de steps ──────────────────────────────────────────────────────
+  switch (session.step) {
+    case "inicio": {
+      // Entregar código a usuarios existentes que no tengan uno activo
+      if (promoCodigosActiva()) {
+        const tieneCodigoActivo = await CodigoPromo.exists({
+          generadoPor: phone, usado: false, fechaVencimiento: { $gt: new Date() }
+        });
+        if (!tieneCodigoActivo) {
+          try {
+            const codigoExistente = await crearCodigoPromo(phone, "promo_masiva");
+            if (codigoExistente) await enviarCodigoDescuento(phone, codigoExistente, "tu próximo viaje");
+          } catch (e) { log.error("[PROMO_MASIVA]", e.message); }
+        }
+      }
+
+      // FIX: si el usuario mandó un pin junto con el primer mensaje,
+      // procesarlo directo sin pedirlo de nuevo
+      if (coords) {
+        const origen = { ...coords };
+        try { const dir = await obtenerDireccion(coords.lat, coords.lng); if (dir) origen.nombre = dir; } catch {}
+        await updateSession(phone, { ...session, origen, step: "esperando_destino" });
+        await enviarMensaje(phone, `✅ *Origen recibido:* ${origen.nombre || "tu ubicación"}\n\n🏁 Ahora envía tu *ubicación de destino* (a dónde quieres ir).`);
+        break;
+      }
+
+      const { botones, idsParaSession } = await construirBotonesHistorial(phone);
+      if (botones.length > 0) {
+        await updateSession(phone, { ...session, step: "eligiendo_historial", historial: idsParaSession });
+        await enviarBotones(phone, `👋 ¡Hola de nuevo!\n\nElige una opción o envíame tu *ubicación de origen* 📍`, botones);
+      } else {
+        await updateSession(phone, { ...session, step: "esperando_origen" });
+        await enviarMensaje(
+          phone,
+          "👋 ¡Hola! Bienvenido a *ChatGo*.\n\n" +
+            "📍 Envía tu ubicación de origen usando el pin de WhatsApp.\n\n" +
+            "También puedes:\n• Enviar un 🎤 audio de voz diciendo a dónde quieres ir\n• Compartir un link de 🗺️ Google Maps"
+        );
+      }
+      break;
+    }
+
+    case "eligiendo_historial": {
+      if (coords) {
+        const origen = { ...coords };
+        try { const dir = await obtenerDireccion(coords.lat, coords.lng); if (dir) origen.nombre = dir; } catch {}
+        await updateSession(phone, { ...session, origen, step: "esperando_destino" });
+        await enviarMensaje(phone, `✅ *Origen recibido:* ${origen.nombre || "tu ubicación actual"}\n\n🏁 Ahora envía tu *ubicación de destino* (a dónde quieres ir).`);
+      } else {
+        await updateSession(phone, { ...session, step: "esperando_origen" });
+        await enviarMensaje(phone, "📍 Envía tu ubicación de origen con el pin de WhatsApp.");
+      }
+      break;
+    }
+
+    // ─── APRENDIZAJE COLABORATIVO ────────────────────────────────────────────
+    // El usuario manda un audio con lugar desconocido.
+    // El bot pide el pin para aprenderlo y continúa el flujo normal.
+    // Si ambos (origen y destino) son desconocidos, los pide en secuencia.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    case "aprendiendo_origen_voz": {
+      const refOrigen = session.referenciaVozOrigen || "tu origen";
+      const tambienAprendeDestino = !!session.referenciaVozDestino && !session.destino?.lat;
+      const pasoLabel = tambienAprendeDestino ? " _(paso 1 de 2)_" : "";
+
+      if (!coords) {
+        await enviarMensaje(phone,
+          `📍 *ORIGEN — de dónde te recogemos*${pasoLabel}\n\n` +
+          `Mandame el pin de: *${refOrigen}*\n\n` +
+          `Usa el 📎 adjunto → Ubicación y mueve el pin al lugar exacto.\n` +
+          `_Con tu ayuda ChatGo aprende las calles de Cochabamba. 🗺️_`
+        );
+        break;
+      }
+      {
+        const origen = { ...coords };
+        try { const dir = await obtenerDireccion(coords.lat, coords.lng); if (dir) origen.nombre = dir; } catch {}
+
+        // Guardar en memoria para futuros usuarios
+        if (session.referenciaVozOrigen) {
+          await guardarReferenciaVoz(session.referenciaVozOrigen, origen.lat, origen.lng, origen.nombre || session.referenciaVozOrigen);
+          log.info(`[APRENDIZAJE] Origen guardado: "${session.referenciaVozOrigen}" → (${origen.lat}, ${origen.lng})`);
+        }
+
+        if (tambienAprendeDestino) {
+          // Destino también es desconocido — pedirlo ahora (paso 2 de 2)
+          const refDestino = session.referenciaVozDestino;
+          const sessionActualizada = { ...session, origen, step: "aprendiendo_destino_voz" };
+          await setSession(phone, sessionActualizada);
+          await enviarMensaje(phone,
+            `✅ ¡Gracias! Origen mapeado. 🙌\n\n` +
+            `🏁 *DESTINO — a dónde vas* _(paso 2 de 2)_\n\n` +
+            `Mandame el pin de: *${refDestino}*\n\n` +
+            `Usa el 📎 adjunto → Ubicación y mueve el pin al lugar exacto.`
+          );
+        } else if (session.destino?.lat) {
+          // Ya tiene destino mapeado — ir directo al resumen
+          const nuevaSession = { ...session, origen };
+          delete nuevaSession.referenciaVozOrigen;
+          delete nuevaSession.referenciaVozDestino;
+          nuevaSession.step = "preguntando_opciones";
+          await setSession(phone, nuevaSession);
+          if (session.referenciaVozOrigen) {
+            await enviarMensaje(phone, `✅ ¡Gracias! Aprendí *${session.referenciaVozOrigen}*. 🙌`);
+          }
+          await preguntarOpcionesViaje(phone, nuevaSession);
+        } else {
+          // Solo faltaba el origen — pedir destino normalmente
+          const nuevaSession = { ...session, origen, step: "esperando_destino" };
+          delete nuevaSession.referenciaVozOrigen;
+          delete nuevaSession.referenciaVozDestino;
+          await setSession(phone, nuevaSession);
+          if (session.referenciaVozOrigen) {
+            await enviarMensaje(phone, `✅ ¡Gracias! Aprendí *${session.referenciaVozOrigen}*. 🙌\n\n🏁 Ahora envía el pin de tu *destino*.`);
+          } else {
+            await enviarMensaje(phone, `✅ *Origen guardado.*\n\n🏁 Ahora envía el pin de tu *destino*.`);
+          }
+        }
+      }
+      break;
+    }
+
+    case "aprendiendo_destino_voz": {
+      const refDestino = session.referenciaVozDestino || "tu destino";
+      const teníaOrigenDesconocido = !!session.referenciaVozOrigen;
+      const pasoLabelD = teníaOrigenDesconocido ? " _(paso 2 de 2)_" : "";
+
+      if (!coords) {
+        await enviarMensaje(phone,
+          `🏁 *DESTINO — a dónde vas*${pasoLabelD}\n\n` +
+          `Mandame el pin de: *${refDestino}*\n\n` +
+          `Usa el 📎 adjunto → Ubicación y mueve el pin al lugar exacto.\n` +
+          `_Con tu ayuda ChatGo aprende las calles de Cochabamba. 🗺️_`
+        );
+        break;
+      }
+      {
+        const destino = { ...coords };
+        try { const dir = await obtenerDireccion(coords.lat, coords.lng); if (dir) destino.nombre = dir; } catch {}
+
+        // Guardar en memoria para futuros usuarios
+        if (session.referenciaVozDestino) {
+          await guardarReferenciaVoz(session.referenciaVozDestino, destino.lat, destino.lng, destino.nombre || session.referenciaVozDestino);
+          log.info(`[APRENDIZAJE] Destino guardado: "${session.referenciaVozDestino}" → (${destino.lat}, ${destino.lng})`);
+        }
+
+        // Continuar al resumen del viaje (si ya tiene origen) o pedirlo
+        const nuevaSession = { ...session, destino };
+        delete nuevaSession.referenciaVozOrigen;
+        delete nuevaSession.referenciaVozDestino;
+
+        if (!nuevaSession.origen?.lat) {
+          // Falta el origen — pedirlo
+          nuevaSession.step = "esperando_origen";
+          await setSession(phone, nuevaSession);
+          await enviarMensaje(phone,
+            `✅ ¡Gracias! Aprendí *${session.referenciaVozDestino || "tu destino"}*. 🙌\n\n` +
+            `📍 *ORIGEN — de dónde te recogemos*\n` +
+            `Ahora envía el pin de tu origen con el 📎 adjunto → Ubicación.`
+          );
+        } else {
+          nuevaSession.step = "preguntando_opciones";
+          await setSession(phone, nuevaSession);
+          await enviarMensaje(phone, `✅ ¡Gracias! Aprendí *${session.referenciaVozDestino || "tu destino"}*. 🙌`);
+          await preguntarOpcionesViaje(phone, nuevaSession);
+        }
+      }
+      break;
+    }
+
+    case "esperando_origen":
+      if (!coords) {
+        await enviarMensaje(phone, "📍 Estoy esperando tu *ubicación de origen* (de dónde te recogemos).\n\nUsa el 📎 adjunto → Ubicación, envía un 🎤 audio, o comparte un link de Google Maps.");
+        break;
+      }
+      {
+        const origen = { ...coords };
+        try { const dir = await obtenerDireccion(coords.lat, coords.lng); if (dir) origen.nombre = dir; } catch {}
+
+        // DETECCIÓN AUTOMÁTICA DE CIUDAD por el pin del usuario
+        const ciudadDetectada = detectarCiudadPorCoords(coords.lat, coords.lng);
+        if (ciudadDetectada) {
+          const usuarioCiudad = await Usuario.findOne({ phone }).lean();
+          if (!usuarioCiudad?.ciudad) {
+            // Primera vez — guardar ciudad detectada y confirmar al usuario
+            await Usuario.findOneAndUpdate({ phone }, { ciudad: ciudadDetectada, ciudadDetectada: true });
+            log.info(`[CIUDAD] Detectada: ${ciudadDetectada} para ${phone}`);
+            // Actualizar sesión con la ciudad
+            session.ciudadUsuario = ciudadDetectada;
+          }
+        } else if (!session.ciudadUsuario) {
+          // No detectamos la ciudad — preguntar
+          await updateSession(phone, { ...session, origen, step: "confirmando_ciudad", origenPendiente: origen });
+          await enviarBotones(phone,
+            `✅ *Origen recibido.* ¿En qué ciudad estás?`,
+            Object.keys(CIUDADES).slice(0,3).map(c => ({ id: `ciudad_${c.replace(/ /g,"_")}`, title: c }))
+          );
+          break;
+        }
+
+        // CROWDSOURCING SILENCIOSO: si hay referencia de voz pendiente, mapearla con este pin
+        if (session.referenciaVozOrigen) {
+          try {
+            const refNorm = normalizarReferencia(session.referenciaVozOrigen);
+            const yaExiste = await LocationReference.findOne({ referencia: refNorm });
+            if (!yaExiste) {
+              await guardarReferenciaVoz(session.referenciaVozOrigen, coords.lat, coords.lng, origen.nombre || session.referenciaVozOrigen);
+              log.info(`[CROWDSOURCE] Origen mapeado silenciosamente: "${session.referenciaVozOrigen}" → (${coords.lat}, ${coords.lng})`);
+            }
+          } catch (e) { log.error("[CROWDSOURCE_ORIGEN]", e.message); }
+        }
+
+        // Si ya tiene destino guardado (del audio), ir directo al resumen
+        if (session.destino?.lat) {
+          const nuevaSession = { ...session, origen };
+          delete nuevaSession.referenciaVozOrigen;
+          delete nuevaSession.referenciaVozDestino;
+          await setSession(phone, nuevaSession);
+          await enviarMensaje(phone, `✅ *Origen recibido:* ${origen.nombre || "tu ubicación"}`);
+          await preguntarOpcionesViaje(phone, nuevaSession);
+        } else {
+          await updateSession(phone, { ...session, origen, step: "esperando_destino" });
+          await enviarMensaje(phone, `✅ *Origen recibido:* ${origen.nombre || "tu ubicación"}\n\n🏁 Ahora envía tu *ubicación de destino* (a dónde quieres ir).`);
+        }
+      }
+      break;
+
+    case "confirmando_ciudad": {
+      // El usuario eligió su ciudad manualmente
+      if (buttonId?.startsWith("ciudad_")) {
+        const ciudadElegida = buttonId.replace("ciudad_", "").replace(/_/g, " ");
+        if (CIUDADES[ciudadElegida]) {
+          await Usuario.findOneAndUpdate({ phone }, { ciudad: ciudadElegida, ciudadDetectada: false });
+          const nuevaSession = { ...session, ciudadUsuario: ciudadElegida };
+          const origenGuardado = session.origenPendiente || session.origen;
+          delete nuevaSession.origenPendiente;
+          if (origenGuardado?.lat) {
+            if (nuevaSession.destino?.lat) {
+              await setSession(phone, { ...nuevaSession, origen: origenGuardado, step: "preguntando_opciones" });
+              await preguntarOpcionesViaje(phone, { ...nuevaSession, origen: origenGuardado });
+            } else {
+              await updateSession(phone, { ...nuevaSession, origen: origenGuardado, step: "esperando_destino" });
+              await enviarMensaje(phone, `✅ Ciudad: *${ciudadElegida}*\n\n🏁 Ahora envía tu *destino*.`);
+            }
+          } else {
+            await updateSession(phone, { ...nuevaSession, step: "esperando_origen" });
+            await enviarMensaje(phone, `✅ Ciudad: *${ciudadElegida}*\n\n📍 Ahora envía tu *origen*.`);
+          }
+        }
+      } else {
+        // Mostrar las ciudades restantes (segunda página)
+        await enviarBotones(phone, `¿En qué ciudad estás?`,
+          Object.keys(CIUDADES).slice(3,6).map(c => ({ id: `ciudad_${c.replace(/ /g,"_")}`, title: c }))
+        );
+      }
+      break;
+    }
+
+    case "esperando_origen_con_destino":
+      if (!coords) {
+        await enviarMensaje(phone, "📍 Estoy esperando tu ubicación de origen.\nUsa el 📎 adjunto → Ubicación.");
+        break;
+      }
+      {
+        const origen = { ...coords };
+        try { const dir = await obtenerDireccion(coords.lat, coords.lng); if (dir) origen.nombre = dir; } catch {}
+        const nuevaSession = { ...session, origen };
+        await setSession(phone, nuevaSession);
+        await preguntarOpcionesViaje(phone, nuevaSession);
+      }
+      break;
+
+    case "esperando_destino":
+      if (!coords) {
+        await enviarMensaje(phone, "🏁 Estoy esperando tu *ubicación de destino* (a dónde quieres ir).\n\nUsa el 📎 adjunto → Ubicación, envía un 🎤 audio, o comparte un link de Google Maps.");
+        break;
+      }
+      {
+        // FIX BUG: guard contra origen = destino (causaba HVGC+HXJ = HVGC+HXJ)
+        if (
+          session.origen &&
+          Math.abs(coords.lat - session.origen.lat) < 0.0001 &&
+          Math.abs(coords.lng - session.origen.lng) < 0.0001
+        ) {
+          await enviarMensaje(phone, "⚠️ El destino que enviaste parece ser el mismo que el origen.\n\n🏁 Por favor envía el pin del lugar *al que quieres llegar*.");
+          break;
+        }
+
+        const destino = { ...coords };
+        try { const dir = await obtenerDireccion(coords.lat, coords.lng); if (dir) destino.nombre = dir; } catch {}
+
+        // CROWDSOURCING SILENCIOSO: si hay referencia de voz pendiente para el destino,
+        // asociarla automáticamente con el pin
+        if (session.referenciaVozDestino) {
+          const refNorm = normalizarReferencia(session.referenciaVozDestino);
+          const yaExiste = await LocationReference.findOne({ referencia: refNorm });
+          if (!yaExiste) {
+            await guardarReferenciaVoz(session.referenciaVozDestino, coords.lat, coords.lng, destino.nombre || session.referenciaVozDestino);
+            log.info(`[CROWDSOURCE] Destino mapeado silenciosamente: "${session.referenciaVozDestino}" → (${coords.lat}, ${coords.lng})`);
+          }
+        }
+
+        // Limpiar referencias de voz pendientes
+        const nuevaSession = { ...session, destino };
+        delete nuevaSession.referenciaVozOrigen;
+        delete nuevaSession.referenciaVozDestino;
+        await setSession(phone, nuevaSession);
+        await preguntarOpcionesViaje(phone, nuevaSession);
+      }
+      break;
+
+    case "confirmando_ubicaciones_voz":
+      if (buttonId === "confirmar_ubicaciones") {
+        const nuevaSession = { ...session, origen: session.origenPendiente, destino: session.destinoPendiente };
+        delete nuevaSession.origenPendiente;
+        delete nuevaSession.destinoPendiente;
+        await preguntarOpcionesViaje(phone, nuevaSession);
+      } else if (buttonId === "corregir_origen") {
+        const nuevaSession = { ...session, destino: session.destinoPendiente };
+        delete nuevaSession.origenPendiente;
+        delete nuevaSession.destinoPendiente;
+        nuevaSession.step = "esperando_origen";
+        await setSession(phone, nuevaSession);
+        await enviarMensaje(phone, "📍 Envía tu *ubicación de origen* con el pin.");
+      } else if (buttonId === "corregir_destino") {
+        const nuevaSession = { ...session, origen: session.origenPendiente };
+        delete nuevaSession.origenPendiente;
+        delete nuevaSession.destinoPendiente;
+        nuevaSession.step = "esperando_destino";
+        await setSession(phone, nuevaSession);
+        await enviarMensaje(phone, "🏁 Envía tu *ubicación de destino* con el pin.");
+      }
+      break;
+
+    case "preguntando_opciones": {
+      if (buttonId === "agregar_parada") {
+        const numParadas = (session.paradas || []).length;
+        if (numParadas >= CONFIG.MAX_PARADAS) {
+          await enviarMensaje(phone, `⚠️ Ya tienes el máximo de ${CONFIG.MAX_PARADAS} paradas.`);
+          await preguntarOpcionesViaje(phone, session);
+          break;
+        }
+        await updateSession(phone, { ...session, step: "esperando_parada" });
+        await enviarMensaje(phone, `🚏 Envía la *ubicación de tu parada* (con el pin de WhatsApp).\n\n_Parada ${numParadas + 1} de ${CONFIG.MAX_PARADAS}_`);
+        break;
+      }
+      if (buttonId === "agregar_observacion") {
+        await updateSession(phone, { ...session, step: "esperando_observacion" });
+        await enviarMensaje(phone, `📝 *Cuéntame qué llevas o cualquier detalle.*\n\nEjemplos:\n• "Llevo mi perrito"\n• "Tengo equipaje grande"\n• "Voy con bebé"\n• "Soy persona mayor"\n\nEscribe en una sola respuesta.`);
+        break;
+      }
+      if (buttonId === "ver_precio") { await procesarCalculoViaje(phone, session); break; }
+      await preguntarOpcionesViaje(phone, session);
+      break;
+    }
+
+    case "esperando_parada": {
+      if (!coords) { await enviarMensaje(phone, "🚏 Envía la *ubicación de la parada* con el 📎 adjunto → Ubicación."); break; }
+      const parada = { ...coords };
+      try { const dir = await obtenerDireccion(coords.lat, coords.lng); if (dir) parada.nombre = dir; } catch {}
+      const paradas = [...(session.paradas || []), parada];
+      const nuevaSession = { ...session, paradas };
+      await setSession(phone, nuevaSession);
+      await enviarMensaje(phone, `✅ Parada ${paradas.length} guardada: ${parada.nombre || "ubicación"}`);
+      await preguntarOpcionesViaje(phone, nuevaSession);
+      break;
+    }
+
+    case "esperando_observacion": {
+      if (!texto || texto.length < 2) { await enviarMensaje(phone, "📝 Escribe brevemente qué llevas o cualquier detalle del viaje."); break; }
+      const obs = texto.slice(0, 200);
+      const nuevaSession = { ...session, observaciones: obs };
+      await setSession(phone, nuevaSession);
+      await enviarMensaje(phone, `✅ Notas guardadas: _"${obs}"_`);
+      await preguntarOpcionesViaje(phone, nuevaSession);
+      break;
+    }
+
+    case "eligiendo_tipo_vehiculo": {
+      let tipoElegido = null;
+      if (buttonId === "elegir_auto" || /\b(AUTO|CARRO|COCHE|TAXI)\b/i.test(textoUpper)) tipoElegido = "auto";
+      else if (buttonId === "elegir_moto" || /\b(MOTO|MOTOCICLETA)\b/i.test(textoUpper)) tipoElegido = "moto";
+
+      if (buttonId === "cancelar_viaje" || textoUpper === "NO" || textoUpper === "CANCELAR") {
+        await deleteSession(phone);
+        await enviarMensaje(phone, "❌ Viaje cancelado.");
+        break;
+      }
+
+      if (!tipoElegido) {
+        await enviarBotones(
+          phone,
+          `¿Qué tipo de viaje prefieres?\n\n🚗 *Auto* — Bs ${session.precioAuto}\n🏍️ *Moto* — Bs ${session.precioMoto}`,
+          [
+            { id: "elegir_auto", title: "🚗 Pedir Auto" },
+            { id: "elegir_moto", title: "🏍️ Pedir Moto" },
+            { id: "cancelar_viaje", title: "❌ Cancelar" },
+          ]
+        );
+        break;
+      }
+
+      if (tipoElegido === "moto" && session.observaciones) {
+        const incomp = detectarIncompatibilidadMoto(session.observaciones);
+        if (incomp && incomp.incompatible) {
+          await updateSession(phone, { ...session, step: "confirmando_moto_incompatible", tipoTentativo: "moto" });
+          await enviarBotones(
+            phone,
+            `⚠️ *Atención*\n\nMencionaste *${incomp.razon}* en tus notas. La moto puede no ser ideal para esto.\n\n¿Qué prefieres?`,
+            [
+              { id: "cambiar_a_auto", title: "🚗 Cambiar a auto" },
+              { id: "moto_de_todas_formas", title: "🏍️ Moto igual" },
+              { id: "cancelar_viaje", title: "❌ Cancelar" },
+            ]
+          );
+          break;
+        }
+      }
+
+      const precioFinal = tipoElegido === "moto" ? session.precioMoto : session.precioAuto;
+      const precioPorKmFinal = tipoElegido === "moto" ? session.precioPorKmMoto : session.precioPorKmAuto;
+      const sessionConTipo = { ...session, tipoVehiculoSolicitado: tipoElegido, precioBase: precioFinal, precio: precioFinal, precioPorKm: precioPorKmFinal, step: "ofreciendo_codigo" };
+      await setSession(phone, sessionConTipo);
+
+      const emojiT = tipoElegido === "moto" ? "🏍️" : "🚗";
+      await enviarBotones(
+        phone,
+        `${emojiT} Elegiste *${tipoElegido.toUpperCase()}*\n💰 Precio: Bs ${precioFinal}\n\n¿Tienes un código de descuento?`,
+        [
+          { id: "tengo_codigo", title: "🎁 Tengo código" },
+          { id: "sin_codigo", title: "💰 Confirmar sin código" },
+          { id: "cancelar_viaje", title: "❌ Cancelar" },
+        ]
+      );
+      break;
+    }
+
+    case "confirmando_moto_incompatible": {
+      if (buttonId === "cambiar_a_auto") {
+        const s = { ...session, tipoVehiculoSolicitado: "auto", precioBase: session.precioAuto, precio: session.precioAuto, precioPorKm: session.precioPorKmAuto, step: "ofreciendo_codigo" };
+        delete s.tipoTentativo;
+        await setSession(phone, s);
+        await enviarBotones(phone, `🚗 Cambiamos a auto.\n💰 Precio: Bs ${session.precioAuto}\n\n¿Tienes un código de descuento?`, [
+          { id: "tengo_codigo", title: "🎁 Tengo código" },
+          { id: "sin_codigo", title: "💰 Confirmar sin código" },
+          { id: "cancelar_viaje", title: "❌ Cancelar" },
+        ]);
+        break;
+      }
+      if (buttonId === "moto_de_todas_formas") {
+        const s = { ...session, tipoVehiculoSolicitado: "moto", precioBase: session.precioMoto, precio: session.precioMoto, precioPorKm: session.precioPorKmMoto, step: "ofreciendo_codigo" };
+        delete s.tipoTentativo;
+        await setSession(phone, s);
+        await enviarBotones(phone, `🏍️ Continuamos con moto.\n💰 Precio: Bs ${session.precioMoto}\n\n¿Tienes un código de descuento?`, [
+          { id: "tengo_codigo", title: "🎁 Tengo código" },
+          { id: "sin_codigo", title: "💰 Confirmar sin código" },
+          { id: "cancelar_viaje", title: "❌ Cancelar" },
+        ]);
+        break;
+      }
+      if (buttonId === "cancelar_viaje") { await deleteSession(phone); await enviarMensaje(phone, "❌ Viaje cancelado."); break; }
+      await enviarBotones(phone, "¿Qué prefieres?", [
+        { id: "cambiar_a_auto", title: "🚗 Cambiar a auto" },
+        { id: "moto_de_todas_formas", title: "🏍️ Moto igual" },
+        { id: "cancelar_viaje", title: "❌ Cancelar" },
+      ]);
+      break;
+    }
+
+    case "ofreciendo_codigo": {
+      if (buttonId === "tengo_codigo") {
+        await updateSession(phone, { ...session, step: "esperando_codigo" });
+        await enviarMensaje(phone, `🎁 Escribe tu código (ej: CHATGO-AB12CD).\n\n_Recuerda: 40% de descuento, válido 15 días, uso único._`);
+        break;
+      }
+      if (buttonId === "sin_codigo") {
+        await updateSession(phone, { ...session, step: "confirmado" });
+        // No mandar mensaje aquí — asignarChofer manda el suyo propio
+        await asignarChofer(phone, session);
+        break;
+      }
+      if (buttonId === "cancelar_viaje") { await deleteSession(phone); await enviarMensaje(phone, "❌ Viaje cancelado."); break; }
+      await enviarBotones(phone, "¿Tienes un código de descuento?", [
+        { id: "tengo_codigo", title: "🎁 Tengo código" },
+        { id: "sin_codigo", title: "💰 Confirmar sin código" },
+        { id: "cancelar_viaje", title: "❌ Cancelar" },
+      ]);
+      break;
+    }
+
+    case "esperando_codigo": {
+      if (buttonId === "cancelar_viaje") { await deleteSession(phone); await enviarMensaje(phone, "❌ Viaje cancelado."); break; }
+      if (!texto || texto.length < 4) { await enviarMensaje(phone, "🎁 Escribe el código completo (ej: CHATGO-AB12CD)"); break; }
+      const validacion = await validarCodigoPromo(texto, session.precioBase || session.precio);
+      if (!validacion.valido) {
+        await enviarBotones(phone, `❌ ${validacion.motivo}\n\n¿Quieres intentar con otro código o continuar sin código?`, [
+          { id: "tengo_codigo", title: "🎁 Otro código" },
+          { id: "sin_codigo", title: "💰 Sin código" },
+          { id: "cancelar_viaje", title: "❌ Cancelar" },
+        ]);
+        await updateSession(phone, { ...session, step: "ofreciendo_codigo" });
+        break;
+      }
+      const sessionConDesc = {
+        ...session,
+        codigoPromoUsado: validacion.codigoDoc.codigo,
+        codigoPromoDocId: String(validacion.codigoDoc._id),
+        descuentoBs: validacion.descuento,
+        precio: validacion.nuevoPrecio,
+        step: "confirmado",
+      };
+      await setSession(phone, sessionConDesc);
+      const emojiT2 = session.tipoVehiculoSolicitado === "moto" ? "🏍️" : "🚗";
+      const labelTipo2 = session.tipoVehiculoSolicitado === "moto" ? "moto" : "auto";
+      await enviarMensaje(
+        phone,
+        `🎁 *Código aplicado!*\n\nPrecio original: Bs ${session.precioBase}\nDescuento (${validacion.porcentaje}%): -Bs ${validacion.descuento}\n*Total a pagar: Bs ${validacion.nuevoPrecio}*\n\n${emojiT2} Buscando ${labelTipo2} disponible...`
+      );
+      await asignarChofer(phone, sessionConDesc);
+      break;
+    }
+
+    case "esperando_confirmacion":
+      await procesarCalculoViaje(phone, session);
+      break;
+
+    case "sin_chofer":
+      if (buttonId === "confirmar_viaje_recordatorio") {
+        const espera = await ListaEspera.findOne({ userPhone: phone });
+        await removeListaEspera(phone);
+        await enviarMensaje(phone, "✅ Perfecto! Asignando tu chofer...");
+        const sessionConDatos = {
+          ...session,
+          origen: espera?.origen || session.origen,
+          destino: espera?.destino || session.destino,
+          distancia: espera?.distancia || session.distancia,
+          precio: espera?.precio || session.precio,
+          precioPorKm: espera?.precioPorKm || session.precioPorKm,
+        };
+        await setSession(phone, sessionConDatos);
+        await asignarChofer(phone, sessionConDatos);
+      } else if (buttonId === "cancelar_viaje") {
+        // Marcar como cancelando primero para bloquear el interval
+        await ListaEspera.findOneAndUpdate({ userPhone: phone }, { $set: { cancelando: true } });
+        await deleteSession(phone);
+        await removeListaEspera(phone);
+        await enviarMensaje(phone, "❌ Entendido. Escribe cuando necesites taxi. 🚖");
+      } else {
+        await enviarMensaje(phone, "⏳ Seguimos buscando un móvil para ti...");
+      }
+      break;
+
+    case "calculando":
+    case "confirmado":
+    case "esperando_chofer":
+      if (!buttonId) await enviarMensaje(phone, "⏳ Ya estamos buscando tu chofer...");
+      break;
+
+    case "chofer_en_camino":
+    case "chofer_esperando_pasajero":
+    case "en_curso": {
+      const viajeActivo = await Viaje.findOne({
+        usuarioPhone: phone,
+        estado: { $in: ["en_camino","esperando_pasajero","en_curso"] },
+      });
+
+      if (!viajeActivo) {
+        await deleteSession(phone);
+        await setSession(phone, { step: "inicio" });
+        await enviarMensaje(phone, "🤔 No encontré tu viaje activo. Escribe *HOLA* para empezar de nuevo.");
+        break;
+      }
+
+      if (buttonId === "cancelar_viaje_pasajero") {
+        await Viaje.findByIdAndUpdate(viajeActivo._id, { estado: "cancelado", fechaFin: new Date(), cancelacionMotivo: "cancelado_por_pasajero" });
+        await Chofer.findOneAndUpdate({ wialonId: viajeActivo.choferWialonId }, { $set: { estado: "libre", viajeReservado: null, reservadoHasta: null } });
+        await enviarMensaje(viajeActivo.choferPhone, `❌ El pasajero canceló el viaje.`);
+        await deleteSession(phone);
+        await enviarMensaje(phone, "❌ Viaje cancelado. Escribe cuando necesites otro taxi 🚖");
+        break;
+      }
+
+      // Chat multimedia hacia el chofer
+      const reenviado = await relayMensajeChat(phone, viajeActivo.choferPhone, mensaje, "tu pasajero");
+      if (reenviado) { await enviarMensaje(phone, "✅ Enviado al chofer"); break; }
+
+      const guias = {
+        chofer_en_camino: `🚖 Tu chofer va en camino.\n\nPuedes escribirle, mandarle audio, foto o ubicación por aquí 💬`,
+        chofer_esperando_pasajero: `🚕 Tu chofer ya llegó. Dirígete al vehículo.\n\nSi quieres mandarle algo, escríbelo aquí 💬`,
+        en_curso: `🚖 Tu viaje está en curso. ¡Disfrútalo!\n\nSi necesitas decirle algo al chofer, envíalo aquí 💬`,
+      };
+      await enviarMensaje(phone, guias[session.step] || "Tu viaje está activo.");
+      break;
+    }
+
+    // FIX: antes de borrar sesión verificar estado real en DB
+    // Evita que un step desconocido (ej: 'calculando', 'confirmado') resetee
+    // la sesión de un usuario que está esperando chofer
+    default: {
+      const viajeActivoDefault = await Viaje.findOne({
+        usuarioPhone: phone,
+        estado: { $in: ["pendiente","en_camino","esperando_pasajero","en_curso"] },
+      });
+      const enEsperaDefault = await ListaEspera.findOne({ userPhone: phone });
+
+      if (viajeActivoDefault) {
+        const stepReal = viajeActivoDefault.estado === "pendiente" ? "esperando_chofer"
+          : viajeActivoDefault.estado === "en_camino" ? "chofer_en_camino"
+          : viajeActivoDefault.estado === "esperando_pasajero" ? "chofer_esperando_pasajero"
+          : "en_curso";
+        await updateSession(phone, { ...session, step: stepReal });
+        log.warn(`[DEFAULT] Corrigiendo step de ${phone}: ${session.step} → ${stepReal}`);
+        await enviarMensaje(phone, `⚠️ Tu viaje sigue activo.\n\nEscribe CANCELAR para cancelarlo o AYUDA para soporte.`);
+      } else if (enEsperaDefault) {
+        await updateSession(phone, { ...session, step: "sin_chofer" });
+        log.warn(`[DEFAULT] Corrigiendo step de ${phone}: ${session.step} → sin_chofer`);
+        await enviarMensaje(phone, `⏳ Seguimos buscando un móvil para ti...\n\n_Escribe CANCELAR para dejar de buscar._`);
+      } else {
+        // No hay nada activo — reset seguro
+        await deleteSession(phone);
+        await setSession(phone, { step: "inicio" });
+        await procesarMensajeUsuario(phone, mensaje, buttonId);
+      }
+      break;
+    }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// WEBHOOK META
+// ═══════════════════════════════════════════════════════════════════════════
+
+app.get("/webhook", (req, res) => {
+  if (req.query["hub.mode"] === "subscribe" && req.query["hub.verify_token"] === CONFIG.VERIFY_TOKEN) {
+    res.send(req.query["hub.challenge"]);
+  } else {
+    res.sendStatus(403);
+  }
+});
+
+
+module.exports = { procesarMensajeUsuario, preguntarOpcionesViaje, procesarCalculoViaje };
