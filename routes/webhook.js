@@ -1,5 +1,9 @@
 // ChatGo — webhook.js
 const mongoose = require("mongoose");
+const fs = require("fs");
+const https = require("https");
+const http = require("http");
+const os = require("os");
 const { CONFIG, log } = require("../config");
 const { Usuario, Chofer, Viaje, ListaEspera, CodigoPromo, LocationReference } = require("../db/models");
 const { getSession, checkRateLimit, sessionCache, yaProcesoMensaje } = require("../services/session");
