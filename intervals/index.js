@@ -6,14 +6,14 @@ const { getSession, updateSession, deleteSession, removeListaEspera, sessionCach
 const { enviarMensaje, enviarBotones } = require("../services/whatsapp");
 const { obtenerUbicacionChofer, buscarChoferDisponible, liberarReservaChofer } = require("../services/wialon");
 const { distanciaEntrePuntos } = require("../services/google");
-const { registrarEventoChofer, registrarViajeEnDemanda, monitorearSeguridad, procesarReactivaciones, actualizarUltimoViaje } = require("../ai");
-const { asignarChofer, completarViaje } = require("../flows/viaje");
+const { registrarEventoChofer, registrarViajeEnDemanda, monitorearSeguridad, enviarAlertasChoferes, procesarReactivaciones, actualizarUltimoViaje } = require("../ai");
+const { asignarChofer } = require("../flows/viaje");
 
 function iniciarIntervals(deps) {
   const {
     enviarMensaje, enviarBotones, getSession, updateSession, deleteSession,
     sessionCache, obtenerUbicacionChofer, distanciaEntrePuntos,
-    monitorearSeguridad, asignarChofer, completarViaje,
+    monitorearSeguridad, asignarChofer,
     registrarViajeEnDemanda, actualizarUltimoViaje, registrarEventoChofer,
     Chofer, Viaje, ListaEspera, SessionState, Usuario, CONFIG, log
   } = deps;
