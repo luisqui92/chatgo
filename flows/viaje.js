@@ -8,7 +8,7 @@ const { enviarMensaje, enviarBotones } = require("../services/whatsapp");
 const { obtenerUbicacionChofer, buscarChoferDisponible, reservarChofer, liberarReservaChofer } = require("../services/wialon");
 const { distanciaEntrePuntos, generarLinkRutaConParadas } = require("../services/google");
 const { enviarAlertasChoferes, monitorearViajeEnCurso, procesarReactivaciones } = require("../ai");
-const { choferPagoAlDia, consumirCodigoPromo, enPromoGratis, fechaStrBolivia } = require("../services/utils");
+const { consumirCodigoPromo, fechaStrBolivia } = require("../services/utils");
 
 
 function enPromoGratis() {
