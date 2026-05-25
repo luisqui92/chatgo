@@ -1,5 +1,6 @@
 // ChatGo — index.js
 const mongoose = require("mongoose");
+const os = require("os");
 const { CONFIG, log } = require("../config");
 const { Usuario, Chofer, Viaje, SessionState, ListaEspera } = require("../db/models");
 const { getSession, updateSession, deleteSession, removeListaEspera, sessionCache } = require("../services/session");
