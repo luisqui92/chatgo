@@ -278,7 +278,7 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
     }
 
     if (buttonId === "chofer_libre") {
-      if (!choferPagoAlDia(chofer)) {
+      if (!choferPagoAlDia(chofer) && !enPromoGratis()) {
         await Chofer.findByIdAndUpdate(chofer._id, { estado: "offline" });
         await enviarMensaje(phone, `Para estar LIBRE primero paga tu cuota diaria de *Bs 10*.`);
         if (CONFIG.QR_IMAGE_URL) await enviarImagen(phone, CONFIG.QR_IMAGE_URL, `📲 Escanea el QR y envíame la *foto del comprobante* para activarte.`);
@@ -394,7 +394,7 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
   }
 
   // Menú del chofer
-  if (!choferPagoAlDia(chofer)) {
+  if (!choferPagoAlDia(chofer) && !enPromoGratis()) {
     await Chofer.findByIdAndUpdate(chofer._id, { estado: "offline" });
     await enviarMensaje(phone, `👋 Hola ${chofer.nombre}!\n\nPara iniciar tu jornada necesitas pagar *Bs 10*.`);
     if (CONFIG.QR_IMAGE_URL) await enviarImagen(phone, CONFIG.QR_IMAGE_URL, `📲 Escanea el QR y envíame la *foto del comprobante*.`);
