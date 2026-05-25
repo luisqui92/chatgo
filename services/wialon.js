@@ -5,6 +5,8 @@ const http = require("http");
 const os = require("os");
 const { CONFIG, log } = require("../config");
 const { Chofer } = require("../db/models");
+const { enPromoGratis, fechaStrBolivia } = require("../services/utils");
+
 
 const wialonCache = { eid: null, expira: 0 };
 
