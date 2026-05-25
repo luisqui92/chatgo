@@ -11,7 +11,7 @@ const { obtenerUbicacionChofer, generarLinkRastreoPropio, liberarReservaChofer }
 const { normalizarReferencia, guardarReferenciaVoz, calcularDistancia, calcularDistanciaConParadas } = require("../services/google");
 const { validarComprobantePago } = require("../services/openai");
 const { registrarEventoChofer, calcularMultiplierSurge, aplicarSurge, textoSurge, registrarViajeEnDemanda, actualizarUltimoViaje } = require("../ai");
-const { enPromoGratis, choferPagoAlDia, asignarChofer, procesarPedidoAyuda, solicitarRating } = require("../flows/viaje");
+const { asignarChofer, procesarPedidoAyuda, solicitarRating } = require("../flows/viaje");
 const { choferPagoAlDia, crearCodigoPromo, enPromoGratis, enviarCodigoDescuento, esPedidoAyuda, esPlusCode, fechaStrBolivia, formatearFechaPromo, guardarRutaFrecuente, promoCodigosActiva } = require("../services/utils");
 
 
