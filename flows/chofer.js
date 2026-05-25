@@ -10,9 +10,10 @@ const { enviarMensaje, enviarBotones, enviarImagen, reenviarImagenPorId, relayMe
 const { obtenerUbicacionChofer, generarLinkRastreoPropio, liberarReservaChofer } = require("../services/wialon");
 const { normalizarReferencia, guardarReferenciaVoz, calcularDistancia, calcularDistanciaConParadas } = require("../services/google");
 const { validarComprobantePago } = require("../services/openai");
-const { fechaStrBolivia, formatearFechaPromo, promoCodigosActiva, crearCodigoPromo, enviarCodigoDescuento, esPedidoAyuda, esPlusCode, guardarRutaFrecuente } = require("../services/utils");
 const { registrarEventoChofer, calcularMultiplierSurge, aplicarSurge, textoSurge, registrarViajeEnDemanda, actualizarUltimoViaje } = require("../ai");
 const { enPromoGratis, choferPagoAlDia, asignarChofer, procesarPedidoAyuda, solicitarRating } = require("../flows/viaje");
+const { choferPagoAlDia, crearCodigoPromo, enPromoGratis, enviarCodigoDescuento, esPedidoAyuda, esPlusCode, fechaStrBolivia, formatearFechaPromo, guardarRutaFrecuente, promoCodigosActiva } = require("../services/utils");
+
 
 async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, mensaje) {
   let chofer = await Chofer.findOne({ phone });
