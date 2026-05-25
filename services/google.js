@@ -7,6 +7,8 @@ const os = require("os");
 const { CONFIG, log } = require("../config");
 const { LocationReference } = require("../db/models");
 const { getContextoGeocode, getBoundsUsuario } = require("../config");
+const { esPlusCode, normalizarReferencia } = require("../services/utils");
+
 
 function distanciaEntrePuntos(lat1, lng1, lat2, lng2) {
   const R = 6371;
