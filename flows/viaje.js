@@ -7,8 +7,9 @@ const { getSession, updateSession, deleteSession, addListaEspera, removeListaEsp
 const { enviarMensaje, enviarBotones } = require("../services/whatsapp");
 const { obtenerUbicacionChofer, buscarChoferDisponible, reservarChofer, liberarReservaChofer } = require("../services/wialon");
 const { distanciaEntrePuntos, generarLinkRutaConParadas } = require("../services/google");
-const { fechaStrBolivia, consumirCodigoPromo } = require("../services/utils");
 const { enviarAlertasChoferes, monitorearViajeEnCurso, procesarReactivaciones } = require("../ai");
+const { choferPagoAlDia, consumirCodigoPromo, enPromoGratis, fechaStrBolivia } = require("../services/utils");
+
 
 function enPromoGratis() {
   if (!CONFIG.PROMO_GRATIS_HASTA) return false;
