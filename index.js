@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// ChatGo - Bot de Taxi por WhatsApp (v6.0 - Modular)
+// ChatGo - Bot de Taxi por WhatsApp (v6.0 - Modular) - Build 20260525055707
 // ═══════════════════════════════════════════════════════════════════════════
 
 const express = require("express");
