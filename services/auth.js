@@ -1,5 +1,7 @@
 // ChatGo — Autenticación JWT para panel admin
 const crypto = require("crypto");
+const url = require("url");
+const os = require("os");
 const { CONFIG, log } = require("../config");
 
 // Usuarios definidos via variables de entorno
