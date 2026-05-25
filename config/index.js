@@ -1,9 +1,9 @@
 // ChatGo — Config, Logger, Ciudades
 
 // ─── CONFIGURACIÓN ─────────────────────────────────────────────────────────
+const crypto = require("crypto");
+
 const CONFIG = {
-const fs = require("fs");
-const os = require("os");
   WHATSAPP_TOKEN: process.env.WHATSAPP_TOKEN,
   WHATSAPP_PHONE_ID: process.env.WHATSAPP_PHONE_ID,
   VERIFY_TOKEN: process.env.VERIFY_TOKEN,
