@@ -1,5 +1,7 @@
 // ChatGo — Utilidades generales
 const { CONFIG, log } = require("../config");
+const crypto = require("crypto");
+const os = require("os");
 const { CodigoPromo, Usuario, Viaje } = require("../db/models");
 
 function fechaStrBolivia(date = new Date()) {
