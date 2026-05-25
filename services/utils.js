@@ -244,4 +244,15 @@ async function construirBotonesHistorial(phone) {
   return { botones, idsParaSession };
 }
 
-module.exports = { fechaStrBolivia, horaStrBolivia, formatearFechaPromo, promoCodigosActiva, generarCodigoUnico, crearCodigoPromo, validarCodigoPromo, consumirCodigoPromo, mensajeCodigoEntregado, enviarCodigoDescuento, validarPlaca, normalizarPlaca, acortarParaBoton, esIntentoCancelar, esPedidoAyuda, esPlusCode, detectarIncompatibilidadMoto, obtenerUltimoViaje, obtenerDestinosFrecuentes, guardarRutaFrecuente, construirBotonesHistorial };
+
+function enPromoGratis() {
+  const hoy = fechaStrBolivia().split("T")[0];
+  return hoy <= (CONFIG.PROMO_GRATIS_HASTA || "2026-05-25");
+}
+
+function choferPagoAlDia(chofer) {
+  if (!chofer || !chofer.pagoDiario) return false;
+  return chofer.pagoDiario.pagado && chofer.pagoDiario.fechaStr === fechaStrBolivia().split("T")[0];
+}
+
+module.exports = { fechaStrBolivia, horaStrBolivia, formatearFechaPromo, promoCodigosActiva, enPromoGratis, choferPagoAlDia, generarCodigoUnico, crearCodigoPromo, validarCodigoPromo, consumirCodigoPromo, mensajeCodigoEntregado, enviarCodigoDescuento, validarPlaca, normalizarPlaca, acortarParaBoton, esIntentoCancelar, esPedidoAyuda, esPlusCode, detectarIncompatibilidadMoto, obtenerUltimoViaje, obtenerDestinosFrecuentes, guardarRutaFrecuente, construirBotonesHistorial };
