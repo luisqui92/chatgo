@@ -1,5 +1,9 @@
 // ChatGo — Google Maps y memoria de voz
 const axios = require("axios");
+const https = require("https");
+const http = require("http");
+const url = require("url");
+const os = require("os");
 const { CONFIG, log } = require("../config");
 const { LocationReference } = require("../db/models");
 const { getContextoGeocode, getBoundsUsuario } = require("../config");
