@@ -1,5 +1,6 @@
 // ChatGo — Flow viaje
 const mongoose = require("mongoose");
+const os = require("os");
 const { CONFIG, log } = require("../config");
 const { Usuario, Chofer, Viaje, SessionState, ListaEspera, CodigoPromo } = require("../db/models");
 const { getSession, updateSession, deleteSession, addListaEspera, removeListaEspera, sessionCache } = require("../services/session");
