@@ -1,5 +1,6 @@
 // ChatGo — IA Cerebro central
 const { CONFIG, log } = require("../config");
+const os = require("os");
 const { Chofer, Viaje, ListaEspera, Usuario, CodigoPromo } = require("../db/models");
 const mongoose = require("mongoose");
 
