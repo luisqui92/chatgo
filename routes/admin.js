@@ -1,5 +1,7 @@
 // ChatGo — admin.js
 const mongoose = require("mongoose");
+const { getUsuarios, hashPassword, generarToken, verificarToken, requireAuth, tienePermiso } = require("../services/auth");
+
 const { CONFIG, log } = require("../config");
 const { Usuario, Chofer, Viaje, ListaEspera, LocationReference } = require("../db/models");
 const { obtenerUbicacionChofer } = require("../services/wialon");
@@ -7,7 +9,31 @@ const { geocodificarDireccion } = require("../services/google");
 
 module.exports = function(app, deps) {
 
-app.get("/admin/geocod", async (req, res) => {
+
+// ─── LOGIN ───────────────────────────────────────────────────────────────────
+app.post("/admin/login", (req, res) => {
+  try {
+    const { usuario, password } = req.body;
+    if (!usuario || !password) return res.status(400).json({ error: "Usuario y contraseña requeridos" });
+    const usuarios = getUsuarios();
+    const user = usuarios.find(u => u.usuario === usuario);
+    if (!user) return res.status(401).json({ error: "Credenciales incorrectas" });
+    const hashInput = hashPassword(password);
+    if (hashInput !== user.hashPass) return res.status(401).json({ error: "Credenciales incorrectas" });
+    const token = generarToken(user.usuario, user.rol);
+    log.info(`[AUTH] Login exitoso: ${usuario} (${user.rol})`);
+    res.json({ token, usuario: user.usuario, rol: user.rol, nombre: user.nombre });
+  } catch (e) {
+    log.error("[AUTH] Login error:", e.message);
+    res.status(500).json({ error: "Error interno" });
+  }
+});
+
+app.get("/admin/me", requireAuth(), (req, res) => {
+  res.json({ usuario: req.adminUser.usuario, rol: req.adminUser.rol });
+});
+
+app.get("/admin/geocod", requireAuth(), async (req, res) => {
   const { q } = req.query;
   if (!q) return res.json({ error: "Falta ?q=direccion" });
   try {
@@ -27,7 +53,7 @@ app.get("/admin/geocod", async (req, res) => {
 });
 
 // Diagnóstico de viaje — ver exactamente qué coords se usaron
-app.get("/admin/viaje-coords/:viajeId", async (req, res) => {
+app.get("/admin/viaje-coords/:viajeId", requireAuth(), async (req, res) => {
   try {
     const viaje = await Viaje.findById(req.params.viajeId).lean();
     if (!viaje) return res.json({ error: "Viaje no encontrado" });
