@@ -9,9 +9,10 @@ const { Usuario, Chofer, Viaje, ListaEspera, CodigoPromo, LocationReference } = 
 const { getSession, checkRateLimit, sessionCache, yaProcesoMensaje } = require("../services/session");
 const { enviarMensaje, enviarBotones, verificarFirmaMeta } = require("../services/whatsapp");
 const { wialonLogin, obtenerUbicacionChofer } = require("../services/wialon");
-const { fechaStrBolivia, promoCodigosActiva, enPromoGratis } = require("../services/utils");
 const { procesarMensajeUsuario } = require("../flows/pasajero");
 const { procesarMensajeChofer } = require("../flows/chofer");
+const { enPromoGratis, fechaStrBolivia, formatearFechaPromo, promoCodigosActiva } = require("../services/utils");
+
 
 module.exports = function(app, { procesarMensajeUsuario, procesarMensajeChofer, Chofer, Viaje, getSession, sessionCache, yaProcesoMensaje }) {
 
