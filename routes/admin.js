@@ -1,5 +1,10 @@
 // ChatGo — admin.js
 const mongoose = require("mongoose");
+const path = require("path");
+const https = require("https");
+const http = require("http");
+const url = require("url");
+const os = require("os");
 const { getUsuarios, hashPassword, generarToken, verificarToken, requireAuth, tienePermiso } = require("../services/auth");
 
 const { CONFIG, log } = require("../config");
