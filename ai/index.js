@@ -65,8 +65,6 @@ async function actualizarUltimoViaje(phone) {
   try { await Usuario.findOneAndUpdate({ phone }, { ultimoViajeAt: new Date() }); } catch { }
 }
 
-const app = express();
-
 // ─── CONFIGURACIÓN ─────────────────────────────────────────────────────────
   WHATSAPP_TOKEN: process.env.WHATSAPP_TOKEN,
 
