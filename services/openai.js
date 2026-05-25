@@ -1,5 +1,9 @@
 // ChatGo — OpenAI (Whisper + GPT)
 const axios = require("axios");
+const https = require("https");
+const http = require("http");
+const url = require("url");
+const os = require("os");
 const FormData = require("form-data");
 const { CONFIG, log } = require("../config");
 
