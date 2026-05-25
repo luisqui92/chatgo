@@ -1,5 +1,10 @@
 // ChatGo — WhatsApp Cloud API
 const axios = require("axios");
+const crypto = require("crypto");
+const https = require("https");
+const http = require("http");
+const url = require("url");
+const os = require("os");
 const { CONFIG, log } = require("../config");
 
 async function enviarMensaje(to, texto) {
