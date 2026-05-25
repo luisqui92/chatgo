@@ -72,7 +72,7 @@ const allDeps = {
   registrarViajeEnDemanda, enviarAlertasChoferes, monitorearViajeEnCurso, monitorearSeguridad,
   procesarReactivaciones, actualizarUltimoViaje,
   // Flows
-  asignarChofer, procesarCancelacionPasajero, procesarPedidoAyuda, solicitarRating, registrarRating, completarViaje,
+  asignarChofer, procesarCancelacionPasajero, procesarPedidoAyuda, solicitarRating, registrarRating,
   procesarMensajeChofer, procesarMensajeUsuario, preguntarOpcionesViaje, procesarCalculoViaje,
 };
 
