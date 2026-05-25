@@ -1239,13 +1239,4 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
 // WEBHOOK META
 // ═══════════════════════════════════════════════════════════════════════════
 
-app.get("/webhook", (req, res) => {
-  if (req.query["hub.mode"] === "subscribe" && req.query["hub.verify_token"] === CONFIG.VERIFY_TOKEN) {
-    res.send(req.query["hub.challenge"]);
-  } else {
-    res.sendStatus(403);
-  }
-});
-
-
 module.exports = { procesarMensajeUsuario, preguntarOpcionesViaje, procesarCalculoViaje };
