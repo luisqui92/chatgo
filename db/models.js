@@ -1,5 +1,6 @@
 // ChatGo — Schemas MongoDB
 const mongoose = require("mongoose");
+const os = require("os");
 const { CONFIG, log } = require("../config");
 
 mongoose.connect(CONFIG.MONGODB_URI).then(
