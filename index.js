@@ -22,7 +22,7 @@ const { fechaStrBolivia, horaStrBolivia, formatearFechaPromo, promoCodigosActiva
 const { seleccionarMejorChofer, registrarEventoChofer, calcularMultiplierSurge, aplicarSurge, textoSurge, registrarViajeEnDemanda, enviarAlertasChoferes, monitorearViajeEnCurso, monitorearSeguridad, procesarReactivaciones, actualizarUltimoViaje } = require("./ai");
 
 // Flows
-const { enPromoGratis: _enPromoGratis, choferPagoAlDia: _choferPagoAlDia, asignarChofer, procesarCancelacionPasajero, procesarPedidoAyuda, solicitarRating, registrarRating, completarViaje } = require("./flows/viaje");
+const { asignarChofer, procesarCancelacionPasajero, procesarPedidoAyuda, solicitarRating, registrarRating } = require("./flows/viaje");
 const { procesarMensajeChofer } = require("./flows/chofer");
 const { procesarMensajeUsuario, preguntarOpcionesViaje, procesarCalculoViaje } = require("./flows/pasajero");
 
