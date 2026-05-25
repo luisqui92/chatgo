@@ -1,5 +1,8 @@
 // ChatGo — Flow pasajero
 const mongoose = require("mongoose");
+const https = require("https");
+const http = require("http");
+const os = require("os");
 const { CONFIG, log, CIUDADES, detectarCiudadPorCoords } = require("../config");
 const { Usuario, Chofer, Viaje, ListaEspera, CodigoPromo, LocationReference } = require("../db/models");
 const { getSession, setSession, updateSession, deleteSession, ensureSession, removeListaEspera } = require("../services/session");
