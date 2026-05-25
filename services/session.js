@@ -1,5 +1,6 @@
 // ChatGo — Sesiones, Rate Limit, Lista de Espera
 const { CONFIG, log } = require("../config");
+const { horaStrBolivia, fechaStrBolivia } = require("../services/utils");
 const { SessionState, ListaEspera, RateLimit } = require("../db/models");
 
 const sessionCache = new Map();
