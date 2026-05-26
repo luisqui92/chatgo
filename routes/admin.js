@@ -12,6 +12,19 @@ const { Usuario, Chofer, Viaje, ListaEspera, LocationReference } = require("../d
 const { obtenerUbicacionChofer } = require("../services/wialon");
 const { geocodificarDireccion } = require("../services/google");
 
+// ─── HELPERS DE SEGURIDAD ────────────────────────────────────────────────────
+function escapeHtml(unsafe) {
+  if (unsafe === null || unsafe === undefined) return "";
+  return String(unsafe)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+
+
 module.exports = function(app, deps) {
 
 
@@ -117,12 +130,12 @@ app.get("/admin/viaje/:id", requireAuth(), async (req, res) => {
 <div class="header"><a href="/admin" class="back">← Volver al panel</a><h1>🚖 Viaje #${String(viaje._id).slice(-6).toUpperCase()}</h1><button onclick="location.reload()" style="background:#1f6feb;color:white;border:none;padding:6px 12px;border-radius:6px;cursor:pointer;font-size:12px;">🔄 Actualizar</button></div>
 <div class="info">
   <div><div class="info-label">Estado</div><div class="info-value"><span class="estado estado-${viaje.estado}">${viaje.estado.toUpperCase()}</span></div></div>
-  <div><div class="info-label">Pasajero</div><div class="info-value">+${viaje.usuarioPhone||"—"}</div></div>
-  <div><div class="info-label">Chofer</div><div class="info-value">${viaje.choferNombre||"—"}<br><small style="color:#8b949e">${viaje.choferPlaca||""} · ${viaje.tipoVehiculo==="moto"?"🏍️ Moto":"🚗 Auto"}</small></div></div>
+  <div><div class="info-label">Pasajero</div><div class="info-value">+${escapeHtml(viaje.usuarioPhone||"—")}</div></div>
+  <div><div class="info-label">Chofer</div><div class="info-value">${escapeHtml(viaje.choferNombre||"—")}<br><small style="color:#8b949e">${escapeHtml(viaje.choferPlaca||"")} · ${viaje.tipoVehiculo==="moto"?"🏍️ Moto":"🚗 Auto"}</small></div></div>
   <div><div class="info-label">Distancia</div><div class="info-value">${viaje.distanciaKm||"—"} km</div></div>
   <div><div class="info-label">Precio</div><div class="info-value">Bs ${viaje.precioTotal||"—"}${viaje.descuentoBs>0?' <small style="color:#3fb950">(-Bs '+viaje.descuentoBs+')</small>':""}</div></div>
   ${posChofer?`<div><div class="info-label">GPS Chofer</div><div class="info-value" style="color:${posChofer.hace_min<=5?"#3fb950":posChofer.hace_min<=15?"#d29922":"#f85149"}">📡 ${posChofer.hace_min} min</div></div>`:""}
-  ${viaje.observaciones?`<div style="grid-column:span 2"><div class="info-label">📝 Observaciones</div><div class="info-value">${viaje.observaciones}</div></div>`:""}
+  ${viaje.observaciones?`<div style="grid-column:span 2"><div class="info-label">📝 Observaciones</div><div class="info-value">${escapeHtml(viaje.observaciones)}</div></div>`:""}
 </div>
 <div id="map"></div>
 <div class="leyenda">
@@ -265,7 +278,7 @@ app.get("/admin/aprobar-chofer/:phone", requireAuth(["superadmin","admin"]), asy
 
     res.json({
       ok: true,
-      mensaje: `✅ Chofer ${chofer.nombre} (+${phone}) aprobado y notificado`,
+      mensaje: `✅ Chofer ${escapeHtml(chofer.nombre)} (+${phone}) aprobado y notificado`,
       estado: "libre",
     });
   } catch (e) {
@@ -451,7 +464,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;backgrou
     <div class="logo">🚖</div>
     <div>
       <div class="header-title">ChatGo · Rastreo en vivo</div>
-      <div class="header-sub">${viaje.choferNombre} · ${emoji} ${label} ${viaje.choferPlaca}</div>
+      <div class="header-sub">${escapeHtml(viaje.choferNombre)} · ${emoji} ${label} ${escapeHtml(viaje.choferPlaca)}</div>
     </div>
   </div>
   <div class="status-row">
@@ -466,11 +479,11 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;backgrou
 <div class="info">
   <div class="info-item">
     <div class="info-label">Chofer</div>
-    <div class="info-value">${viaje.choferNombre}</div>
+    <div class="info-value">${escapeHtml(viaje.choferNombre)}</div>
   </div>
   <div class="info-item">
     <div class="info-label">Vehículo</div>
-    <div class="info-value">${emoji} ${label} · ${viaje.choferPlaca}</div>
+    <div class="info-value">${emoji} ${label} · ${escapeHtml(viaje.choferPlaca)}</div>
   </div>
   <div class="info-item info-wide">
     <div class="info-label">📍 Origen</div>
