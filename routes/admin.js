@@ -30,7 +30,7 @@ module.exports = function(app, deps) {
 
 
 // ─── LOGIN ───────────────────────────────────────────────────────────────────
-app.post("/admin/login", rateLimit({ windowMs: 60000, max: 10 }), (req, res) => {
+app.post("/admin/login", limitLogin, (req, res) => {
   try {
     const { usuario, password } = req.body;
     if (!usuario || !password) return res.status(400).json({ error: "Usuario y contraseña requeridos" });
