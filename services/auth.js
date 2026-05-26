@@ -90,4 +90,44 @@ function tienePermiso(rol, permiso) {
   return (PERMISOS[rol] || []).includes(permiso);
 }
 
-module.exports = { getUsuarios, hashPassword, generarToken, verificarToken, requireAuth, tienePermiso };
+// ─── RATE LIMITER simple ─────────────────────────────────────────────────────
+// Mapa: key -> { count, resetAt }
+const rateLimitStore = new Map();
+
+function rateLimit({ windowMs = 60000, max = 60, keyFn = (req) => req.ip } = {}) {
+  return (req, res, next) => {
+    try {
+      const key = keyFn(req);
+      const now = Date.now();
+      const entry = rateLimitStore.get(key);
+      
+      if (!entry || now > entry.resetAt) {
+        rateLimitStore.set(key, { count: 1, resetAt: now + windowMs });
+        return next();
+      }
+      
+      entry.count++;
+      if (entry.count > max) {
+        const retryAfter = Math.ceil((entry.resetAt - now) / 1000);
+        res.setHeader("Retry-After", retryAfter);
+        return res.status(429).json({ 
+          error: "Demasiadas peticiones. Intentá de nuevo en " + retryAfter + "s." 
+        });
+      }
+      next();
+    } catch (e) {
+      next();
+    }
+  };
+}
+
+// Limpieza periódica para no acumular memoria
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of rateLimitStore.entries()) {
+    if (now > entry.resetAt + 60000) rateLimitStore.delete(key);
+  }
+}, 5 * 60 * 1000);
+
+
+module.exports = { getUsuarios, hashPassword, generarToken, verificarToken, requireAuth, tienePermiso, rateLimit };
