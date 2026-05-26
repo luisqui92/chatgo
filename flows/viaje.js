@@ -33,8 +33,8 @@ async function asignarChofer(userPhone, session, excludeWialonIds = [], intento 
     const o = session.ubicaciones.origen;
     const d = session.ubicaciones.destino;
     if (o.lat && d.lat && Math.abs(o.lat - d.lat) < 0.0001 && Math.abs(o.lng - d.lng) < 0.0001) {
-      log.warn(`[ASIGNAR] Origen y destino son el mismo para ${phone}`);
-      await enviarMensaje(phone, "⚠️ El origen y el destino son el mismo lugar. Volvé a indicar tu destino o escribí *CANCELAR* para empezar de nuevo.");
+      log.warn(`[ASIGNAR] Origen y destino son el mismo para ${userPhone}`);
+      await enviarMensaje(userPhone, "⚠️ El origen y el destino son el mismo lugar. Volvé a indicar tu destino o escribí *CANCELAR* para empezar de nuevo.");
       return false;
     }
   }
