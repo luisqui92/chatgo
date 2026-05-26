@@ -103,4 +103,30 @@ async function checkRateLimit(phone) {
   return doc.count <= CONFIG.MAX_MENSAJES_POR_HORA;
 }
 
+
+// ─── TTL del sessionCache — evita memory leak ───────────────────────────────
+// sessionCache guarda timestamps lastSet — los entries viejos se eliminan cada 5 min
+setInterval(() => {
+  try {
+    const expiraMs = 30 * 60 * 1000; // 30 min sin uso → fuera del cache
+    const now = Date.now();
+    let eliminados = 0;
+    for (const [key, val] of sessionCache.entries()) {
+      const lastSet = val?._cachedAt || 0;
+      if (now - lastSet > expiraMs) {
+        sessionCache.delete(key);
+        eliminados++;
+      }
+    }
+    // Limpiar también processedMsgIds (no debe crecer ilimitado)
+    if (processedMsgIds.size > 5000) {
+      const keys = Array.from(processedMsgIds.keys()).slice(0, 2000);
+      for (const k of keys) processedMsgIds.delete(k);
+    }
+    if (eliminados > 0) log.info(`[CACHE_CLEANUP] sessionCache: -${eliminados} entries`);
+  } catch (e) {
+    log.warn("[CACHE_CLEANUP]", e.message);
+  }
+}, 5 * 60 * 1000);
+
 module.exports = { getSession, setSession, updateSession, deleteSession, ensureSession, addListaEspera, removeListaEspera, checkRateLimit, sessionCache, processedMsgIds, yaProcesoMensaje };
