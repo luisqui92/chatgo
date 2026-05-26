@@ -166,4 +166,54 @@ const RateLimit = mongoose.model("RateLimit", rateLimitSchema, "ratelimits");
 const CodigoPromo = mongoose.model("CodigoPromo", codigoPromoSchema, "codigospromo");
 const LocationReference = mongoose.model("LocationReference", locationReferenceSchema, "locationreferences");
 
-module.exports = { Usuario, Chofer, Viaje, SessionState, ListaEspera, RateLimit, CodigoPromo, LocationReference };
+
+// ─── NUEVOS MODELOS PARA IA ─────────────────────────────────────────────────
+const demandaSchema = new mongoose.Schema({
+  zona: { type: String, required: true },
+  hora: { type: Number, required: true },
+  diaSemana: { type: Number, required: true },
+  cantidad: { type: Number, default: 1 },
+  ultimaActualizacion: { type: Date, default: Date.now },
+});
+demandaSchema.index({ zona: 1, hora: 1, diaSemana: 1 });
+const Demanda = mongoose.model("Demanda", demandaSchema);
+
+const eventoChoferSchema = new mongoose.Schema({
+  choferPhone: { type: String, required: true, index: true },
+  tipo: { type: String, enum: ["aceptado","rechazado","cancelado","completado","timeout"] },
+  viajeId: { type: mongoose.Schema.Types.ObjectId, ref: "Viaje" },
+  zona: String,
+  tiempoRespuesta: Number,
+  timestamp: { type: Date, default: Date.now, index: true },
+});
+const EventoChofer = mongoose.model("EventoChofer", eventoChoferSchema);
+
+const alertaSegSchema = new mongoose.Schema({
+  viajeId: { type: mongoose.Schema.Types.ObjectId, ref: "Viaje", index: true },
+  tipo: { type: String, enum: ["desvio","tiempo_excesivo","parada_sospechosa","trafico","gps_perdido","velocidad_anormal"] },
+  descripcion: String,
+  posicion: { lat: Number, lng: Number },
+  notificadoPasajero: { type: Boolean, default: false },
+  notificadoAdmin: { type: Boolean, default: false },
+  timestamp: { type: Date, default: Date.now },
+});
+const AlertaSeg = mongoose.model("AlertaSeg", alertaSegSchema);
+
+const surgeSchema = new mongoose.Schema({
+  zona: { type: String, required: true },
+  multiplier: { type: Number, default: 1.0 },
+  vigenteHasta: { type: Date, required: true },
+  motivo: String,
+});
+surgeSchema.index({ zona: 1, vigenteHasta: 1 });
+const Surge = mongoose.model("Surge", surgeSchema);
+
+// ─── ÍNDICES COMPUESTOS PARA RENDIMIENTO ─────────────────────────────────────
+viajeSchema.index({ estado: 1, fechaAsignacion: 1 });
+viajeSchema.index({ usuarioPhone: 1, estado: 1 });
+viajeSchema.index({ choferPhone: 1, estado: 1 });
+listaEsperaSchema.index({ timestamp: 1 });
+listaEsperaSchema.index({ ofertaActivaWialonId: 1, timestamp: 1 });
+
+
+module.exports = { Usuario, Chofer, Viaje, SessionState, ListaEspera, RateLimit, CodigoPromo, LocationReference, Demanda, EventoChofer, AlertaSeg, Surge };
