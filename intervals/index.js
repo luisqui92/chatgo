@@ -289,6 +289,44 @@ setInterval(async () => {
   }
 }, 30000);
 
+  
+// ═══════════════════════════════════════════════════════════════════════════
+// MONITOREO DE SEGURIDAD DEL VIAJE — cada 90 segundos
+// ═══════════════════════════════════════════════════════════════════════════
+const ultimasPosViaje = new Map(); // viajeId -> { lat, lng, timestamp }
+
+setInterval(async () => {
+  try {
+    const enCurso = await Viaje.find({ estado: { $in: ["en_camino", "en_curso"] } }).limit(50);
+    for (const viaje of enCurso) {
+      try {
+        if (!viaje.choferWialonId) continue;
+        const pos = await obtenerUbicacionChofer(viaje.choferWialonId);
+        if (!pos) continue;
+        
+        const posAnterior = ultimasPosViaje.get(String(viaje._id));
+        const posActual = { lat: pos.lat, lng: pos.lng, timestamp: Date.now() };
+        
+        await monitorearSeguridad(viaje, posActual, posAnterior, enviarMensaje);
+        
+        ultimasPosViaje.set(String(viaje._id), posActual);
+      } catch (e) {
+        log.warn("[MONITOREO_SEG]", e.message);
+      }
+    }
+    
+    // Limpiar posiciones de viajes ya terminados
+    if (ultimasPosViaje.size > 100) {
+      const activos = new Set(enCurso.map(v => String(v._id)));
+      for (const id of ultimasPosViaje.keys()) {
+        if (!activos.has(id)) ultimasPosViaje.delete(id);
+      }
+    }
+  } catch (e) {
+    log.error("[MONITOREO_SEG_INTERVAL]", e.message);
+  }
+}, 90 * 1000); // cada 90 segundos
+
   log.info("✅ Todos los intervals iniciados");
 }
 
