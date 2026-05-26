@@ -6,7 +6,8 @@ const express = require("express");
 const app = express();
 
 // ─── MÓDULOS ─────────────────────────────────────────────────────────────────
-const { CONFIG, log } = require("./config");
+const { CONFIG, log, validateConfig } = require("./config");
+validateConfig();
 const models = require("./db/models");
 const { Usuario, Chofer, Viaje, SessionState, ListaEspera, RateLimit, CodigoPromo, LocationReference } = models;
 
