@@ -72,44 +72,37 @@ async function monitorearSeguridad(viaje, posChofer, posAnterior, enviarFn) {
   try {
     const alertas = [];
     const ahora = Date.now();
-    
-    // 1. TIEMPO EXCESIVO (lleva mucho más de lo esperado)
+
     const minutos = (ahora - new Date(viaje.fechaAceptacion || ahora).getTime()) / 60000;
-    const esperado = (viaje.distanciaKm || 5) * 4; // ~4 min por km en ciudad
+    const esperado = (viaje.distanciaKm || 5) * 4;
     if (minutos > esperado * 2 && minutos > 25) {
-      alertas.push({ tipo: "tiempo_excesivo", desc: `Lleva ${Math.round(minutos)} min (esperado ~${Math.round(esperado)} min)`, severidad: "media" });
+      alertas.push({ tipo: "tiempo_excesivo", desc: "Lleva " + Math.round(minutos) + " min (esperado ~" + Math.round(esperado) + " min)", severidad: "media" });
     }
-    
-    // 2. CHOFER DETENIDO mucho tiempo sin estar en origen/destino
+
     if (posAnterior && posChofer && posAnterior.timestamp) {
-      const dist = Math.sqrt(
-        Math.pow(posChofer.lat - posAnterior.lat, 2) + Math.pow(posChofer.lng - posAnterior.lng, 2)
-      ) * 111000;
+      const dist = Math.sqrt(Math.pow(posChofer.lat - posAnterior.lat, 2) + Math.pow(posChofer.lng - posAnterior.lng, 2)) * 111000;
       const minDetenido = (ahora - posAnterior.timestamp) / 60000;
-      const enOrigen = viaje.origen?.lat && Math.abs(posChofer.lat - viaje.origen.lat) < 0.001;
-      const enDestino = viaje.destino?.lat && Math.abs(posChofer.lat - viaje.destino.lat) < 0.001;
+      const enOrigen = viaje.origen && viaje.origen.lat && Math.abs(posChofer.lat - viaje.origen.lat) < 0.001;
+      const enDestino = viaje.destino && viaje.destino.lat && Math.abs(posChofer.lat - viaje.destino.lat) < 0.001;
       if (dist < 50 && minDetenido > 7 && !enOrigen && !enDestino) {
-        alertas.push({ tipo: "parada_sospechosa", desc: `Detenido ${Math.round(minDetenido)} min sin estar en origen/destino`, severidad: "alta" });
+        alertas.push({ tipo: "parada_sospechosa", desc: "Detenido " + Math.round(minDetenido) + " min sin estar en origen/destino", severidad: "alta" });
       }
     }
-    
-    // 3. TRÁFICO/BLOQUEO REAL (Google Distance Matrix)
-    if (posChofer && viaje.destino?.lat && viaje.estado === "en_curso") {
+
+    if (posChofer && viaje.destino && viaje.destino.lat && viaje.estado === "en_curso") {
       const trafico = await verificarTraficoEnRuta(posChofer, viaje.destino);
       if (trafico && (trafico.severidad === "trafico_pesado" || trafico.severidad === "bloqueo_grave")) {
         const esBloqueo = trafico.severidad === "bloqueo_grave";
         alertas.push({
           tipo: esBloqueo ? "bloqueo" : "trafico",
-          desc: `${esBloqueo ? "🚧 Bloqueo o trancadera detectada" : "🚦 Tráfico pesado"}: +${trafico.retrasoMin} min de retraso`,
+          desc: (esBloqueo ? "Bloqueo o trancadera detectada" : "Trafico pesado") + ": +" + trafico.retrasoMin + " min de retraso",
           severidad: esBloqueo ? "alta" : "media",
           retrasoMin: trafico.retrasoMin,
         });
       }
     }
-    
-    // 4. NOTIFICACIONES
+
     for (const alerta of alertas) {
-      // Guardar en base de datos para historial
       try {
         await AlertaSeg.create({
           viajeId: viaje._id,
@@ -117,68 +110,44 @@ async function monitorearSeguridad(viaje, posChofer, posAnterior, enviarFn) {
           descripcion: alerta.desc,
           posicion: posChofer ? { lat: posChofer.lat, lng: posChofer.lng } : undefined,
         });
-      } catch { }
-      
-      // Notificar al pasajero (solo si no fue notificado de esta misma alerta)
-      const yaNotificado = await AlertaSeg.findOne({ 
-        viajeId: viaje._id, tipo: alerta.tipo, notificadoPasajero: true 
-      }).lean();
-      
+      } catch (_e) {}
+
+      const yaNotificado = await AlertaSeg.findOne({ viajeId: viaje._id, tipo: alerta.tipo, notificadoPasajero: true }).lean();
+
       if (!yaNotificado && enviarFn) {
         if (alerta.tipo === "trafico" || alerta.tipo === "bloqueo") {
-          await enviarFn(viaje.usuarioPhone,
-            `${alerta.tipo === "bloqueo" ? "🚧" : "🚦"} ${alerta.desc}
+          const ico = alerta.tipo === "bloqueo" ? "🚧" : "🚦";
+          await enviarFn(viaje.usuarioPhone, ico + " " + alerta.desc + "
 
-` +
-            `Tu chofer está demorando por causas externas. Si necesitás cancelar sin penalización escribí *CANCELAR*.`
-          ).catch(() => {});
-          // Notificar al chofer también
+Tu chofer esta demorando por causas externas. Si necesitas cancelar sin penalizacion escribi *CANCELAR*.").catch(() => {});
           if (viaje.choferPhone) {
-            await enviarFn(viaje.choferPhone,
-              `${alerta.tipo === "bloqueo" ? "🚧" : "🚦"} El sistema detectó ${alerta.tipo === "bloqueo" ? "un bloqueo" : "tráfico pesado"} en tu ruta.
-` +
-              `Si hay desvío posible, tomalo. Avisá al pasajero del retraso.`
-            ).catch(() => {});
+            const accion = alerta.tipo === "bloqueo" ? "un bloqueo" : "trafico pesado";
+            await enviarFn(viaje.choferPhone, ico + " El sistema detecto " + accion + " en tu ruta.
+Si hay desvio posible, tomalo. Avisa al pasajero del retraso.").catch(() => {});
           }
         } else if (alerta.tipo === "tiempo_excesivo") {
-          await enviarFn(viaje.usuarioPhone,
-            `⚠️ Tu chofer está demorando más de lo esperado.
-` +
-            `Si necesitás ayuda escribí *AYUDA* o *CANCELAR* para cancelar sin penalización.`
-          ).catch(() => {});
+          await enviarFn(viaje.usuarioPhone, "⚠️ Tu chofer esta demorando mas de lo esperado.
+Si necesitas ayuda escribi *AYUDA* o *CANCELAR* para cancelar sin penalizacion.").catch(() => {});
         }
-        await AlertaSeg.updateMany(
-          { viajeId: viaje._id, tipo: alerta.tipo },
-          { notificadoPasajero: true }
-        ).catch(() => {});
+        await AlertaSeg.updateMany({ viajeId: viaje._id, tipo: alerta.tipo }, { notificadoPasajero: true }).catch(() => {});
       }
     }
-    
-    // 5. Alertar al admin si hay anomalías graves (parada sospechosa o bloqueo)
+
     const graves = alertas.filter(a => a.severidad === "alta");
     if (graves.length > 0) {
-      const yaNotificadoAdmin = await AlertaSeg.findOne({ 
-        viajeId: viaje._id, notificadoAdmin: true 
-      }).lean();
+      const yaNotificadoAdmin = await AlertaSeg.findOne({ viajeId: viaje._id, notificadoAdmin: true }).lean();
       if (!yaNotificadoAdmin && enviarFn) {
-        await enviarFn(CONFIG.ADMIN_PHONE,
-          `🚨 *Alerta viaje ${String(viaje._id).slice(-6).toUpperCase()}*
-` +
-          `Chofer: ${viaje.choferNombre || "?"} (+${viaje.choferPhone || "?"})
-` +
-          `Pasajero: +${viaje.usuarioPhone}
+        const linea = graves.map(a => "⚠️ " + a.desc).join("
+");
+        await enviarFn(CONFIG.ADMIN_PHONE, "🚨 *Alerta viaje " + String(viaje._id).slice(-6).toUpperCase() + "*
+Chofer: " + (viaje.choferNombre || "?") + " (+" + (viaje.choferPhone || "?") + ")
+Pasajero: +" + viaje.usuarioPhone + "
 
-` +
-          graves.map(a => `⚠️ ${a.desc}`).join("
-")
-        ).catch(() => {});
-        await AlertaSeg.updateMany(
-          { viajeId: viaje._id },
-          { notificadoAdmin: true }
-        ).catch(() => {});
+" + linea).catch(() => {});
+        await AlertaSeg.updateMany({ viajeId: viaje._id }, { notificadoAdmin: true }).catch(() => {});
       }
     }
-    
+
     return alertas;
   } catch (e) {
     log.error("[IA_SEG]", e.message);
