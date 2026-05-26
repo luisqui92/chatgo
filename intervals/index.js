@@ -211,6 +211,84 @@ setInterval(async () => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 
+  
+// ═══════════════════════════════════════════════════════════════════════════
+// DETECCIÓN DE LLEGADA AL DESTINO
+// ═══════════════════════════════════════════════════════════════════════════
+
+setInterval(async () => {
+  try {
+    // A) LLEGADA AL ORIGEN DEL PASAJERO (≤50m)
+    const enCamino = await Viaje.find({ estado: "en_camino", llegadaOrigenNotificada: false });
+    for (const viaje of enCamino) {
+      try {
+        const posChofer = await obtenerUbicacionChofer(viaje.choferWialonId);
+        if (posChofer.minutos > 5) continue;
+        const distOrigen = distanciaEntrePuntos(posChofer.lat, posChofer.lng, viaje.origen.lat, viaje.origen.lng);
+        if (distOrigen <= 0.05) {
+          const updated = await Viaje.findOneAndUpdate(
+            { _id: viaje._id, llegadaOrigenNotificada: false },
+            { $set: { llegadaOrigenNotificada: true, estado: "esperando_pasajero" } },
+            { new: true }
+          );
+          if (!updated) continue;
+
+          const session = await getSession(viaje.usuarioPhone);
+          if (session) await updateSession(viaje.usuarioPhone, { ...session, step: "chofer_esperando_pasajero" });
+
+          const tipoVeh = updated.tipoVehiculo || "auto";
+          const emoji = tipoVeh === "moto" ? "🏍️" : "🚗";
+          const label = tipoVeh === "moto" ? "moto" : "auto";
+
+          const choferColorGPS = await Chofer.findOne({ wialonId: viaje.choferWialonId }).lean();
+          const colorGPS = choferColorGPS?.colorVehiculo ? ` ${choferColorGPS.colorVehiculo}` : "";
+          await enviarMensaje(
+            viaje.usuarioPhone,
+            `🚕 *¡Tu chofer llegó!*\n\n👤 ${viaje.choferNombre}\n${emoji} ${label}${colorGPS} · placa: ${viaje.choferPlaca}\n\nPor favor dirígete al vehículo. 🚖`
+          );
+
+          // FIX BUG#3 — el GPS detectó llegada, le enviamos botones nuevos al chofer
+          // y NO esperamos que presione el botón "Llegué" que ya está obsoleto
+          const usuarioLlegada = await Usuario.findOne({ phone: viaje.usuarioPhone }).lean();
+          const nombrePasajeroLlegada = usuarioLlegada?.nombre ? `\n🙋 Pregunta por: *ChatGo para ${usuarioLlegada.nombre}*` : "";
+          await enviarBotones(
+            viaje.choferPhone,
+            `📍 *Estás a 50m del pasajero*${nombrePasajeroLlegada}\n\nYa le avisamos que llegaste.\nCuando el pasajero suba presiona:`,
+            [
+              { id: "iniciar_viaje", title: "▶️ Iniciar viaje" },
+              { id: "cancelar_viaje_chofer", title: "❌ Cancelar" },
+            ]
+          );
+          log.info(`[LLEGADA_ORIGEN] Notificado viaje ${viaje._id}`);
+        }
+      } catch { /* ignorar fallo individual */ }
+    }
+
+    // B) LLEGADA AL DESTINO (≤150m) + MONITOREO DE SEGURIDAD
+    const enCurso = await Viaje.find({ estado: "en_curso", llegadaNotificada: false });
+    for (const viaje of enCurso) {
+      try {
+        const posChofer = await obtenerUbicacionChofer(viaje.choferWialonId);
+
+        // IA SEGURIDAD: monitorear comportamiento sospechoso
+        if (!viaje.alertaSeguridad) {
+          monitorearViajeEnCurso(viaje, posChofer, enviarMensaje).catch(() => {});
+        }
+
+        const distDestino = distanciaEntrePuntos(posChofer.lat, posChofer.lng, viaje.destino.lat, viaje.destino.lng);
+        if (distDestino < 0.15) {
+          await Viaje.findByIdAndUpdate(viaje._id, { llegadaNotificada: true });
+          await enviarBotones(viaje.choferPhone, "📍 Parece que llegaste al destino. ¿Finalizas el viaje?",
+            [{ id: "terminar_viaje", title: "🏁 Terminar viaje" }]);
+          await enviarMensaje(viaje.usuarioPhone, "📍 ¡Tu chofer llegó al destino!");
+        }
+      } catch { /* ignorar fallo individual */ }
+    }
+  } catch (e) {
+    log.error("[LLEGADA_LOOP]", e.message);
+  }
+}, 30000);
+
   log.info("✅ Todos los intervals iniciados");
 }
 
