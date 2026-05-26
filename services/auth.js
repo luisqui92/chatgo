@@ -4,6 +4,13 @@ const url = require("url");
 const os = require("os");
 const { CONFIG, log } = require("../config");
 
+
+// JWT_SECRET es obligatorio para evitar tokens predecibles
+if (!process.env.JWT_SECRET) {
+  console.error("❌ JWT_SECRET no está definido en variables de entorno. El panel admin no funcionará de forma segura.");
+  console.error("   Generá uno con: openssl rand -hex 32   y agregalo a Railway.");
+}
+
 // Usuarios definidos via variables de entorno
 // Formato: ADMIN_USERS=luis:hash:superadmin,maria:hash:admin
 function getUsuarios() {
@@ -37,7 +44,7 @@ function generarToken(usuario, rol) {
   const json = JSON.stringify(payload);
   const b64 = Buffer.from(json).toString("base64url");
   const sig = crypto
-    .createHmac("sha256", process.env.JWT_SECRET || "chatgo_jwt_secret_cambiar")
+    .createHmac("sha256", process.env.JWT_SECRET)
     .update(b64)
     .digest("hex")
     .slice(0, 32);
@@ -49,7 +56,7 @@ function verificarToken(token) {
   try {
     const [b64, sig] = token.split(".");
     const expectedSig = crypto
-      .createHmac("sha256", process.env.JWT_SECRET || "chatgo_jwt_secret_cambiar")
+      .createHmac("sha256", process.env.JWT_SECRET)
       .update(b64)
       .digest("hex")
       .slice(0, 32);
