@@ -1,9 +1,8 @@
 const { verificarTraficoEnRuta } = require("../services/google");
-const { AlertaSeg , Demanda, CodigoPromo} = require("../db/models");
 // ChatGo — IA Cerebro central
 const { CONFIG, log } = require("../config");
 const os = require("os");
-const { Chofer, Viaje, ListaEspera, Usuario, CodigoPromo } = require("../db/models");
+const { Chofer, Viaje, ListaEspera, Usuario, CodigoPromo, Demanda, AlertaSeg } = require("../db/models");
 const mongoose = require("mongoose");
 
 // ─── IA INLINE (sin dependencias externas) ───────────────────────────────
