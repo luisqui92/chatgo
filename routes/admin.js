@@ -675,6 +675,5 @@ app.get("/", (_req, res) => { res.send("ChatGo v5.30 - RastreoPlus - Operativo �
 // INICIAR SERVIDOR
 // ═══════════════════════════════════════════════════════════════════════════
 
-const PORT = process.env.PORT || 3000;
 
 };
