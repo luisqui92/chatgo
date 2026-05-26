@@ -10,6 +10,12 @@ const { enPromoGratis, fechaStrBolivia } = require("../services/utils");
 
 const wialonCache = { eid: null, expira: 0 };
 
+// Caches en memoria para reducir requests a Wialon
+const unidadesWialonCache = { data: null, expira: 0 };
+const posCache = new Map(); // wialonId -> { pos, expira }
+const POS_CACHE_MS = 8 * 1000;
+const UNIDADES_CACHE_MS = 12 * 1000;
+
 async function wialonLogin() {
   if (wialonCache.eid && Date.now() < wialonCache.expiresAt) return wialonCache.eid;
   const res = await axios.get("https://hst-api.wialon.com/wialon/ajax.html", {
@@ -31,7 +37,7 @@ function wialonInvalidateCache() {
   wialonCache = { eid: null, expiresAt: 0 };
 }
 
-async function obtenerUbicacionChofer(wialonId) {
+async function _obtenerUbicacionChoferRaw(wialonId) {
   let eid;
   try { eid = await wialonLogin(); }
   catch { throw new Error("No se pudo conectar con Wialon"); }
@@ -51,6 +57,15 @@ async function obtenerUbicacionChofer(wialonId) {
   const pos = item.pos;
   const minutos = Math.round((Date.now() / 1000 - (pos.t || 0)) / 60);
   return { lat: pos.y, lng: pos.x, minutos };
+}
+
+async function obtenerUbicacionChofer(wialonId) {
+  // Cache 8s
+  const cached = posCache.get(wialonId);
+  if (cached && cached.expira > Date.now()) return cached.pos;
+  const pos = await _obtenerUbicacionChoferRaw(wialonId);
+  if (pos) posCache.set(wialonId, { pos, expira: Date.now() + POS_CACHE_MS });
+  return pos;
 }
 
 // Construye la URL base de la app
@@ -233,5 +248,14 @@ async function reservarChofer(wialonId, viajeId) {
 async function liberarReservaChofer(wialonId) {
   await Chofer.updateOne({ wialonId }, { $set: { viajeReservado: null, reservadoHasta: null } });
 }
+
+
+// Limpieza de cache de posiciones cada 5 min
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, data] of posCache.entries()) {
+    if (data.expira < now) posCache.delete(id);
+  }
+}, 5 * 60 * 1000);
 
 module.exports = { wialonLogin, wialonInvalidateCache, obtenerUbicacionChofer, getAppUrl, generarLinkRastreoPropio, generarLinkLocator, buscarChoferDisponible, reservarChofer, liberarReservaChofer };
