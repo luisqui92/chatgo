@@ -229,7 +229,7 @@ app.get("/admin/data", requireAuth(), async (req, res) => {
     const viajesActivos = await Viaje.find({ estado: { $in: ["pendiente","en_camino","esperando_pasajero","en_curso"] } }).sort({ createdAt: -1 }).lean();
     const viajesRecientes = await Viaje.find().sort({ createdAt: -1 }).limit(20).lean();
     const listaEspera = await ListaEspera.find().lean();
-    const [totalUsuarios, usuariosNuevosHoy, viajes24h, viajesCompletados24h, ratingAgg, codigosActivos, codigosUsados] = await Promise.all([
+    const _results = await Promise.allSettled([
       Usuario.countDocuments(),
       Usuario.countDocuments({ createdAt: { $gte: new Date(ahora - 24*3600*1000) } }),
       Viaje.countDocuments({ createdAt: { $gte: new Date(ahora - 24*3600*1000) } }),
@@ -238,6 +238,7 @@ app.get("/admin/data", requireAuth(), async (req, res) => {
       CodigoPromo.countDocuments({ usado: false, fechaVencimiento: { $gt: new Date() } }),
       CodigoPromo.countDocuments({ usado: true }),
     ]);
+    const [totalUsuarios, usuariosNuevosHoy, viajes24h, viajesCompletados24h, ratingAgg, codigosActivos, codigosUsados] = _results.map(r => r.status === "fulfilled" ? r.value : (typeof r.reason === "object" ? 0 : null));
     res.json({
       timestamp: new Date().toISOString(),
       hoy: hoyStr,
