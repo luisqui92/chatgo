@@ -53,7 +53,9 @@ setInterval(async () => {
 setInterval(async () => {
   try {
     const ahora = new Date();
-    const pendientes = await ListaEspera.find({});
+    const pendientes = await ListaEspera.find({
+      timestamp: { $gt: new Date(Date.now() - 30 * 60 * 1000) }
+    }).limit(50);
 
     for (const espera of pendientes) {
       try {
