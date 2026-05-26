@@ -1,5 +1,6 @@
 // ChatGo — webhook.js
 const mongoose = require("mongoose");
+const { limitWebhook } = require("../services/ratelimit");
 const fs = require("fs");
 const https = require("https");
 const http = require("http");
@@ -16,7 +17,7 @@ const { enPromoGratis, fechaStrBolivia, formatearFechaPromo, promoCodigosActiva 
 
 module.exports = function(app, { procesarMensajeUsuario, procesarMensajeChofer, Chofer, Viaje, getSession, sessionCache, yaProcesoMensaje }) {
 
-app.post("/webhook", async (req, res) => {
+app.post("/webhook", limitWebhook, async (req, res) => {
   if (!verificarFirmaMeta(req)) {
     log.warn("[WEBHOOK] Firma inválida, rechazado");
     return res.sendStatus(401);
