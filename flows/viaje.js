@@ -8,19 +8,10 @@ const { enviarMensaje, enviarBotones } = require("../services/whatsapp");
 const { obtenerUbicacionChofer, buscarChoferDisponible, reservarChofer, liberarReservaChofer } = require("../services/wialon");
 const { distanciaEntrePuntos, generarLinkRutaConParadas } = require("../services/google");
 const { enviarAlertasChoferes, monitorearViajeEnCurso, procesarReactivaciones } = require("../ai");
-const { consumirCodigoPromo, fechaStrBolivia } = require("../services/utils");
+const { choferPagoAlDia, consumirCodigoPromo, enPromoGratis, fechaStrBolivia } = require("../services/utils");
 
 
-function enPromoGratis() {
-  if (!CONFIG.PROMO_GRATIS_HASTA) return false;
-  return fechaStrBolivia() <= CONFIG.PROMO_GRATIS_HASTA;
-}
 
-function choferPagoAlDia(chofer) {
-  if (enPromoGratis()) return true;
-  if (!chofer?.pagoDiario?.aprobado) return false;
-  return chofer.pagoDiario.fechaStr === fechaStrBolivia();
-}
 
 
 // ═══════════════════════════════════════════════════════════════════════════
