@@ -76,7 +76,7 @@ async function monitorearSeguridad(viaje, posChofer, posAnterior, enviarFn) {
     const minutos = (ahora - new Date(viaje.fechaAceptacion || ahora).getTime()) / 60000;
     const esperado = (viaje.distanciaKm || 5) * 4;
     if (minutos > esperado * 2 && minutos > 25) {
-      alertas.push({ tipo: "tiempo_excesivo", desc: "Lleva " + Math.round(minutos) + " min (esperado ~" + Math.round(esperado) + " min)", severidad: "media" });
+      alertas.push({ tipo: "tiempo_excesivo", desc: `Lleva ${Math.round(minutos)} min (esperado ~${Math.round(esperado)} min)`, severidad: "media" });
     }
 
     if (posAnterior && posChofer && posAnterior.timestamp) {
@@ -85,7 +85,7 @@ async function monitorearSeguridad(viaje, posChofer, posAnterior, enviarFn) {
       const enOrigen = viaje.origen && viaje.origen.lat && Math.abs(posChofer.lat - viaje.origen.lat) < 0.001;
       const enDestino = viaje.destino && viaje.destino.lat && Math.abs(posChofer.lat - viaje.destino.lat) < 0.001;
       if (dist < 50 && minDetenido > 7 && !enOrigen && !enDestino) {
-        alertas.push({ tipo: "parada_sospechosa", desc: "Detenido " + Math.round(minDetenido) + " min sin estar en origen/destino", severidad: "alta" });
+        alertas.push({ tipo: "parada_sospechosa", desc: `Detenido ${Math.round(minDetenido)} min sin estar en origen/destino`, severidad: "alta" });
       }
     }
 
@@ -95,7 +95,7 @@ async function monitorearSeguridad(viaje, posChofer, posAnterior, enviarFn) {
         const esBloqueo = trafico.severidad === "bloqueo_grave";
         alertas.push({
           tipo: esBloqueo ? "bloqueo" : "trafico",
-          desc: (esBloqueo ? "Bloqueo o trancadera detectada" : "Trafico pesado") + ": +" + trafico.retrasoMin + " min de retraso",
+          desc: `${esBloqueo ? "Bloqueo o trancadera detectada" : "Trafico pesado"}: +${trafico.retrasoMin} min de retraso`,
           severidad: esBloqueo ? "alta" : "media",
           retrasoMin: trafico.retrasoMin,
         });
@@ -117,17 +117,20 @@ async function monitorearSeguridad(viaje, posChofer, posAnterior, enviarFn) {
       if (!yaNotificado && enviarFn) {
         if (alerta.tipo === "trafico" || alerta.tipo === "bloqueo") {
           const ico = alerta.tipo === "bloqueo" ? "🚧" : "🚦";
-          await enviarFn(viaje.usuarioPhone, ico + " " + alerta.desc + "
+          const msgPas = `${ico} ${alerta.desc}
 
-Tu chofer esta demorando por causas externas. Si necesitas cancelar sin penalizacion escribi *CANCELAR*.").catch(() => {});
+Tu chofer está demorando por causas externas. Si necesitás cancelar sin penalización escribí *CANCELAR*.`;
+          await enviarFn(viaje.usuarioPhone, msgPas).catch(() => {});
           if (viaje.choferPhone) {
-            const accion = alerta.tipo === "bloqueo" ? "un bloqueo" : "trafico pesado";
-            await enviarFn(viaje.choferPhone, ico + " El sistema detecto " + accion + " en tu ruta.
-Si hay desvio posible, tomalo. Avisa al pasajero del retraso.").catch(() => {});
+            const accion = alerta.tipo === "bloqueo" ? "un bloqueo" : "tráfico pesado";
+            const msgCh = `${ico} El sistema detectó ${accion} en tu ruta.
+Si hay desvío posible, tomalo. Avisá al pasajero del retraso.`;
+            await enviarFn(viaje.choferPhone, msgCh).catch(() => {});
           }
         } else if (alerta.tipo === "tiempo_excesivo") {
-          await enviarFn(viaje.usuarioPhone, "⚠️ Tu chofer esta demorando mas de lo esperado.
-Si necesitas ayuda escribi *AYUDA* o *CANCELAR* para cancelar sin penalizacion.").catch(() => {});
+          const msgT = `⚠️ Tu chofer está demorando más de lo esperado.
+Si necesitás ayuda escribí *AYUDA* o *CANCELAR* para cancelar sin penalización.`;
+          await enviarFn(viaje.usuarioPhone, msgT).catch(() => {});
         }
         await AlertaSeg.updateMany({ viajeId: viaje._id, tipo: alerta.tipo }, { notificadoPasajero: true }).catch(() => {});
       }
@@ -137,13 +140,13 @@ Si necesitas ayuda escribi *AYUDA* o *CANCELAR* para cancelar sin penalizacion."
     if (graves.length > 0) {
       const yaNotificadoAdmin = await AlertaSeg.findOne({ viajeId: viaje._id, notificadoAdmin: true }).lean();
       if (!yaNotificadoAdmin && enviarFn) {
-        const linea = graves.map(a => "⚠️ " + a.desc).join("
-");
-        await enviarFn(CONFIG.ADMIN_PHONE, "🚨 *Alerta viaje " + String(viaje._id).slice(-6).toUpperCase() + "*
-Chofer: " + (viaje.choferNombre || "?") + " (+" + (viaje.choferPhone || "?") + ")
-Pasajero: +" + viaje.usuarioPhone + "
+        const linea = graves.map(a => `⚠️ ${a.desc}`).join("\n");
+        const msgAdmin = `🚨 *Alerta viaje ${String(viaje._id).slice(-6).toUpperCase()}*
+Chofer: ${viaje.choferNombre || "?"} (+${viaje.choferPhone || "?"})
+Pasajero: +${viaje.usuarioPhone}
 
-" + linea).catch(() => {});
+${linea}`;
+        await enviarFn(CONFIG.ADMIN_PHONE, msgAdmin).catch(() => {});
         await AlertaSeg.updateMany({ viajeId: viaje._id }, { notificadoAdmin: true }).catch(() => {});
       }
     }
