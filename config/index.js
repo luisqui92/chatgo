@@ -150,4 +150,29 @@ if (!process.env.META_APP_SECRET) {
 }
 
 
-module.exports = { CONFIG, CIUDADES, log, detectarCiudadPorCoords, detectarCiudadPorTexto, getContextoGeocode, getBoundsUsuario };
+
+// ─── VALIDACIÓN DE VARIABLES DE ENTORNO ─────────────────────────────────────
+function validateConfig() {
+  const required = [
+    "WHATSAPP_TOKEN", "WHATSAPP_PHONE_ID", "VERIFY_TOKEN", 
+    "GOOGLE_MAPS_KEY", "WIALON_TOKEN", "OPENAI_KEY", "MONGODB_URI"
+  ];
+  const warned = [
+    "META_APP_SECRET", "JWT_SECRET", "ADMIN_PASSWORD"
+  ];
+  const missing = required.filter(k => !process.env[k]);
+  const warnings = warned.filter(k => !process.env[k]);
+  
+  if (missing.length > 0) {
+    console.error("❌ Faltan variables de entorno requeridas:", missing.join(", "));
+    console.error("   El bot NO puede arrancar sin estas variables.");
+    process.exit(1);
+  }
+  if (warnings.length > 0) {
+    console.warn("⚠️ Variables recomendadas no definidas:", warnings.join(", "));
+    console.warn("   El bot funcionará pero con menos seguridad.");
+  }
+  return true;
+}
+
+module.exports = { CONFIG, CIUDADES, log, detectarCiudadPorCoords, detectarCiudadPorTexto, getContextoGeocode, getBoundsUsuario, validateConfig };
