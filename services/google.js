@@ -508,4 +508,39 @@ async function obtenerDireccion(lat, lng) {
   }
 }
 
-module.exports = { distanciaEntrePuntos, evaluarPrecisionReferencia, extraerCoordsDeUrlGmaps, resolverUrlCorta, extraerNombreLugarDeUrl, detectarYExtrarCoordsMaps, normalizarReferencia, generarTrigramas, similitudTexto, buscarReferenciaEnMemoria, guardarReferenciaVoz, dentroDeCocha, geocodificarConMemoria, calcularDistancia, calcularDistanciaConParadas, generarLinkRutaConParadas, geocodificarDireccion, obtenerDireccion };
+
+// ─── DETECCIÓN DE TRÁFICO/BLOQUEOS EN TIEMPO REAL ───────────────────────────
+// Consulta Google Distance Matrix con departure_time=now para obtener tiempo
+// con tráfico real. Compara con el tiempo "sin tráfico" para detectar bloqueos.
+async function verificarTraficoEnRuta(origen, destino) {
+  try {
+    const o = `${origen.lat},${origen.lng}`;
+    const d = `${destino.lat},${destino.lng}`;
+    const url = `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${o}&destinations=${d}&departure_time=now&traffic_model=best_guess&key=${CONFIG.GOOGLE_MAPS_KEY}`;
+    const res = await axios.get(url, { timeout: 8000 });
+    const elem = res.data?.rows?.[0]?.elements?.[0];
+    if (!elem || elem.status !== "OK") return null;
+    const sinTrafico = elem.duration?.value || 0;       // segundos sin tráfico
+    const conTrafico = elem.duration_in_traffic?.value || sinTrafico;
+    const minutosSinTraf = Math.round(sinTrafico / 60);
+    const minutosConTraf = Math.round(conTrafico / 60);
+    const factorRetraso = sinTrafico > 0 ? conTrafico / sinTrafico : 1;
+    // Severidad
+    let severidad = "normal";
+    if (factorRetraso >= 2.5) severidad = "bloqueo_grave";
+    else if (factorRetraso >= 1.8) severidad = "trafico_pesado";
+    else if (factorRetraso >= 1.4) severidad = "trafico_moderado";
+    return {
+      minutosSinTraf, minutosConTraf, factorRetraso,
+      retrasoMin: minutosConTraf - minutosSinTraf,
+      severidad,
+      distanciaMetros: elem.distance?.value || 0,
+    };
+  } catch (e) {
+    log.warn("[TRAFICO]", e.message);
+    return null;
+  }
+}
+
+
+module.exports = { distanciaEntrePuntos, evaluarPrecisionReferencia, extraerCoordsDeUrlGmaps, resolverUrlCorta, extraerNombreLugarDeUrl, detectarYExtrarCoordsMaps, normalizarReferencia, generarTrigramas, similitudTexto, buscarReferenciaEnMemoria, guardarReferenciaVoz, dentroDeCocha, geocodificarConMemoria, calcularDistancia, calcularDistanciaConParadas, generarLinkRutaConParadas, geocodificarDireccion, obtenerDireccion, verificarTraficoEnRuta };
