@@ -1,5 +1,5 @@
 const { verificarTraficoEnRuta } = require("../services/google");
-const { AlertaSeg } = require("../db/models");
+const { AlertaSeg , Demanda, CodigoPromo} = require("../db/models");
 // ChatGo — IA Cerebro central
 const { CONFIG, log } = require("../config");
 const os = require("os");
@@ -34,7 +34,10 @@ async function calcularMultiplierSurge() {
     return { multiplier: Math.min(1.5, m), motivos };
   } catch { return { multiplier: 1.0, motivos: [] }; }
 }
-function aplicarSurge(precio, m) { return m <= 1.0 ? precio : Math.ceil(precio * m); }
+function aplicarSurge(precioBase, multiplier) {
+  if (!multiplier || multiplier <= 1) return precioBase;
+  return Math.round(precioBase * multiplier);
+}
 function textoSurge(m, motivos) {
   if (m <= 1.0) return null;
   return `⚠️ _Precio ajustado +${Math.round((m-1)*100)}% por alta demanda._`;
@@ -51,7 +54,45 @@ async function registrarViajeEnDemanda(viaje) {
     );
   } catch { }
 }
-async function enviarAlertasChoferes() { }
+async function enviarAlertasChoferes(enviarMensajeFn) {
+  try {
+    if (!enviarMensajeFn) return;
+    const ahora = new Date();
+    const hora = ahora.getHours();
+    const diaSemana = ahora.getDay();
+    
+    // Buscar zonas calientes en esta hora/día
+    const zonasCalientes = await Demanda.find({ 
+      hora, diaSemana, cantidad: { $gte: 3 } 
+    }).sort({ cantidad: -1 }).limit(3).lean();
+    
+    if (zonasCalientes.length === 0) return;
+    
+    // Choferes libres en el sistema
+    const libres = await Chofer.find({ estado: "libre" }).limit(50).lean();
+    if (libres.length === 0) return;
+    
+    const zonasTexto = zonasCalientes.map(z => `📍 *${z.zona}* (${z.cantidad} viajes en esta hora)`).join("\n");
+    const msg = `🔥 *Zonas con alta demanda ahora*
+
+${zonasTexto}
+
+Movete cerca de estas zonas para conseguir viajes más rápido.`;
+    
+    for (const chofer of libres) {
+      // Solo enviar cada 2 horas máximo por chofer
+      const ultimaAlerta = chofer.ultimaAlertaZona ? new Date(chofer.ultimaAlertaZona).getTime() : 0;
+      if (Date.now() - ultimaAlerta < 2 * 60 * 60 * 1000) continue;
+      
+      await enviarMensajeFn(chofer.phone, msg).catch(() => {});
+      await Chofer.findByIdAndUpdate(chofer._id, { ultimaAlertaZona: new Date() }).catch(() => {});
+    }
+    
+    log.info(`[IA_ALERTAS] Notificados ${libres.length} choferes sobre ${zonasCalientes.length} zonas calientes`);
+  } catch (e) {
+    log.error("[IA_ALERTAS_CH]", e.message);
+  }
+}
 async function monitorearViajeEnCurso(viaje, posChofer, enviarFn) {
   try {
     const min = (Date.now() - new Date(viaje.fechaAceptacion).getTime()) / 60000;
@@ -63,9 +104,61 @@ Chofer: ${viaje.choferNombre}`).catch(() => {});
   } catch { }
   return [];
 }
-async function procesarReactivaciones() { }
+async function procesarReactivaciones(enviarMensajeFn) {
+  try {
+    if (!enviarMensajeFn) return;
+    const hace15dias = new Date(Date.now() - 15 * 24 * 60 * 60 * 1000);
+    
+    // Usuarios que tuvieron al menos 1 viaje pero no han vuelto en 15+ días
+    const inactivos = await Usuario.find({
+      ultimoViajeAt: { $lt: hace15dias, $ne: null },
+      promoReactivacionEnviada: { $ne: true },
+      aceptoTerminos: true,
+    }).limit(30).lean();
+    
+    if (inactivos.length === 0) return;
+    
+    for (const usr of inactivos) {
+      try {
+        // Generar código de descuento 30% que dura 7 días
+        const codigo = `VUELVE${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+        const venceEn = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+        
+        await CodigoPromo.create({
+          codigo, descuento: 30, usuario: usr.phone, 
+          venceEn, usado: false,
+        });
+        
+        const nombre = usr.nombre || "amigo";
+        const msg = `👋 Hola ${nombre}, te extrañamos en ChatGo!
+
+🎁 Te regalamos un *30% de descuento* en tu próximo viaje.
+Código: *${codigo}*
+Válido por 7 días.
+
+Pedí tu taxi cuando quieras y usá el código al confirmar el viaje.`;
+        
+        await enviarMensajeFn(usr.phone, msg).catch(() => {});
+        await Usuario.findByIdAndUpdate(usr._id, { promoReactivacionEnviada: true }).catch(() => {});
+      } catch (e) {
+        log.warn("[REACTIV_USR]", usr.phone, e.message);
+      }
+    }
+    
+    log.info(`[IA_REACTIVACION] Procesados ${inactivos.length} usuarios inactivos`);
+  } catch (e) {
+    log.error("[IA_REACTIV]", e.message);
+  }
+}
 async function actualizarUltimoViaje(phone) {
-  try { await Usuario.findOneAndUpdate({ phone }, { ultimoViajeAt: new Date() }); } catch { }
+  try { 
+    await Usuario.findOneAndUpdate(
+      { phone }, 
+      { ultimoViajeAt: new Date(), promoReactivacionEnviada: false }
+    ); 
+  } catch (e) {
+    log.warn("[ACTUALIZAR_ULTIMO]", e.message);
+  }
 }
 
 async function monitorearSeguridad(viaje, posChofer, posAnterior, enviarFn) {
