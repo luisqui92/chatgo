@@ -5,7 +5,7 @@ const https = require("https");
 const http = require("http");
 const url = require("url");
 const os = require("os");
-const { getUsuarios, hashPassword, generarToken, verificarToken, requireAuth, tienePermiso } = require("../services/auth");
+const { getUsuarios, hashPassword, generarToken, verificarToken, requireAuth, tienePermiso } =  require("../services/auth");
 
 const { CONFIG, log } = require("../config");
 const { Usuario, Chofer, Viaje, ListaEspera, LocationReference } = require("../db/models");
@@ -29,7 +29,7 @@ module.exports = function(app, deps) {
 
 
 // ─── LOGIN ───────────────────────────────────────────────────────────────────
-app.post("/admin/login", (req, res) => {
+app.post("/admin/login", rateLimit({ windowMs: 60000, max: 10 }), (req, res) => {
   try {
     const { usuario, password } = req.body;
     if (!usuario || !password) return res.status(400).json({ error: "Usuario y contraseña requeridos" });
