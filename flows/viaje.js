@@ -28,6 +28,17 @@ function choferPagoAlDia(chofer) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 async function asignarChofer(userPhone, session, excludeWialonIds = [], intento = 0) {
+  // Validar que origen y destino no sean el mismo punto
+  if (session?.ubicaciones?.origen && session?.ubicaciones?.destino) {
+    const o = session.ubicaciones.origen;
+    const d = session.ubicaciones.destino;
+    if (o.lat && d.lat && Math.abs(o.lat - d.lat) < 0.0001 && Math.abs(o.lng - d.lng) < 0.0001) {
+      log.warn(`[ASIGNAR] Origen y destino son el mismo para ${phone}`);
+      await enviarMensaje(phone, "⚠️ El origen y el destino son el mismo lugar. Volvé a indicar tu destino o escribí *CANCELAR* para empezar de nuevo.");
+      return false;
+    }
+  }
+
   // FIX BUG#7 — límite de reintentos para evitar recursión infinita
   if (intento >= CONFIG.MAX_REINTENTOS_ASIGNAR) {
     log.warn(`[ASIGNAR] Máximo de reintentos alcanzado para ${userPhone}`);
