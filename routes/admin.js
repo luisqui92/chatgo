@@ -16,15 +16,6 @@ const { obtenerUbicacionChofer, wialonLogin } = require("../services/wialon");
 const { geocodificarDireccion } = require("../services/google");
 
 // ─── HELPERS DE SEGURIDAD ────────────────────────────────────────────────────
-function escapeHtml(unsafe) {
-  if (unsafe === null || unsafe === undefined) return "";
-  return String(unsafe)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
-}
 
 
 
