@@ -46,7 +46,7 @@ app.post("/admin/login", limitLogin, (req, res) => {
 // Usado por admin-demo.html para mostrar choferes reales con viajes simulados
 app.get("/demo/choferes", async (req, res) => {
   try {
-    const choferes = await Chofer.find({ estado: { $in: ["libre", "ocupado"] } })
+    const choferes = await Chofer.find({ nombre: { $exists: true, $ne: null, $ne: "" } })
       .select("nombre placa tipoVehiculo viajesTotal ratingPromedio ratingCantidad zona phone")
       .limit(50)
       .lean();
