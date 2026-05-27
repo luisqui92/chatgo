@@ -11,7 +11,7 @@ const os = require("os");
 const { getUsuarios, hashPassword, generarToken, verificarToken, requireAuth, tienePermiso } =  require("../services/auth");
 
 const { CONFIG, log } = require("../config");
-const { Chofer, CodigoPromo, ListaEspera, LocationReference, Usuario, Viaje } = require("../db/models");
+const { Chofer, CodigoPromo, ListaEspera, LocationReference, Usuario, Viaje, ViajeDemo } = require("../db/models");
 const { obtenerUbicacionChofer, wialonLogin } = require("../services/wialon");
 const { geocodificarDireccion } = require("../services/google");
 
@@ -72,6 +72,265 @@ app.get("/demo/choferes", async (req, res) => {
     res.status(500).json({ error: "Error obteniendo choferes" });
   }
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SISTEMA DEMO COMPARTIDO — ViajeDemo en MongoDB
+// Mismo estado para todos los usuarios, reset a las 4 AM Bolivia
+// ═══════════════════════════════════════════════════════════════════════════
+
+const PUNTOS_DEMO = [
+  { nombre: 'Plaza 14 de Septiembre', lat: -17.3935, lng: -66.1570 },
+  { nombre: 'Cine Center (Av. Ramón Rivero)', lat: -17.3895, lng: -66.1665 },
+  { nombre: 'Mall Plaza Las Américas', lat: -17.3754, lng: -66.1635 },
+  { nombre: 'Av. América esq. Pando', lat: -17.3784, lng: -66.1583 },
+  { nombre: 'Av. Heroínas y San Martín', lat: -17.3917, lng: -66.1532 },
+  { nombre: 'Av. Ayacucho y Sucre', lat: -17.3952, lng: -66.1574 },
+  { nombre: 'Av. Ballivián (El Prado)', lat: -17.3866, lng: -66.1599 },
+  { nombre: 'Plaza Recoleta', lat: -17.3823, lng: -66.1547 },
+  { nombre: 'Mercado La Cancha', lat: -17.4015, lng: -66.1612 },
+  { nombre: 'Estadio Félix Capriles', lat: -17.3984, lng: -66.1742 },
+  { nombre: 'Aeropuerto Wilstermann', lat: -17.4218, lng: -66.1786 },
+  { nombre: 'Terminal de Buses', lat: -17.4042, lng: -66.1591 },
+  { nombre: 'UMSS Campus Central', lat: -17.3942, lng: -66.1469 },
+  { nombre: 'Hospital Viedma', lat: -17.3973, lng: -66.1551 },
+  { nombre: 'Plaza Colón', lat: -17.3915, lng: -66.1572 },
+  { nombre: 'Av. Blanco Galindo km 4', lat: -17.3823, lng: -66.2014 },
+  { nombre: 'Av. Blanco Galindo km 6.5', lat: -17.3795, lng: -66.2356 },
+  { nombre: 'Tupuraya (Av. Petrolera)', lat: -17.3637, lng: -66.1716 },
+  { nombre: 'Sarco (Calle Lanza)', lat: -17.3654, lng: -66.1832 },
+  { nombre: 'Queru Queru', lat: -17.3712, lng: -66.1503 },
+  { nombre: 'Sacaba Plaza 6 de Agosto', lat: -17.3978, lng: -66.0379 },
+  { nombre: 'Quillacollo Plaza Bolívar', lat: -17.3942, lng: -66.2784 },
+  { nombre: 'Tiquipaya', lat: -17.3287, lng: -66.2103 },
+  { nombre: 'IC Norte', lat: -17.3717, lng: -66.1592 },
+  { nombre: 'Av. Coña Coña esq. 6 de Agosto', lat: -17.3853, lng: -66.1947 },
+  { nombre: 'UPB', lat: -17.3645, lng: -66.1453 },
+];
+
+const NOMBRES_PAS_DEMO = ['Juan','María','Carlos','Ana','Pedro','Lucía','Roberto','Sofía','Diego','Carmen','Luis','Patricia','Miguel','Elena','Marco','Fernando','Gabriela','Ricardo','Mónica','Daniel'];
+const APELLIDOS_PAS_DEMO = ['Mamani','Quispe','Choque','Condori','Apaza','Pérez','López','Rojas','Vega','Castro','Mendoza','Vargas','Flores','Torrico','Salinas','Cruz'];
+
+function diaIdActual() {
+  const ahora = new Date(Date.now() - 4 * 3600 * 1000); // -4h para que cambie a las 4am
+  return ahora.getFullYear() * 10000 + (ahora.getMonth() + 1) * 100 + ahora.getDate();
+}
+
+function factorHora(h) {
+  const c = [0.2,0.1,0.1,0.1,0.2,0.4, 0.8,1.4,1.6,1.2,0.9,1.0, 1.5,1.4,1.0,0.9,1.0,1.3, 1.8,1.6,1.4,1.0,0.6,0.4];
+  return c[h] || 1.0;
+}
+
+function distanciaKm(a, b) {
+  const dx = (a.lat - b.lat) * 111;
+  const dy = (a.lng - b.lng) * 111 * Math.cos(a.lat * Math.PI / 180);
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+function calcularPrecioDemo(distKm, tipoVehiculo) {
+  const base = tipoVehiculo === 'moto' ? 5 : 7;
+  const porKm = tipoVehiculo === 'moto' ? 2.5 : 3.5;
+  return Math.max(Math.round(base + distKm * porKm), tipoVehiculo === 'moto' ? 6 : 8);
+}
+
+// ─── TICK INTERNO: genera/avanza viajes demo cada minuto ────────────────────
+async function tickDemo() {
+  try {
+    const diaId = diaIdActual();
+    const ahora = Date.now();
+    
+    // Si cambió el día, borrar todo lo del día anterior
+    const ultimoViaje = await ViajeDemo.findOne().sort({ diaId: -1 }).lean();
+    if (ultimoViaje && ultimoViaje.diaId !== diaId) {
+      await ViajeDemo.deleteMany({ diaId: { $ne: diaId } });
+      log.info(`[DEMO] Nuevo día ${diaId} — viajes anteriores eliminados`);
+    }
+    
+    // Obtener choferes reales activos
+    const choferes = await Chofer.find({ nombre: { $exists: true, $ne: null, $ne: "" } }).limit(50).lean();
+    if (choferes.length === 0) return;
+    
+    // Si es la primera vez del día, generar histórico desde las 4 AM
+    const cantHoy = await ViajeDemo.countDocuments({ diaId });
+    if (cantHoy === 0) {
+      const inicioDia = new Date();
+      inicioDia.setHours(4, 0, 0, 0);
+      if (inicioDia.getTime() > ahora) inicioDia.setDate(inicioDia.getDate() - 1);
+      const inicioMs = inicioDia.getTime();
+      
+      // Generar 6 viajes/hora desde inicio hasta ahora
+      const docsAGuardar = [];
+      let simTime = inicioMs;
+      const intervaloBase = 60 * 60 * 1000 / 6;
+      while (simTime < ahora) {
+        const h = new Date(simTime).getHours();
+        const proxInter = intervaloBase / factorHora(h) * (0.5 + Math.random());
+        simTime += proxInter;
+        if (simTime >= ahora) break;
+        const doc = generarViajeDemo(simTime, ahora, choferes, diaId);
+        if (doc) docsAGuardar.push(doc);
+      }
+      if (docsAGuardar.length > 0) {
+        await ViajeDemo.insertMany(docsAGuardar);
+        log.info(`[DEMO] Día ${diaId} inicializado · ${docsAGuardar.length} viajes históricos`);
+      }
+      return;
+    }
+    
+    // Avanzar viajes activos (cambiar estados según el tiempo)
+    const activos = await ViajeDemo.find({ 
+      diaId, 
+      estado: { $in: ['pendiente','en_camino','esperando_pasajero','en_curso'] } 
+    }).lean();
+    
+    for (const v of activos) {
+      let nuevoEstado = v.estado;
+      let posLat = v.choferPosLat, posLng = v.choferPosLng;
+      
+      if (v.estado === 'pendiente' && ahora >= v.tAceptado) {
+        nuevoEstado = 'en_camino';
+      } else if (v.estado === 'en_camino' && ahora >= v.tLlegoOrigen) {
+        nuevoEstado = 'esperando_pasajero';
+        posLat = v.origen.lat;
+        posLng = v.origen.lng;
+      } else if (v.estado === 'en_camino') {
+        // Interpolar posición del chofer al origen
+        const progreso = (ahora - v.tAceptado) / (v.tLlegoOrigen - v.tAceptado);
+        posLat = v.choferPosLat + (v.origen.lat - v.choferPosLat) * progreso;
+        posLng = v.choferPosLng + (v.origen.lng - v.choferPosLng) * progreso;
+      } else if (v.estado === 'esperando_pasajero' && ahora >= v.tSubioPasajero) {
+        nuevoEstado = 'en_curso';
+      } else if (v.estado === 'en_curso' && ahora >= v.tCompletado) {
+        nuevoEstado = 'completado';
+      } else if (v.estado === 'en_curso') {
+        // Interpolar posición del chofer al destino
+        const progreso = (ahora - v.tSubioPasajero) / (v.tCompletado - v.tSubioPasajero);
+        posLat = v.origen.lat + (v.destino.lat - v.origen.lat) * progreso;
+        posLng = v.origen.lng + (v.destino.lng - v.origen.lng) * progreso;
+      }
+      
+      const updates = { choferPosLat: posLat, choferPosLng: posLng };
+      if (nuevoEstado !== v.estado) {
+        updates.estado = nuevoEstado;
+        if (nuevoEstado === 'completado') {
+          updates.rating = Math.random() > 0.12 ? 4 + Math.floor(Math.random() * 2) : 2 + Math.floor(Math.random() * 2);
+        }
+      }
+      await ViajeDemo.updateOne({ _id: v._id }, updates);
+    }
+    
+    // Crear nuevo viaje si la probabilidad lo indica
+    const horaActual = new Date().getHours();
+    const probTick = (6 / 60) * factorHora(horaActual); // ~6/hora ajustado
+    if (Math.random() < probTick) {
+      const doc = generarViajeDemo(ahora, ahora, choferes, diaId);
+      if (doc) {
+        await ViajeDemo.create(doc);
+        log.info(`[DEMO] Nuevo viaje · ${doc.usuarioNombre} → ${doc.destino.nombre}`);
+      }
+    }
+  } catch (e) {
+    log.error("[DEMO_TICK]", e.message);
+  }
+}
+
+function generarViajeDemo(momentoCreacion, ahoraReal, choferes, diaId) {
+  const oIdx = Math.floor(Math.random() * PUNTOS_DEMO.length);
+  let dIdx = Math.floor(Math.random() * PUNTOS_DEMO.length);
+  let intentos = 0;
+  while (dIdx === oIdx && intentos < 10) { dIdx = Math.floor(Math.random() * PUNTOS_DEMO.length); intentos++; }
+  const origen = PUNTOS_DEMO[oIdx];
+  const destino = PUNTOS_DEMO[dIdx];
+  const distKm = distanciaKm(origen, destino);
+  if (distKm < 0.5) return null;
+  
+  const choferIdx = Math.floor(Math.random() * choferes.length);
+  const chofer = choferes[choferIdx];
+  
+  const tInicio = momentoCreacion;
+  const tAceptado = tInicio + 5000 + Math.random() * 20000;
+  const tLlegoOrigen = tAceptado + (distKm / 4) * 30000;
+  const tSubioPasajero = tLlegoOrigen + 30000 + Math.random() * 90000;
+  const tCompletado = tSubioPasajero + (distKm / 25) * 3600 * 1000;
+  
+  const cancelado = Math.random() < 0.10;
+  let estado, fin = null, rating = null;
+  if (cancelado) {
+    estado = 'cancelado_pasajero';
+    fin = tInicio + 10000 + Math.random() * 50000;
+  } else if (ahoraReal < tAceptado) estado = 'pendiente';
+  else if (ahoraReal < tLlegoOrigen) estado = 'en_camino';
+  else if (ahoraReal < tSubioPasajero) estado = 'esperando_pasajero';
+  else if (ahoraReal < tCompletado) estado = 'en_curso';
+  else {
+    estado = 'completado';
+    fin = tCompletado;
+    rating = Math.random() > 0.12 ? 4 + Math.floor(Math.random() * 2) : 2 + Math.floor(Math.random() * 2);
+  }
+  
+  return {
+    diaId,
+    choferIdx,
+    choferNombre: chofer.nombre,
+    choferPlaca: chofer.placa || "—",
+    choferTipo: chofer.tipoVehiculo || "auto",
+    usuarioNombre: NOMBRES_PAS_DEMO[Math.floor(Math.random() * NOMBRES_PAS_DEMO.length)] + ' ' + APELLIDOS_PAS_DEMO[Math.floor(Math.random() * APELLIDOS_PAS_DEMO.length)],
+    usuarioPhone: '5917' + (1000000 + Math.floor(Math.random() * 9000000)),
+    origen: { nombre: origen.nombre, lat: origen.lat, lng: origen.lng },
+    destino: { nombre: destino.nombre, lat: destino.lat, lng: destino.lng },
+    distanciaKm: Math.round(distKm * 10) / 10,
+    precioTotal: calcularPrecioDemo(distKm, chofer.tipoVehiculo || 'auto'),
+    estado,
+    rating,
+    tInicio, tAceptado, tLlegoOrigen, tSubioPasajero, tCompletado,
+    choferPosLat: origen.lat + (Math.random() - 0.5) * 0.01,
+    choferPosLng: origen.lng + (Math.random() - 0.5) * 0.01,
+  };
+}
+
+// ─── ENDPOINT: estado actual del demo ────────────────────────────────────────
+app.get("/demo/estado", async (req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  try {
+    const diaId = diaIdActual();
+    const viajes = await ViajeDemo.find({ diaId }).sort({ tInicio: -1 }).limit(200).lean();
+    const choferesReales = await Chofer.find({ nombre: { $exists: true, $ne: null, $ne: "" } }).limit(50).lean();
+    
+    // Calcular estados de choferes según viajes activos
+    const ocupados = new Set();
+    const posiciones = {};
+    viajes.filter(v => ['en_camino','esperando_pasajero','en_curso'].includes(v.estado)).forEach(v => {
+      if (v.choferNombre) {
+        ocupados.add(v.choferNombre);
+        posiciones[v.choferNombre] = { lat: v.choferPosLat, lng: v.choferPosLng };
+      }
+    });
+    
+    const choferes = choferesReales.map((c, i) => ({
+      idx: i,
+      nombre: c.nombre,
+      placa: c.placa || "—",
+      tipoVehiculo: c.tipoVehiculo || "auto",
+      viajesTotal: c.viajesTotal || 0,
+      rating: c.ratingPromedio ? Number(c.ratingPromedio).toFixed(1) : (4.5 + Math.random() * 0.5).toFixed(1),
+      ratingCantidad: c.ratingCantidad || 0,
+      zona: c.zona || null,
+      phoneMask: c.phone ? "+591 *** ** " + String(c.phone).slice(-4) : null,
+      estado: ocupados.has(c.nombre) ? "ocupado" : "libre",
+      pos: posiciones[c.nombre] || null,
+    }));
+    
+    res.json({ diaId, choferes, viajes, timestamp: Date.now() });
+  } catch (e) {
+    log.error("[DEMO_ESTADO]", e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ─── CRON INTERNO: tick cada 60 segundos ─────────────────────────────────────
+setInterval(tickDemo, 60 * 1000);
+// Primer tick a los 5 segundos del arranque
+setTimeout(tickDemo, 5000);
+
 
 
 
