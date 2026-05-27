@@ -45,6 +45,9 @@ app.post("/admin/login", limitLogin, (req, res) => {
 // Devuelve lista de choferes con datos NO sensibles (sin teléfono completo)
 // Usado por admin-demo.html para mostrar choferes reales con viajes simulados
 app.get("/demo/choferes", async (req, res) => {
+  // CORS explícito para el endpoint demo (acceso público)
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET");
   try {
     const choferes = await Chofer.find({ nombre: { $exists: true, $ne: null, $ne: "" } })
       .select("nombre placa tipoVehiculo viajesTotal ratingPromedio ratingCantidad zona phone")
