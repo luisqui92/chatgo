@@ -216,4 +216,34 @@ listaEsperaSchema.index({ timestamp: 1 });
 listaEsperaSchema.index({ ofertaActivaWialonId: 1, timestamp: 1 });
 
 
-module.exports = { Usuario, Chofer, Viaje, SessionState, ListaEspera, RateLimit, CodigoPromo, LocationReference, Demanda, EventoChofer, AlertaSeg, Surge };
+
+// ─── MODELO DEMO (no toca datos reales) ─────────────────────────────────────
+const viajeDemoSchema = new mongoose.Schema({
+  diaId: { type: Number, required: true, index: true }, // YYYYMMDD del día (4am reset)
+  choferIdx: Number,           // índice del chofer en la lista
+  choferNombre: String,
+  choferPlaca: String,
+  choferTipo: String,
+  usuarioNombre: String,
+  usuarioPhone: String,
+  origen: { nombre: String, lat: Number, lng: Number },
+  destino: { nombre: String, lat: Number, lng: Number },
+  distanciaKm: Number,
+  precioTotal: Number,
+  estado: { type: String, index: true },
+  rating: Number,
+  // Tiempos del ciclo
+  tInicio: Number,        // ms cuando se creó
+  tAceptado: Number,      // ms cuando chofer aceptó
+  tLlegoOrigen: Number,
+  tSubioPasajero: Number,
+  tCompletado: Number,
+  // Posición simulada del chofer (se actualiza con cada tick)
+  choferPosLat: Number,
+  choferPosLng: Number,
+}, { timestamps: true });
+viajeDemoSchema.index({ diaId: 1, estado: 1 });
+const ViajeDemo = mongoose.model("ViajeDemo", viajeDemoSchema);
+
+
+module.exports = { Usuario, Chofer, Viaje, SessionState, ListaEspera, RateLimit, CodigoPromo, LocationReference, Demanda, EventoChofer, AlertaSeg, Surge, ViajeDemo };
