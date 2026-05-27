@@ -235,7 +235,7 @@ async function tickDemo() {
     
     // Crear nuevo viaje si la probabilidad lo indica
     const horaActual = new Date().getHours();
-    const probTick = (6 / 60) * factorHora(horaActual); // ~6/hora ajustado
+    const probTick = (10 / 60) * factorHora(horaActual); // ~10/hora ajustado por curva
     if (Math.random() < probTick) {
       const doc = generarViajeDemo(ahora, ahora, choferes, diaId);
       if (doc) {
@@ -261,9 +261,8 @@ function generarViajeDemo(momentoCreacion, ahoraReal, choferes, diaId) {
   // Filtrar choferes que NO estén offline en este momento
   const horaCreacion = new Date(momentoCreacion).getHours();
   const choferesDisponibles = choferes.filter((c, i) => {
-    const bloque = Math.floor(horaCreacion / 3);
-    const seed = (i * 17 + bloque * 31) % 100;
-    const limite = (horaCreacion < 6) ? 60 : 25;
+    const seed = (i * 23 + horaCreacion * 41) % 100;
+    const limite = (horaCreacion < 6) ? 60 : 30;
     return seed >= limite;
   });
   if (choferesDisponibles.length === 0) return null;
@@ -334,11 +333,11 @@ app.get("/demo/estado", async (req, res) => {
     // otros toda la mañana, otros descansan al mediodía, etc.
     const horaActual = new Date().getHours();
     function estaOffline(idx, hora) {
-      // Patrón basado en idx + bloque de hora (rota cada ~3h)
-      const bloque = Math.floor(hora / 3);
-      const seed = (idx * 17 + bloque * 31) % 100;
-      // Madrugada (0-5h): ~60% offline; resto del día ~25% offline
-      const limite = (hora < 6) ? 60 : 25;
+      // Patrón: rota CADA HORA (no por bloques de 3h)
+      // Cada chofer tiene un ciclo distinto basado en su idx
+      const seed = (idx * 23 + hora * 41) % 100;
+      // Madrugada (0-5h): ~60% offline; resto ~30% offline
+      const limite = (hora < 6) ? 60 : 30;
       return seed < limite;
     }
     
