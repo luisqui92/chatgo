@@ -238,15 +238,15 @@ app.get("/admin/data", requireAuth(), async (req, res) => {
       CodigoPromo.countDocuments({ usado: false, fechaVencimiento: { $gt: new Date() } }),
       CodigoPromo.countDocuments({ usado: true }),
     ]);
-    const [totalUsuarios, usuariosNuevosHoy, viajes24h, viajesCompletados24h, ratingAgg, codigosActivos, codigosUsados] = _results.map(r => r.status === "fulfilled" ? r.value : (typeof r.reason === "object" ? 0 : null));
+    const [totalUsuarios, usuariosNuevosHoy, viajes24h, viajesCompletados24h, ratingAgg, codigosActivos, codigosUsados] = _results.map(r => r.status === "fulfilled" ? r.value : 0);
     res.json({
       timestamp: new Date().toISOString(),
       hoy: hoyStr,
-      stats: { totalUsuarios, usuariosNuevosHoy, viajes24h, viajesCompletados24h, rating: ratingAgg[0] ? { promedio: Math.round(ratingAgg[0].avg * 10) / 10, cantidad: ratingAgg[0].count } : null, codigosActivos, codigosUsados, choferesTotal: choferes.length, choferesLibres: choferesConPos.filter(c=>c.estado==="libre").length, choferesOcupados: choferesConPos.filter(c=>c.estado==="ocupado").length, choferesOffline: choferesConPos.filter(c=>c.estado==="offline").length, choferesPagadosHoy: choferesConPos.filter(c=>c.pagoAlDia).length, choferesConGPSReciente: choferesConPos.filter(c=>c.ultimaPos&&c.ultimaPos.hace_min<=15).length, viajesActivos: viajesActivos.length, enListaEspera: listaEspera.length },
+      stats: { totalUsuarios, usuariosNuevosHoy, viajes24h, viajesCompletados24h, rating: (ratingAgg && ratingAgg[0]) ? { promedio: Math.round(ratingAgg[0].avg * 10) / 10, cantidad: ratingAgg[0].count } : null, codigosActivos, codigosUsados, choferesTotal: choferes.length, choferesLibres: choferesConPos.filter(c=>c.estado==="libre").length, choferesOcupados: choferesConPos.filter(c=>c.estado==="ocupado").length, choferesOffline: choferesConPos.filter(c=>c.estado==="offline").length, choferesPagadosHoy: choferesConPos.filter(c=>c.pagoAlDia).length, choferesConGPSReciente: choferesConPos.filter(c=>c.ultimaPos&&c.ultimaPos.hace_min<=15).length, viajesActivos: viajesActivos.length, enListaEspera: listaEspera.length },
       choferes: choferesConPos, viajesActivos, viajesRecientes, listaEspera,
       promo: { viajesActiva: enPromoGratis(), viajesFin: CONFIG.PROMO_GRATIS_HASTA, codigosActiva: promoCodigosActiva(), codigosFin: CONFIG.PROMO_CODIGOS_HASTA },
     });
-  } catch (e) { log.error("[ADMIN_DATA]", e.message); res.status(500).json({ error: e.message }); }
+  } catch (e) { log.error("[ADMIN_DATA]", e.message, e.stack); res.status(500).json({ error: e.message }); }
 });
 
 app.get("/admin/aprobar-chofer/:phone", requireAuth(["superadmin","admin"]), async (req, res) => {
