@@ -1,6 +1,7 @@
 // ChatGo — admin.js
 const mongoose = require("mongoose");
-const { fechaStrBolivia } = require("../services/utils");
+const { enviarBotones } = require("../services/whatsapp");
+const { enPromoGratis, escapeHtml, fechaStrBolivia, promoCodigosActiva } = require("../services/utils");
 const { limitLogin, limitAdmin } = require("../services/ratelimit");
 const path = require("path");
 const https = require("https");
@@ -10,8 +11,8 @@ const os = require("os");
 const { getUsuarios, hashPassword, generarToken, verificarToken, requireAuth, tienePermiso } =  require("../services/auth");
 
 const { CONFIG, log } = require("../config");
-const { Usuario, Chofer, Viaje, ListaEspera, LocationReference } = require("../db/models");
-const { obtenerUbicacionChofer } = require("../services/wialon");
+const { Chofer, CodigoPromo, ListaEspera, LocationReference, Usuario, Viaje } = require("../db/models");
+const { obtenerUbicacionChofer, wialonLogin } = require("../services/wialon");
 const { geocodificarDireccion } = require("../services/google");
 
 // ─── HELPERS DE SEGURIDAD ────────────────────────────────────────────────────
