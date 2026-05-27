@@ -41,6 +41,37 @@ app.post("/admin/login", limitLogin, (req, res) => {
   }
 });
 
+// ─── ENDPOINT PÚBLICO PARA DEMO ─────────────────────────────────────────────
+// Devuelve lista de choferes con datos NO sensibles (sin teléfono completo)
+// Usado por admin-demo.html para mostrar choferes reales con viajes simulados
+app.get("/demo/choferes", async (req, res) => {
+  try {
+    const choferes = await Chofer.find({ estado: { $in: ["libre", "ocupado"] } })
+      .select("nombre placa tipoVehiculo viajesTotal ratingPromedio ratingCantidad zona phone")
+      .limit(50)
+      .lean();
+    
+    // Ofuscar teléfonos (últimos 4 dígitos)
+    const ofuscados = choferes.map(c => ({
+      nombre: c.nombre || "Sin nombre",
+      placa: c.placa || "—",
+      tipoVehiculo: c.tipoVehiculo || "auto",
+      viajesTotal: c.viajesTotal || 0,
+      rating: c.ratingPromedio ? Number(c.ratingPromedio).toFixed(1) : null,
+      ratingCantidad: c.ratingCantidad || 0,
+      zona: c.zona || null,
+      phoneMask: c.phone ? "+591 *** ** " + String(c.phone).slice(-4) : null,
+    }));
+    
+    res.json({ choferes: ofuscados, total: ofuscados.length });
+  } catch (e) {
+    log.error("[DEMO_CHOFERES]", e.message);
+    res.status(500).json({ error: "Error obteniendo choferes" });
+  }
+});
+
+
+
 app.get("/unidades", requireAuth(), async (req, res) => {
   try {
     const eid = await wialonLogin();
