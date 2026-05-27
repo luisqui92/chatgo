@@ -28,6 +28,21 @@ const { procesarMensajeChofer } = require("./flows/chofer");
 const { procesarMensajeUsuario, preguntarOpcionesViaje, procesarCalculoViaje } = require("./flows/pasajero");
 
 // ─── MIDDLEWARE ───────────────────────────────────────────────────────────────
+
+// ─── CORS ───────────────────────────────────────────────────────────────────
+app.use((req, res, next) => {
+  const allowed = ["https://chatgo.ia.bo", "https://www.chatgo.ia.bo", "http://localhost:3000", "http://localhost:5173"];
+  const origin = req.headers.origin;
+  if (origin && allowed.includes(origin)) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+  }
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, DELETE");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  res.setHeader("Access-Control-Allow-Credentials", "true");
+  if (req.method === "OPTIONS") return res.sendStatus(204);
+  next();
+});
+
 app.use((req, res, next) => {
   const allowed = ["https://chatgo.ia.bo", "http://chatgo.ia.bo", "http://localhost:3000"];
   const origin = req.headers.origin;
