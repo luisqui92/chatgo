@@ -107,8 +107,23 @@ const PUNTOS_DEMO = [
   { nombre: 'UPB', lat: -17.3645, lng: -66.1453 },
 ];
 
-const NOMBRES_PAS_DEMO = ['Juan','María','Carlos','Ana','Pedro','Lucía','Roberto','Sofía','Diego','Carmen','Luis','Patricia','Miguel','Elena','Marco','Fernando','Gabriela','Ricardo','Mónica','Daniel'];
-const APELLIDOS_PAS_DEMO = ['Mamani','Quispe','Choque','Condori','Apaza','Pérez','López','Rojas','Vega','Castro','Mendoza','Vargas','Flores','Torrico','Salinas','Cruz'];
+// Lista de pasajeros con formatos variados (más realista para WhatsApp)
+const NOMBRES_PASAJEROS_DEMO = [
+  'Luis', 'Carlos', 'Ana', 'Pedro', 'María', 'Sofi', 'Andre', 'Juancho',
+  'Daniel Choque', 'Mónica Quispe', 'Roberto V.', 'Gabriela',
+  'Don Carlos', 'Doña Rosa', 'Tía Elena', 'Marco A.',
+  'Lucia M.', 'Fer', 'Pato', 'Vero',
+  'Edwin', 'Ramiro', 'Jhonny', 'Patty',
+  'Sra. Vargas', 'Sr. Mendoza', 'Dani', 'Vivi',
+  'José Luis', 'Ana María', 'Carlos R.', 'Cristian',
+  'Susana', 'Beto', 'Mario', 'Rocío',
+  'El Profe', 'La Profe', 'Doc Pérez', 'Ing. Rojas',
+  'Diego', 'Eduardo', 'Cami', 'Jorge L.',
+];
+
+function nombrePasajeroDemo() {
+  return NOMBRES_PASAJEROS_DEMO[Math.floor(Math.random() * NOMBRES_PASAJEROS_DEMO.length)];
+}
 
 function diaIdActual() {
   const ahora = new Date(Date.now() - 4 * 3600 * 1000); // -4h para que cambie a las 4am
@@ -243,8 +258,17 @@ function generarViajeDemo(momentoCreacion, ahoraReal, choferes, diaId) {
   const distKm = distanciaKm(origen, destino);
   if (distKm < 0.5) return null;
   
-  const choferIdx = Math.floor(Math.random() * choferes.length);
-  const chofer = choferes[choferIdx];
+  // Filtrar choferes que NO estén offline en este momento
+  const horaCreacion = new Date(momentoCreacion).getHours();
+  const choferesDisponibles = choferes.filter((c, i) => {
+    const bloque = Math.floor(horaCreacion / 3);
+    const seed = (i * 17 + bloque * 31) % 100;
+    const limite = (horaCreacion < 6) ? 60 : 25;
+    return seed >= limite;
+  });
+  if (choferesDisponibles.length === 0) return null;
+  const choferIdx = Math.floor(Math.random() * choferesDisponibles.length);
+  const chofer = choferesDisponibles[choferIdx];
   
   const tInicio = momentoCreacion;
   const tAceptado = tInicio + 5000 + Math.random() * 20000;
@@ -273,7 +297,7 @@ function generarViajeDemo(momentoCreacion, ahoraReal, choferes, diaId) {
     choferNombre: chofer.nombre,
     choferPlaca: chofer.placa || "—",
     choferTipo: chofer.tipoVehiculo || "auto",
-    usuarioNombre: NOMBRES_PAS_DEMO[Math.floor(Math.random() * NOMBRES_PAS_DEMO.length)] + ' ' + APELLIDOS_PAS_DEMO[Math.floor(Math.random() * APELLIDOS_PAS_DEMO.length)],
+    usuarioNombre: nombrePasajeroDemo(),
     usuarioPhone: '5917' + (1000000 + Math.floor(Math.random() * 9000000)),
     origen: { nombre: origen.nombre, lat: origen.lat, lng: origen.lng },
     destino: { nombre: destino.nombre, lat: destino.lat, lng: destino.lng },
@@ -305,19 +329,39 @@ app.get("/demo/estado", async (req, res) => {
       }
     });
     
-    const choferes = choferesReales.map((c, i) => ({
-      idx: i,
-      nombre: c.nombre,
-      placa: c.placa || "—",
-      tipoVehiculo: c.tipoVehiculo || "auto",
-      viajesTotal: c.viajesTotal || 0,
-      rating: c.ratingPromedio ? Number(c.ratingPromedio).toFixed(1) : (4.5 + Math.random() * 0.5).toFixed(1),
-      ratingCantidad: c.ratingCantidad || 0,
-      zona: c.zona || null,
-      phoneMask: c.phone ? "+591 *** ** " + String(c.phone).slice(-4) : null,
-      estado: ocupados.has(c.nombre) ? "ocupado" : "libre",
-      pos: posiciones[c.nombre] || null,
-    }));
+    // Decidir qué choferes están OFFLINE — varía por hora del día
+    // Cada chofer tiene un patrón pseudo-aleatorio: ciertos están offline en madrugada,
+    // otros toda la mañana, otros descansan al mediodía, etc.
+    const horaActual = new Date().getHours();
+    function estaOffline(idx, hora) {
+      // Patrón basado en idx + bloque de hora (rota cada ~3h)
+      const bloque = Math.floor(hora / 3);
+      const seed = (idx * 17 + bloque * 31) % 100;
+      // Madrugada (0-5h): ~60% offline; resto del día ~25% offline
+      const limite = (hora < 6) ? 60 : 25;
+      return seed < limite;
+    }
+    
+    const choferes = choferesReales.map((c, i) => {
+      const offline = estaOffline(i, horaActual);
+      let estado = "offline";
+      if (!offline) {
+        estado = ocupados.has(c.nombre) ? "ocupado" : "libre";
+      }
+      return {
+        idx: i,
+        nombre: c.nombre,
+        placa: c.placa || "—",
+        tipoVehiculo: c.tipoVehiculo || "auto",
+        viajesTotal: c.viajesTotal || 0,
+        rating: c.ratingPromedio ? Number(c.ratingPromedio).toFixed(1) : (4.5 + Math.random() * 0.5).toFixed(1),
+        ratingCantidad: c.ratingCantidad || 0,
+        zona: c.zona || null,
+        phoneMask: c.phone ? "+591 *** ** " + String(c.phone).slice(-4) : null,
+        estado,
+        pos: posiciones[c.nombre] || null,
+      };
+    });
     
     res.json({ diaId, choferes, viajes, timestamp: Date.now() });
   } catch (e) {
