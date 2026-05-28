@@ -440,6 +440,18 @@ function generarViajeDemo(momentoCreacion, ahoraReal, choferes, diaId) {
 }
 
 // ─── ENDPOINT: estado actual del demo ────────────────────────────────────────
+
+// Posición dispersa para choferes libres — distribuidos por toda la ciudad
+// Determinística por idx (no saltan entre refrescos)
+function posicionLibreDispersa(idx) {
+  // Usar los puntos demo reales como base de dispersión
+  const punto = PUNTOS_DEMO[(idx * 7) % PUNTOS_DEMO.length];
+  // Pequeño offset estable basado en idx
+  const offLat = ((idx * 13) % 20 - 10) * 0.0008;
+  const offLng = ((idx * 17) % 20 - 10) * 0.0008;
+  return { lat: punto.lat + offLat, lng: punto.lng + offLng };
+}
+
 app.get("/demo/estado", async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   try {
@@ -487,7 +499,7 @@ app.get("/demo/estado", async (req, res) => {
         zona: c.zona || null,
         phoneMask: c.phone ? "+591 *** ** " + String(c.phone).slice(-4) : null,
         estado,
-        pos: posiciones[c.nombre] || null,
+        pos: posiciones[c.nombre] || posicionLibreDispersa(i),
       };
     });
     
