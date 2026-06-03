@@ -9,7 +9,7 @@ const { getSession, setSession, updateSession, deleteSession, ensureSession, rem
 const { enviarMensaje, enviarBotones, relayMensajeChat, obtenerUrlMedia } = require("../services/whatsapp");
 const { evaluarPrecisionReferencia, detectarYExtrarCoordsMaps, normalizarReferencia, guardarReferenciaVoz, geocodificarConMemoria, calcularDistancia, calcularDistanciaConParadas, obtenerDireccion } = require("../services/google");
 const { transcribirAudio, extraerUbicaciones } = require("../services/openai");
-const { promoCodigosActiva, crearCodigoPromo, validarCodigoPromo, enviarCodigoDescuento, esIntentoCancelar, esPedidoAyuda, detectarIncompatibilidadMoto, construirBotonesHistorial } = require("../services/utils");
+const { promoCodigosActiva, crearCodigoPromo, validarCodigoPromo, enviarCodigoDescuento, esIntentoCancelar, esPedidoAyuda, detectarIncompatibilidadMoto, construirBotonesHistorial, buscarEsquinaMapeada, guardarEsquina, obtenerLugarPersonal, guardarLugarPersonal, evaluarReferencia, mensajePidiendoReferencia } = require("../services/utils");
 const { calcularMultiplierSurge, aplicarSurge, textoSurge } = require("../ai");
 const { asignarChofer, procesarCancelacionPasajero, procesarPedidoAyuda, registrarRating } = require("../flows/viaje");
 const { procesarMensajeChofer } = require("../flows/chofer");
@@ -397,6 +397,112 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
       const transcripcion = await transcribirAudio(audioUrl);
       await enviarMensaje(phone, `🎤 Escuché: _"${transcripcion}"_`);
       const ubicaciones = await extraerUbicaciones(transcripcion);
+      // Detalle estructurado (nuevo formato: tipo, calle1, calle2, etc.)
+      const detOrigen = ubicaciones.origenDetalle;
+      const detDestino = ubicaciones.destinoDetalle;
+      
+      // ─── CASO 1: Lugar personal (mi casa, mi trabajo) ───────────────────
+      // Si el usuario dijo "casa" o "trabajo", buscar en sus lugares guardados
+      async function resolverPersonal(det, esOrigen) {
+        if (!det || det.tipo !== "personal" || !det.lugar_personal) return null;
+        const guardado = await obtenerLugarPersonal(phone, det.lugar_personal);
+        if (guardado && guardado.lat && guardado.lng) {
+          return { coords: { lat: guardado.lat, lng: guardado.lng, nombre: guardado.nombre || det.lugar_personal } };
+        }
+        // No tiene guardado — pedirle que mande el pin para guardarlo
+        return { necesitaGuardar: true, tipo: det.lugar_personal };
+      }
+      
+      const personalOrigen = await resolverPersonal(detOrigen, true);
+      const personalDestino = await resolverPersonal(detDestino, false);
+      
+      // Si tiene personal NO guardado, pedirle el pin
+      if (personalOrigen?.necesitaGuardar || personalDestino?.necesitaGuardar) {
+        const tipoLugar = personalOrigen?.necesitaGuardar ? personalOrigen.tipo : personalDestino.tipo;
+        const esOrigenPersonal = !!personalOrigen?.necesitaGuardar;
+        await updateSession(phone, {
+          ...session,
+          step: esOrigenPersonal ? "guardando_lugar_personal_origen" : "guardando_lugar_personal_destino",
+          lugarPersonalPendiente: tipoLugar,
+        });
+        await enviarMensaje(phone,
+          `📌 No tengo guardado todavía dónde está tu *${tipoLugar}*.\n\n` +
+          `Mandame el 📍 pin de tu ${tipoLugar} ahora y lo guardo para que la próxima vez digas "${tipoLugar === "casa" ? "llévame a casa" : "voy al trabajo"}" y lo sepa al toque. 😊\n\n` +
+          `Usá el 📎 adjunto → Ubicación.`
+        );
+        return;
+      }
+      
+      // Si tiene personal SÍ guardado, ya tenemos las coordenadas directamente
+      if (personalOrigen?.coords) {
+        ubicaciones.origen = personalOrigen.coords.nombre;
+        // Inyectar las coords como si fuera un lugar mapeado
+        session._personalOrigen = personalOrigen.coords;
+      }
+      if (personalDestino?.coords) {
+        ubicaciones.destino = personalDestino.coords.nombre;
+        session._personalDestino = personalDestino.coords;
+      }
+      
+      // ─── CASO 2: Referencia vaga (zona amplia o lugar grande) ────────────
+      // Si la IA detecta algo vago, pedir referencia adicional antes de seguir
+      const evalOrigenVoz = detOrigen ? evaluarReferencia(detOrigen) : { vaga: false };
+      const evalDestinoVoz = detDestino ? evaluarReferencia(detDestino) : { vaga: false };
+      
+      // Solo intervenir si AMBOS son específicos o si AL MENOS UNO es vago
+      // (Ignoramos vaguedad si ya tenemos coords personales)
+      const origenVago = evalOrigenVoz.vaga && !personalOrigen?.coords;
+      const destinoVago = evalDestinoVoz.vaga && !personalDestino?.coords;
+      
+      if (origenVago || destinoVago) {
+        // Construir mensaje pidiendo referencias
+        let msg = `Te entendí:\n`;
+        if (detOrigen) msg += `📍 Origen: *${detOrigen.texto}* ${origenVago ? "⚠️" : "✅"}\n`;
+        if (detDestino) msg += `🏁 Destino: *${detDestino.texto}* ${destinoVago ? "⚠️" : "✅"}\n`;
+        msg += `\n`;
+        
+        if (origenVago && destinoVago) {
+          msg += `⚠️ Ambos lugares son muy amplios — necesito *esquinas o referencias exactas*.\n\n`;
+        } else if (origenVago) {
+          msg += `⚠️ El *origen* es muy amplio — necesito una *esquina o referencia*.\n\n`;
+        } else {
+          msg += `⚠️ El *destino* es muy amplio — necesito una *esquina o referencia*.\n\n`;
+        }
+        
+        const vago = origenVago ? detOrigen : detDestino;
+        msg += `🎤 Mandame otro audio diciendo la *esquina* o una referencia clara:\n` +
+          `   • "${vago.texto} y [otra calle]"\n` +
+          `   • "${vago.texto} esquina [calle]"\n` +
+          `   • "${vago.texto} al lado de [referencia conocida]"\n\n` +
+          `_O mandame los 📍 pines de las ubicaciones._`;
+        
+        await updateSession(phone, { ...session, step: "esperando_origen" });
+        await enviarMensaje(phone, msg);
+        return;
+      }
+      
+      // ─── CASO 3: Esquina conocida en memoria compartida ──────────────────
+      // Si la IA extrajo esquina con calle1+calle2, buscar en EsquinaMapeada antes de Google
+      async function resolverEsquinaCompartida(det) {
+        if (!det || det.tipo !== "esquina" || !det.calle1 || !det.calle2) return null;
+        const esquina = await buscarEsquinaMapeada(det.calle1, det.calle2, det.zona);
+        if (esquina && esquina.lat && esquina.lng) {
+          log.info(`[CROWDSOURCE] Esquina conocida: ${det.calle1} y ${det.calle2} → ${esquina.zona || "?"} (usos: ${esquina.usos})`);
+          // Incrementar contador
+          esquina.usos = (esquina.usos || 0) + 1;
+          esquina.ultimoUso = new Date();
+          esquina.save().catch(()=>{});
+          return { lat: esquina.lat, lng: esquina.lng, nombre: `${esquina.calle1} y ${esquina.calle2}${esquina.zona ? " ("+esquina.zona+")" : ""}` };
+        }
+        return null;
+      }
+      
+      const esquinaOrigen = await resolverEsquinaCompartida(detOrigen);
+      const esquinaDestino = await resolverEsquinaCompartida(detDestino);
+      if (esquinaOrigen) session._esquinaOrigen = esquinaOrigen;
+      if (esquinaDestino) session._esquinaDestino = esquinaDestino;
+      // (El flujo viejo seguirá usando ubicaciones.origen/destino como texto, geocodificará si no las teníamos)
+      
       // Ciudad del usuario para geocoding correcto
       const usuarioParaGeocode = await Usuario.findOne({ phone }).lean();
       const ciudadParaAudio = session.ciudadUsuario || usuarioParaGeocode?.ciudad || "Cochabamba";
@@ -467,7 +573,14 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
           await enviarMensaje(phone, `✅ *Origen:* ${nombreOrigen}\n\n🏁 Ahora envía el pin de tu *destino*.`);
         } else if (aprender) {
           const linkVerif = resultOrigen.inciertoLink ? `\n\n🗺️ Google lo encontró aquí: ${resultOrigen.inciertoLink}\nSi no es correcto, mandame el pin exacto.` : "";
-          await updateSession(phone, { ...session, step: "aprendiendo_origen_voz", referenciaVozOrigen: nombreOrigen });
+          await updateSession(phone, { 
+            ...session, 
+            step: "aprendiendo_origen_voz", 
+            referenciaVozOrigen: nombreOrigen,
+            _detOrigenCalle1: detOrigen?.calle1 || null,
+            _detOrigenCalle2: detOrigen?.calle2 || null,
+            _detOrigenZona: detOrigen?.zona || null,
+          });
           await enviarMensaje(phone,
             `🎤 Entendí: *"${nombreOrigen}"*${linkVerif}\n\n` +
             `📍 *ORIGEN — de dónde te recogemos*\n` +
@@ -673,6 +786,62 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
     // Si ambos (origen y destino) son desconocidos, los pide en secuencia.
     // ─────────────────────────────────────────────────────────────────────────
 
+      case "guardando_lugar_personal_origen":
+      case "guardando_lugar_personal_destino": {
+        // El usuario está mandando el pin de su casa o trabajo para guardarlo
+        const tipoLugar = session.lugarPersonalPendiente; // "casa" o "trabajo"
+        const esOrigen = session.step === "guardando_lugar_personal_origen";
+        
+        // Resolver dirección amigable
+        let nombreLugar = tipoLugar;
+        try { 
+          const dir = await obtenerDireccion(coords.lat, coords.lng); 
+          if (dir) nombreLugar = `${tipoLugar} (${dir})`;
+        } catch {}
+        
+        // Guardar en el perfil del usuario
+        await guardarLugarPersonal(phone, tipoLugar, coords.lat, coords.lng, nombreLugar);
+        log.info(`[LUGAR_PERSONAL] ${phone} guardó ${tipoLugar}: (${coords.lat}, ${coords.lng})`);
+        
+        // Asignar al viaje
+        if (esOrigen) {
+          await updateSession(phone, {
+            ...session,
+            origen: { lat: coords.lat, lng: coords.lng, nombre: nombreLugar },
+            step: session.destino?.lat ? "preguntando_opciones" : "esperando_destino",
+            lugarPersonalPendiente: null,
+          });
+          await enviarMensaje(phone, 
+            `✅ Guardé tu *${tipoLugar}* 🎉\n` +
+            `Ahora cuando digas "${tipoLugar === "casa" ? "salgo de casa" : "estoy en el trabajo"}" lo voy a saber al toque. 🚀\n\n` +
+            (session.destino?.lat 
+              ? `¡Listo! Calculando tu viaje...` 
+              : `🏁 Ahora envía el pin del destino o decime a dónde vas.`)
+          );
+        } else {
+          await updateSession(phone, {
+            ...session,
+            destino: { lat: coords.lat, lng: coords.lng, nombre: nombreLugar },
+            step: session.origen?.lat ? "preguntando_opciones" : "esperando_origen",
+            lugarPersonalPendiente: null,
+          });
+          await enviarMensaje(phone,
+            `✅ Guardé tu *${tipoLugar}* 🎉\n` +
+            `Ahora cuando digas "${tipoLugar === "casa" ? "llévame a casa" : "voy al trabajo"}" lo voy a saber al toque. 🚀\n\n` +
+            (session.origen?.lat
+              ? `¡Listo! Calculando tu viaje...`
+              : `📍 Ahora envía el pin de tu origen o decime de dónde te recogemos.`)
+          );
+        }
+        
+        // Si ya tenemos ambos puntos, continuar
+        const sFinal = await getSession(phone);
+        if (sFinal.origen?.lat && sFinal.destino?.lat) {
+          await preguntarOpcionesViaje(phone, sFinal);
+        }
+        return;
+      }
+      
     case "aprendiendo_origen_voz": {
       const refOrigen = session.referenciaVozOrigen || "tu origen";
       const tambienAprendeDestino = !!session.referenciaVozDestino && !session.destino?.lat;
@@ -695,6 +864,11 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
         if (session.referenciaVozOrigen) {
           await guardarReferenciaVoz(session.referenciaVozOrigen, origen.lat, origen.lng, origen.nombre || session.referenciaVozOrigen);
           log.info(`[APRENDIZAJE] Origen guardado: "${session.referenciaVozOrigen}" → (${origen.lat}, ${origen.lng})`);
+          // Si era una esquina (calle1+calle2 del detalle GPT), también guardarla en memoria compartida
+          if (session._detOrigenCalle1 && session._detOrigenCalle2) {
+            await guardarEsquina(session._detOrigenCalle1, session._detOrigenCalle2, origen.lat, origen.lng, { phone, zona: session._detOrigenZona });
+            log.info(`[CROWDSOURCE] Esquina compartida guardada: ${session._detOrigenCalle1} y ${session._detOrigenCalle2}`);
+          }
         }
 
         if (tambienAprendeDestino) {
@@ -757,6 +931,10 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
         if (session.referenciaVozDestino) {
           await guardarReferenciaVoz(session.referenciaVozDestino, destino.lat, destino.lng, destino.nombre || session.referenciaVozDestino);
           log.info(`[APRENDIZAJE] Destino guardado: "${session.referenciaVozDestino}" → (${destino.lat}, ${destino.lng})`);
+          if (session._detDestinoCalle1 && session._detDestinoCalle2) {
+            await guardarEsquina(session._detDestinoCalle1, session._detDestinoCalle2, destino.lat, destino.lng, { phone, zona: session._detDestinoZona });
+            log.info(`[CROWDSOURCE] Esquina compartida guardada: ${session._detDestinoCalle1} y ${session._detDestinoCalle2}`);
+          }
         }
 
         // Continuar al resumen del viaje (si ya tiene origen) o pedirlo
