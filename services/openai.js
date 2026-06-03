@@ -29,7 +29,7 @@ async function transcribirAudio(audioUrl) {
   return res.data.text;
 }
 
-async function extraerUbicaciones(texto) {
+async function extraerUbicacionesDetalle(texto) {
   try {
     const res = await axios.post(
       "https://api.openai.com/v1/chat/completions",
@@ -124,6 +124,23 @@ NUNCA origen y destino iguales.`,
     return { origen: null, destino: null };
   }
 }
+
+// ─── WRAPPER de compatibilidad ──────────────────────────────────────────────
+// El código viejo espera {origen: "texto", destino: "texto"}
+// El nuevo devuelve {origen: {tipo, texto, calle1, calle2, ...}, destino: {...}}
+// Esta función devuelve AMBOS formatos a la vez
+async function extraerUbicaciones(texto) {
+  const detalle = await extraerUbicacionesDetalle(texto);
+  return {
+    // Formato viejo (compatibilidad)
+    origen: detalle.origen?.texto || null,
+    destino: detalle.destino?.texto || null,
+    // Formato nuevo (con detalles)
+    origenDetalle: detalle.origen || null,
+    destinoDetalle: detalle.destino || null,
+  };
+}
+
 
 async function validarComprobantePago(imageBase64) {
   try {
