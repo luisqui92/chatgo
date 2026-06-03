@@ -109,6 +109,41 @@ async function procesarCalculoViaje(phone, session) {
   }
 }
 
+// ─── COMANDO "MIS LUGARES" ──────────────────────────────────────────────────
+// Detecta si el usuario escribió un comando relacionado con gestionar sus lugares
+function esComandoLugares(txt) {
+  if (!txt) return false;
+  const t = String(txt).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+  // Comandos exactos
+  const exactos = ["mis lugares", "lugares", "mis sitios", "lugares guardados", "guardar casa", "guardar trabajo", "mi casa", "mi trabajo"];
+  if (exactos.includes(t)) return true;
+  // O empieza con "guardar mi" / "borrar mi" / etc.
+  if (/^(guardar|borrar|eliminar|cambiar|editar)\s+(mi\s+)?(casa|trabajo|hogar|oficina)/.test(t)) return true;
+  return false;
+}
+
+async function mostrarMenuLugares(phone) {
+  const u = await Usuario.findOne({ phone }).lean();
+  const lf = u?.lugaresFrecuentes || {};
+  
+  let texto = "📌 *Mis lugares guardados*\n\n";
+  texto += `🏠 *Casa:* ${lf.casa?.nombre || "_no guardada_"}\n`;
+  texto += `💼 *Trabajo:* ${lf.trabajo?.nombre || "_no guardado_"}\n\n`;
+  texto += "Cuando los tengas guardados, podés decir por audio:\n";
+  texto += '• 🎤 _"llévame a casa"_\n';
+  texto += '• 🎤 _"salgo del trabajo"_\n\n';
+  texto += "¿Qué querés hacer?";
+  
+  const botones = [];
+  botones.push({ id: lf.casa?.lat ? "lugares_cambiar_casa" : "lugares_guardar_casa", title: lf.casa?.lat ? "🏠 Cambiar casa" : "🏠 Guardar casa" });
+  botones.push({ id: lf.trabajo?.lat ? "lugares_cambiar_trabajo" : "lugares_guardar_trabajo", title: lf.trabajo?.lat ? "💼 Cambiar trabajo" : "💼 Guardar trabajo" });
+  botones.push({ id: "lugares_volver", title: "↩️ Volver" });
+  
+  await deleteSession(phone); // limpiar cualquier flujo previo
+  await setSession(phone, { step: "gestionando_lugares" });
+  await enviarBotones(phone, texto, botones);
+}
+
 async function procesarMensajeUsuario(phone, mensaje, buttonId) {
   let usuario = await Usuario.findOne({ phone });
 
@@ -229,6 +264,13 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
   const textoUpper = texto.toUpperCase();
 
   // ─── CANCELACIÓN por palabra clave ──────────────────────────────────────
+  // ─── Comando: "mis lugares" / "casa" / "trabajo" ───────────────────────
+  // Detección por texto libre — el usuario quiere gestionar sus lugares guardados
+  if (texto && !buttonId && esComandoLugares(texto)) {
+    await mostrarMenuLugares(phone);
+    return;
+  }
+  
   if (texto && !buttonId && esIntentoCancelar(texto)) {
     // Estados con viaje activo → confirmar antes de cancelar
     const stepsViaje = ["esperando_chofer","chofer_en_camino","chofer_esperando_pasajero","sin_chofer","confirmado","esperando_confirmacion","en_curso"];
@@ -257,6 +299,34 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
   }
 
   // ─── Botones post-rating ─────────────────────────────────────────────────
+  // ─── Handlers de TIP post-viaje ─────────────────────────────────────────
+  if (buttonId === "tip_guardar_casa") {
+    await setSession(phone, { step: "guardando_lugar_personal_origen", lugarPersonalPendiente: "casa", desdeMenu: true });
+    await enviarMensaje(phone,
+      `🏠 Genial, vamos a guardar tu casa.\n\n` +
+      `Mandame el 📍 *pin de tu casa* ahora.\n` +
+      `(Si estás ahí ahora, mejor — más preciso)\n\n` +
+      `Usá el 📎 adjunto → Ubicación.`
+    );
+    return;
+  }
+  if (buttonId === "tip_guardar_trabajo") {
+    await setSession(phone, { step: "guardando_lugar_personal_origen", lugarPersonalPendiente: "trabajo", desdeMenu: true });
+    await enviarMensaje(phone,
+      `💼 Genial, vamos a guardar tu trabajo.\n\n` +
+      `Mandame el 📍 *pin de tu trabajo* ahora.\n\n` +
+      `Usá el 📎 adjunto → Ubicación.`
+    );
+    return;
+  }
+  if (buttonId === "tip_mas_tarde") {
+    await deleteSession(phone);
+    await enviarMensaje(phone,
+      `👍 Sin problema. Cuando quieras guardarlo, escribí _"mis lugares"_ 📌`
+    );
+    return;
+  }
+  
   if (buttonId === "pedir_otro_taxi") {
     await deleteSession(phone);
     // Redirigir al flujo normal de inicio
@@ -727,6 +797,27 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
 
   // ─── Switch de steps ──────────────────────────────────────────────────────
   switch (session.step) {
+    case "gestionando_lugares": {
+      if (buttonId === "lugares_guardar_casa" || buttonId === "lugares_cambiar_casa") {
+        await setSession(phone, { step: "guardando_lugar_personal_origen", lugarPersonalPendiente: "casa", desdeMenu: true });
+        await enviarMensaje(phone, `🏠 Mandame el 📍 *pin de tu casa*.\n\nUsá el 📎 adjunto → Ubicación.\n\nUna vez guardada, podrás decir _"llévame a casa"_ por audio 🎤`);
+        return;
+      }
+      if (buttonId === "lugares_guardar_trabajo" || buttonId === "lugares_cambiar_trabajo") {
+        await setSession(phone, { step: "guardando_lugar_personal_origen", lugarPersonalPendiente: "trabajo", desdeMenu: true });
+        await enviarMensaje(phone, `💼 Mandame el 📍 *pin de tu trabajo*.\n\nUsá el 📎 adjunto → Ubicación.\n\nUna vez guardado, podrás decir _"voy al trabajo"_ por audio 🎤`);
+        return;
+      }
+      if (buttonId === "lugares_volver") {
+        await deleteSession(phone);
+        await enviarMensaje(phone, "✅ Listo. Mandame tu 📍 ubicación de origen para pedir un taxi.");
+        return;
+      }
+      // Si manda texto u otra cosa, repetir menú
+      await mostrarMenuLugares(phone);
+      return;
+    }
+
     case "inicio": {
       // Entregar código a usuarios existentes que no tengan uno activo
       if (promoCodigosActiva()) {
@@ -754,14 +845,17 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
       const { botones, idsParaSession } = await construirBotonesHistorial(phone);
       if (botones.length > 0) {
         await updateSession(phone, { ...session, step: "eligiendo_historial", historial: idsParaSession });
-        await enviarBotones(phone, `👋 ¡Hola de nuevo!\n\nElige una opción o envíame tu *ubicación de origen* 📍`, botones);
+        await enviarBotones(phone, `👋 ¡Hola de nuevo!\n\nElige una opción o envíame tu *ubicación de origen* 📍\n\n💡 _Tip: escribí "mis lugares" para guardar tu casa o trabajo y pedir viajes más rápido._`, botones);
       } else {
         await updateSession(phone, { ...session, step: "esperando_origen" });
         await enviarMensaje(
           phone,
           "👋 ¡Hola! Bienvenido a *ChatGo*.\n\n" +
             "📍 Envía tu ubicación de origen usando el pin de WhatsApp.\n\n" +
-            "También puedes:\n• Enviar un 🎤 audio de voz diciendo a dónde quieres ir\n• Compartir un link de 🗺️ Google Maps"
+            "También puedes:\n" +
+            "• Enviar un 🎤 audio de voz diciendo a dónde quieres ir\n" +
+            "• Compartir un link de 🗺️ Google Maps\n" +
+            "• Escribir _\"mis lugares\"_ para guardar tu casa o trabajo 📌"
         );
       }
       break;
