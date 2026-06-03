@@ -241,17 +241,47 @@ async function registrarRating(userPhone, rating, viajeId) {
     }
   }
 
+  // Incrementar contador de viajes del usuario
+  const usuarioActualizado = await Usuario.findOneAndUpdate(
+    { phone: userPhone },
+    { $inc: { viajesTotal: 1 } },
+    { new: true }
+  );
+
   await deleteSession(userPhone);
 
+  // ─── TIP POST-VIAJE: invitar a guardar casa/trabajo ──────────────────────
+  // Se muestra cuando el usuario lleva 3 viajes y NO tiene casa NI trabajo guardados
+  const viajesTotal = usuarioActualizado?.viajesTotal || 0;
+  const lf = usuarioActualizado?.lugaresFrecuentes || {};
+  const sinCasaNiTrabajo = !lf.casa?.lat && !lf.trabajo?.lat;
+  // Tip en viaje 3, y como respaldo también en el 7 (por si se perdió el primero)
+  const mostrarTip = sinCasaNiTrabajo && (viajesTotal === 3 || viajesTotal === 7);
+
   if (rating >= 4) {
-    await enviarBotones(
-      userPhone,
-      `🙏 ¡Gracias por tu calificación!\n\n¿Necesitas otro taxi?`,
-      [
-        { id: "pedir_otro_taxi", title: "🚖 Pedir otro taxi" },
-        { id: "no_por_ahora", title: "👍 No por ahora" },
-      ]
-    );
+    if (mostrarTip) {
+      await enviarBotones(
+        userPhone,
+        `🙏 ¡Gracias por tu calificación!\n\n` +
+        `💡 *Tip ChatGo:*\n` +
+        `¿Sabías que podés guardar tu *casa* y *trabajo*?\n` +
+        `Después decí _"llévame a casa"_ 🎤 y te llevo directo sin escribir nada. 🚀`,
+        [
+          { id: "tip_guardar_casa", title: "🏠 Guardar mi casa" },
+          { id: "tip_guardar_trabajo", title: "💼 Guardar trabajo" },
+          { id: "tip_mas_tarde", title: "⏭️ Más tarde" },
+        ]
+      );
+    } else {
+      await enviarBotones(
+        userPhone,
+        `🙏 ¡Gracias por tu calificación!\n\n¿Necesitas otro taxi?`,
+        [
+          { id: "pedir_otro_taxi", title: "🚖 Pedir otro taxi" },
+          { id: "no_por_ahora", title: "👍 No por ahora" },
+        ]
+      );
+    }
   } else {
     await enviarBotones(
       userPhone,
