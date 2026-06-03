@@ -19,7 +19,7 @@ async function registrarEventoChofer(phone, tipo, datos = {}) {
     });
   } catch { }
 }
-async function calcularMultiplierSurge() {
+async async function calcularMultiplierSurge(lat, lng) {
   try {
     const libres = await Chofer.countDocuments({ estado: "libre" });
     const espera = await ListaEspera.countDocuments({});
@@ -31,7 +31,10 @@ async function calcularMultiplierSurge() {
     if ([17,18,19].includes(hora) && [1,2,3,4,5].includes(dia)) { m = Math.max(m, 1.15); motivos.push("hora_pico"); }
     if (dia === 5 && [17,18,19].includes(hora)) { m = Math.max(m, 1.25); motivos.push("viernes_tarde"); }
     return { multiplier: Math.min(1.5, m), motivos };
-  } catch { return { multiplier: 1.0, motivos: [] }; }
+  } catch (e) { 
+    log.error("[SURGE]", e.message);
+    return { multiplier: 1.0, motivos: [] }; 
+  }
 }
 function aplicarSurge(precioBase, multiplier) {
   if (!multiplier || multiplier <= 1) return precioBase;
