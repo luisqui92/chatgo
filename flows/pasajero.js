@@ -113,8 +113,11 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
   let usuario = await Usuario.findOne({ phone });
 
   // Términos y condiciones
-  if (!usuario || !usuario.aceptoTerminos) {
-    let session = (await getSession(phone)) || { step: "usuario_terminos" };
+  // Bloque de onboarding (términos + nombre): entrar si NO terminó el setup
+  const sesionPrevia = await getSession(phone);
+  const enFlujoNombre = sesionPrevia && sesionPrevia.step === "esperando_nombre_usuario";
+  if (!usuario || !usuario.aceptoTerminos || enFlujoNombre) {
+    let session = sesionPrevia || { step: "usuario_terminos" };
 
     if (session.step === "usuario_terminos" && !buttonId) {
       await enviarBotones(
