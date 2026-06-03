@@ -103,8 +103,15 @@ async function procesarCalculoViaje(phone, session) {
       ]
     );
   } catch (e) {
-    log.error("[CALCULO]", e.message);
-    await enviarMensaje(phone, "❌ Error calculando. Intenta de nuevo.");
+    log.error("[CALCULO_PRECIO]", e.message, e.stack);
+    // Notificar al admin para investigar
+    try {
+      await enviarMensaje(
+        CONFIG.ADMIN_PHONE,
+        `🐛 *Error calculando precio*\n\nPasajero: +${phone}\nOrigen: ${session.origen?.nombre || "?"}\nDestino: ${session.destino?.nombre || "?"}\nError: ${e.message}`
+      );
+    } catch {}
+    await enviarMensaje(phone, "❌ Hubo un problema calculando el precio. Ya estamos viendo qué pasó — intenta de nuevo en un momento.");
     await updateSession(phone, { ...session, step: "esperando_origen" });
   }
 }
