@@ -270,4 +270,167 @@ function escapeHtml(unsafe) {
 }
 
 
-module.exports = { fechaStrBolivia, horaStrBolivia, formatearFechaPromo, promoCodigosActiva, enPromoGratis, choferPagoAlDia, generarCodigoUnico, crearCodigoPromo, validarCodigoPromo, consumirCodigoPromo, mensajeCodigoEntregado, enviarCodigoDescuento, validarPlaca, normalizarPlaca, acortarParaBoton, esIntentoCancelar, esPedidoAyuda, esPlusCode, detectarIncompatibilidadMoto, obtenerUltimoViaje, obtenerDestinosFrecuentes, guardarRutaFrecuente, construirBotonesHistorial, escapeHtml };
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MÓDULO DE VOZ — Helpers para esquinas y lugares personales
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Normaliza nombre de calle: quita tildes, acentos, "av.", "calle", etc.
+function normalizarNombreCalle(s) {
+  if (!s) return "";
+  return String(s)
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "") // quitar tildes
+    .replace(/[^a-z0-9 ]/g, "")          // quitar puntuación
+    .replace(/\b(av|avenida|calle|c|jr|jirón|jiron|pasaje|psje)\b\.?/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// Genera llave única de una esquina (las 2 calles ordenadas alfabéticamente)
+// Esto hace que "Ayacucho y Sucre" === "Sucre y Ayacucho"
+function llaveEsquina(calle1, calle2, zona) {
+  const c1 = normalizarNombreCalle(calle1);
+  const c2 = normalizarNombreCalle(calle2);
+  if (!c1 || !c2) return null;
+  const [a, b] = [c1, c2].sort();
+  const z = zona ? normalizarNombreCalle(zona) : "";
+  return z ? `${a}|${b}|${z}` : `${a}|${b}`;
+}
+
+// Buscar una esquina ya mapeada en la BD
+async function buscarEsquinaMapeada(calle1, calle2, zona = null) {
+  try {
+    const { EsquinaMapeada } = require("../db/models");
+    // Primero intentar con zona (si fue proporcionada)
+    if (zona) {
+      const conZona = await EsquinaMapeada.findOne({ llave: llaveEsquina(calle1, calle2, zona) });
+      if (conZona) return conZona;
+    }
+    // Buscar sin zona (cualquier zona)
+    const sinZona = await EsquinaMapeada.findOne({ llave: llaveEsquina(calle1, calle2, null) });
+    return sinZona;
+  } catch (e) { return null; }
+}
+
+// Guardar una esquina nueva en memoria compartida
+async function guardarEsquina(calle1, calle2, lat, lng, opciones = {}) {
+  try {
+    const { EsquinaMapeada } = require("../db/models");
+    const llave = llaveEsquina(calle1, calle2, opciones.zona);
+    if (!llave) return null;
+    
+    const existente = await EsquinaMapeada.findOne({ llave });
+    if (existente) {
+      // Ya existe — solo aumentar contador
+      existente.usos = (existente.usos || 0) + 1;
+      existente.ultimoUso = new Date();
+      await existente.save();
+      return existente;
+    }
+    
+    return await EsquinaMapeada.create({
+      llave,
+      calle1: calle1.trim(),
+      calle2: calle2.trim(),
+      zona: opciones.zona || null,
+      ciudad: opciones.ciudad || "Cochabamba",
+      lat, lng,
+      usos: 1,
+      primerUsuario: opciones.phone || null,
+      ultimoUso: new Date(),
+    });
+  } catch (e) { return null; }
+}
+
+// Obtener el lugar personal del usuario (casa/trabajo)
+async function obtenerLugarPersonal(phone, tipo) {
+  try {
+    const { Usuario } = require("../db/models");
+    const u = await Usuario.findOne({ phone }).lean();
+    if (!u || !u.lugaresFrecuentes) return null;
+    if (tipo === "casa") return u.lugaresFrecuentes.casa || null;
+    if (tipo === "trabajo") return u.lugaresFrecuentes.trabajo || null;
+    return null;
+  } catch (e) { return null; }
+}
+
+// Guardar lugar personal del usuario
+async function guardarLugarPersonal(phone, tipo, lat, lng, nombre) {
+  try {
+    const { Usuario } = require("../db/models");
+    const campo = `lugaresFrecuentes.${tipo}`;
+    await Usuario.findOneAndUpdate(
+      { phone },
+      { $set: { [campo]: { lat, lng, nombre } } },
+      { upsert: false }
+    );
+    return true;
+  } catch (e) { return false; }
+}
+
+// Decide si una referencia necesita más detalle
+// Devuelve { vaga: bool, sugerencias: [...] } para guiar al usuario
+function evaluarReferencia(detalle) {
+  if (!detalle) return { vaga: true, motivo: "sin_datos" };
+  
+  if (detalle.tipo === "esquina") return { vaga: false };
+  if (detalle.tipo === "personal") return { vaga: false };
+  
+  if (detalle.tipo === "lugar") {
+    // Lugares con nombre propio bien específicos
+    const lugaresUnicos = [
+      "aeropuerto", "wilstermann",
+      "terminal de buses", "terminal",
+      "hospital viedma", "hospital univalle",
+      "cine center", "multicine",
+      "mall las americas", "mall plaza",
+    ];
+    const tx = normalizarNombreCalle(detalle.texto || "");
+    const esUnico = lugaresUnicos.some(l => tx.includes(normalizarNombreCalle(l)));
+    if (esUnico) return { vaga: false };
+    
+    // Lugares grandes (UMSS, Estadio, etc.) → vagos, pedir referencia
+    const lugaresGrandes = ["umss", "ucb", "upb", "estadio", "capriles", "mercado", "cancha", "plaza colon", "plaza recoleta"];
+    const esGrande = lugaresGrandes.some(l => tx.includes(normalizarNombreCalle(l)));
+    if (esGrande) return { vaga: true, motivo: "lugar_grande", texto: detalle.texto };
+  }
+  
+  if (detalle.tipo === "vago") return { vaga: true, motivo: "zona_amplia", texto: detalle.texto };
+  
+  return { vaga: false };
+}
+
+// Genera mensaje pidiendo más referencia según el caso
+function mensajePidiendoReferencia(detalle, evaluacion, esOrigen = true) {
+  const tipoLabel = esOrigen ? "📍 *ORIGEN — de dónde te recogemos*" : "🏁 *DESTINO — a dónde vas*";
+  const textoOriginal = detalle.texto || evaluacion.texto || "ese lugar";
+  
+  if (evaluacion.motivo === "zona_amplia") {
+    return `Te entendí: *${textoOriginal}* 🎤\n\n` +
+      `Esa zona es grande — necesito una *esquina* o *referencia exacta* para que el chofer te encuentre rápido.\n\n` +
+      `${tipoLabel}\n` +
+      `🎤 Mandame otro audio con la esquina, por ejemplo:\n` +
+      `   • "${textoOriginal} y Av. Heroínas"\n` +
+      `   • "${textoOriginal} esquina Pando"\n` +
+      `   • "${textoOriginal} al lado de [referencia]"\n\n` +
+      `_O si preferís, mandame el 📍 pin de la ubicación exacta._`;
+  }
+  
+  if (evaluacion.motivo === "lugar_grande") {
+    return `Te entendí: *${textoOriginal}* 🎤\n\n` +
+      `Ese lugar es grande y tiene varias entradas — ¿cuál puerta o zona?\n\n` +
+      `${tipoLabel}\n` +
+      `🎤 Mandame otro audio con más detalle, por ejemplo:\n` +
+      `   • "${textoOriginal} puerta principal"\n` +
+      `   • "${textoOriginal} esquina norte"\n` +
+      `   • "${textoOriginal} frente a [referencia]"\n\n` +
+      `_O mandame el 📍 pin de la ubicación exacta._`;
+  }
+  
+  return `Te entendí: *${textoOriginal}* 🎤\n\nMandame más referencias o el 📍 pin exacto.`;
+}
+
+
+module.exports = { fechaStrBolivia, horaStrBolivia, formatearFechaPromo, promoCodigosActiva, enPromoGratis, choferPagoAlDia, generarCodigoUnico, crearCodigoPromo, validarCodigoPromo, consumirCodigoPromo, mensajeCodigoEntregado, enviarCodigoDescuento, validarPlaca, normalizarPlaca, acortarParaBoton, esIntentoCancelar, esPedidoAyuda, esPlusCode, detectarIncompatibilidadMoto, obtenerUltimoViaje, obtenerDestinosFrecuentes, guardarRutaFrecuente, construirBotonesHistorial, escapeHtml, normalizarNombreCalle, llaveEsquina, buscarEsquinaMapeada, guardarEsquina, obtenerLugarPersonal, guardarLugarPersonal, evaluarReferencia, mensajePidiendoReferencia };
