@@ -19,7 +19,7 @@ async function registrarEventoChofer(phone, tipo, datos = {}) {
     });
   } catch { }
 }
-async async function calcularMultiplierSurge(lat, lng) {
+async function calcularMultiplierSurge(lat, lng) {
   try {
     const libres = await Chofer.countDocuments({ estado: "libre" });
     const espera = await ListaEspera.countDocuments({});
