@@ -25,6 +25,20 @@ const usuarioSchema = new mongoose.Schema(
         contador: { type: Number, default: 1 },
       },
     ],
+    // Lugares personales guardados (casa, trabajo, etc.)
+    lugaresFrecuentes: {
+      casa: { lat: Number, lng: Number, nombre: String },
+      trabajo: { lat: Number, lng: Number, nombre: String },
+      // Otros lugares personalizados (mama, gym, etc.)
+      otros: [
+        {
+          alias: String, // "mamá", "gimnasio", "iglesia"
+          lat: Number,
+          lng: Number,
+          nombre: String,
+        },
+      ],
+    },
   },
   { timestamps: true }
 );
@@ -246,4 +260,25 @@ viajeDemoSchema.index({ diaId: 1, estado: 1 });
 const ViajeDemo = mongoose.model("ViajeDemo", viajeDemoSchema);
 
 
-module.exports = { Usuario, Chofer, Viaje, SessionState, ListaEspera, RateLimit, CodigoPromo, LocationReference, Demanda, EventoChofer, AlertaSeg, Surge, ViajeDemo };
+
+// ─── ESQUINAS MAPEADAS (memoria compartida — crowdsourcing) ─────────────────
+// Cuando un usuario mapea una esquina como "Ayacucho y Sucre", se guarda acá
+// para que cualquier otro usuario que la mencione la encuentre sin pedir pin
+const esquinaMapeadaSchema = new mongoose.Schema({
+  // Llave normalizada: dos nombres de calles ordenados alfabéticamente, sin tildes, lowercase
+  // Ej: "Ayacucho y Sucre" → "ayacucho|sucre"
+  llave: { type: String, unique: true, index: true, required: true },
+  calle1: String,
+  calle2: String,
+  zona: String, // "Centro Cochabamba", "Sacaba", "Quillacollo", etc.
+  ciudad: { type: String, default: "Cochabamba" },
+  lat: Number,
+  lng: Number,
+  usos: { type: Number, default: 1 }, // cuántas veces se usó esta esquina
+  primerUsuario: String,
+  ultimoUso: { type: Date, default: Date.now },
+}, { timestamps: true });
+const EsquinaMapeada = mongoose.model("EsquinaMapeada", esquinaMapeadaSchema);
+
+
+module.exports = { Usuario, Chofer, Viaje, SessionState, ListaEspera, RateLimit, CodigoPromo, LocationReference, Demanda, EventoChofer, AlertaSeg, Surge, ViajeDemo, EsquinaMapeada };
