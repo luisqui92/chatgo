@@ -433,4 +433,25 @@ function mensajePidiendoReferencia(detalle, evaluacion, esOrigen = true) {
 }
 
 
-module.exports = { fechaStrBolivia, horaStrBolivia, formatearFechaPromo, promoCodigosActiva, enPromoGratis, choferPagoAlDia, generarCodigoUnico, crearCodigoPromo, validarCodigoPromo, consumirCodigoPromo, mensajeCodigoEntregado, enviarCodigoDescuento, validarPlaca, normalizarPlaca, acortarParaBoton, esIntentoCancelar, esPedidoAyuda, esPlusCode, detectarIncompatibilidadMoto, obtenerUltimoViaje, obtenerDestinosFrecuentes, guardarRutaFrecuente, construirBotonesHistorial, escapeHtml, normalizarNombreCalle, llaveEsquina, buscarEsquinaMapeada, guardarEsquina, obtenerLugarPersonal, guardarLugarPersonal, evaluarReferencia, mensajePidiendoReferencia };
+
+// ─── CÁLCULO DE PRECIO POR TIPO DE VEHÍCULO ─────────────────────────────────
+// Tarifas reales Cochabamba 2026:
+//  - Auto: Bs 7 base + Bs 3.5 por km (mínimo Bs 8)
+//  - Moto: Bs 5 base + Bs 2.5 por km (mínimo Bs 6)
+function calcularPrecio(km, tipoVehiculo) {
+  const tarifas = {
+    auto: { base: 7, porKm: 3.5, minimo: 8 },
+    moto: { base: 5, porKm: 2.5, minimo: 6 },
+  };
+  const t = tarifas[tipoVehiculo] || tarifas.auto;
+  const calculado = t.base + (km * t.porKm);
+  const total = Math.max(Math.round(calculado), t.minimo);
+  return {
+    total,
+    precioPorKm: t.porKm,
+    base: t.base,
+  };
+}
+
+
+module.exports = { fechaStrBolivia, horaStrBolivia, formatearFechaPromo, promoCodigosActiva, enPromoGratis, choferPagoAlDia, generarCodigoUnico, crearCodigoPromo, validarCodigoPromo, consumirCodigoPromo, mensajeCodigoEntregado, enviarCodigoDescuento, validarPlaca, normalizarPlaca, acortarParaBoton, esIntentoCancelar, esPedidoAyuda, esPlusCode, detectarIncompatibilidadMoto, obtenerUltimoViaje, obtenerDestinosFrecuentes, guardarRutaFrecuente, construirBotonesHistorial, escapeHtml, normalizarNombreCalle, llaveEsquina, buscarEsquinaMapeada, guardarEsquina, obtenerLugarPersonal, guardarLugarPersonal, evaluarReferencia, mensajePidiendoReferencia, calcularPrecio };
