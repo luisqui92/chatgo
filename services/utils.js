@@ -300,18 +300,64 @@ function llaveEsquina(calle1, calle2, zona) {
 }
 
 // Buscar una esquina ya mapeada en la BD
+// Retorna: { esquina, requiereConfirmacion } o null si no existe
 async function buscarEsquinaMapeada(calle1, calle2, zona = null) {
   try {
     const { EsquinaMapeada } = require("../db/models");
-    // Primero intentar con zona (si fue proporcionada)
+    let esquina = null;
+    
+    // Si el usuario especificó zona, buscar exacta primero
     if (zona) {
-      const conZona = await EsquinaMapeada.findOne({ llave: llaveEsquina(calle1, calle2, zona) });
-      if (conZona) return conZona;
+      esquina = await EsquinaMapeada.findOne({ llave: llaveEsquina(calle1, calle2, zona) });
+      if (esquina) return { esquina, requiereConfirmacion: false };
     }
-    // Buscar sin zona (cualquier zona)
-    const sinZona = await EsquinaMapeada.findOne({ llave: llaveEsquina(calle1, calle2, null) });
-    return sinZona;
-  } catch (e) { return null; }
+    
+    // Buscar sin zona (todas las que tengan esa combinación)
+    const candidatas = await EsquinaMapeada.find({ 
+      llave: { $regex: `^${llaveEsquina(calle1, calle2, null)}(\\||$)` }
+    }).sort({ usos: -1 }).limit(5);
+    
+    if (candidatas.length === 0) return null;
+    
+    // PROTECCIÓN 1: Si hay MÚLTIPLES esquinas con mismas calles pero diferente zona
+    // (ej: "Ayacucho y Sucre" en Centro Y en Sacaba) — devolver con bandera de confirmación
+    if (candidatas.length > 1) {
+      return { esquina: candidatas[0], requiereConfirmacion: true, alternativas: candidatas };
+    }
+    
+    // PROTECCIÓN 2: Si la esquina tiene MUY POCOS usos (1-2), pedir confirmación
+    // porque puede haber sido mapeada mal por el primer usuario
+    const e = candidatas[0];
+    if ((e.usos || 0) < 3) {
+      return { esquina: e, requiereConfirmacion: true };
+    }
+    
+    // Esquina única y con suficientes usos → confiable
+    return { esquina: e, requiereConfirmacion: false };
+  } catch (e) { 
+    return null; 
+  }
+}
+
+// Validación silenciosa: comparar coords guardadas contra Google
+// Devuelve true si la esquina parece confiable, false si hay discrepancia
+async function validarEsquinaConGoogle(esquina, calle1, calle2) {
+  try {
+    const { geocodificarConMemoria } = require("./google");
+    const consulta = `${calle1} y ${calle2}, Cochabamba, Bolivia`;
+    const resGoogle = await geocodificarConMemoria(consulta);
+    if (!resGoogle || !resGoogle.lat) return true; // si Google falla, confiar en lo guardado
+    
+    // Calcular distancia entre coords guardadas y Google
+    const dx = (esquina.lat - resGoogle.lat) * 111;
+    const dy = (esquina.lng - resGoogle.lng) * 111 * Math.cos(esquina.lat * Math.PI / 180);
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    
+    // Si están a menos de 2 km, son la misma esquina (margen de error normal)
+    return dist < 2;
+  } catch (e) {
+    return true; // en error, confiar
+  }
 }
 
 // Guardar una esquina nueva en memoria compartida
@@ -454,4 +500,4 @@ function calcularPrecio(km, tipoVehiculo) {
 }
 
 
-module.exports = { fechaStrBolivia, horaStrBolivia, formatearFechaPromo, promoCodigosActiva, enPromoGratis, choferPagoAlDia, generarCodigoUnico, crearCodigoPromo, validarCodigoPromo, consumirCodigoPromo, mensajeCodigoEntregado, enviarCodigoDescuento, validarPlaca, normalizarPlaca, acortarParaBoton, esIntentoCancelar, esPedidoAyuda, esPlusCode, detectarIncompatibilidadMoto, obtenerUltimoViaje, obtenerDestinosFrecuentes, guardarRutaFrecuente, construirBotonesHistorial, escapeHtml, normalizarNombreCalle, llaveEsquina, buscarEsquinaMapeada, guardarEsquina, obtenerLugarPersonal, guardarLugarPersonal, evaluarReferencia, mensajePidiendoReferencia, calcularPrecio };
+module.exports = { fechaStrBolivia, horaStrBolivia, formatearFechaPromo, promoCodigosActiva, enPromoGratis, choferPagoAlDia, generarCodigoUnico, crearCodigoPromo, validarCodigoPromo, consumirCodigoPromo, mensajeCodigoEntregado, enviarCodigoDescuento, validarPlaca, normalizarPlaca, acortarParaBoton, esIntentoCancelar, esPedidoAyuda, esPlusCode, detectarIncompatibilidadMoto, obtenerUltimoViaje, obtenerDestinosFrecuentes, guardarRutaFrecuente, construirBotonesHistorial, escapeHtml, normalizarNombreCalle, llaveEsquina, buscarEsquinaMapeada, guardarEsquina, obtenerLugarPersonal, guardarLugarPersonal, evaluarReferencia, mensajePidiendoReferencia, calcularPrecio, validarEsquinaConGoogle };
