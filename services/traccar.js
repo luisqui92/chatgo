@@ -222,6 +222,15 @@ setInterval(() => {
   }
 }, 5 * 60 * 1000);
 
+function getAppUrl() {
+  return process.env.APP_URL || "https://chatgo-production.up.railway.app";
+}
+
+function generarLinkRastreoPropio(viajeId) {
+  const apiUrl = encodeURIComponent(`${getAppUrl()}/track/${viajeId}/pos`);
+  return `https://chatgo.ia.bo/rastreo.html?id=${viajeId}&api=${apiUrl}`;
+}
+
 module.exports = {
   obtenerUbicacionChofer,
   buscarChoferDisponibleTraccar,
@@ -229,4 +238,5 @@ module.exports = {
   liberarReservaChoferTraccar,
   setFrecuenciaReporte,
   isTraccarConfigured: isConfigured,
+  generarLinkRastreoPropio,
 };
