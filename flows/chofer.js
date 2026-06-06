@@ -7,7 +7,7 @@ const { CONFIG, log } = require("../config");
 const { Usuario, Chofer, Viaje, LocationReference } = require("../db/models");
 const { getSession, setSession, updateSession, deleteSession } = require("../services/session");
 const { enviarMensaje, enviarBotones, enviarImagen, reenviarImagenPorId, relayMensajeChat, descargarImagenMeta } = require("../services/whatsapp");
-const { obtenerUbicacionChofer, generarLinkRastreoPropio, liberarReservaChofer } = require("../services/wialon");
+const { obtenerUbicacionChofer, liberarReservaChoferTraccar } = require("../services/traccar");
 const { normalizarReferencia, guardarReferenciaVoz, calcularDistancia, calcularDistanciaConParadas } = require("../services/google");
 const { validarComprobantePago } = require("../services/openai");
 const { registrarEventoChofer, calcularMultiplierSurge, aplicarSurge, textoSurge, registrarViajeEnDemanda, actualizarUltimoViaje } = require("../ai");
@@ -39,7 +39,7 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
 
   if (buttonId) {
     if (buttonId === "aceptar_viaje") {
-      const viaje = await Viaje.findOne({ choferWialonId: chofer.wialonId, estado: "pendiente" });
+      const viaje = await Viaje.findOne({ choferTraccarId: chofer.traccarId, estado: "pendiente" });
       if (!viaje) return enviarMensaje(phone, "No tienes viajes pendientes (quizás expiró).");
 
       const userPhone = viaje.usuarioPhone;
@@ -86,17 +86,17 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
     }
 
     if (buttonId === "rechazar_viaje") {
-      const viaje = await Viaje.findOne({ choferWialonId: chofer.wialonId, estado: "pendiente" });
+      const viaje = await Viaje.findOne({ choferTraccarId: chofer.traccarId, estado: "pendiente" });
       if (viaje) {
         await Viaje.findByIdAndUpdate(viaje._id, { estado: "rechazado_chofer", cancelacionMotivo: "rechazo_chofer" });
-        await liberarReservaChofer(chofer.wialonId);
+        await liberarReservaChoferTraccar(chofer.traccarId);
         // IA: registrar rechazo
         registrarEventoChofer(chofer.phone, "rechazado", { viajeId: String(viaje._id) }).catch(() => {});
         await enviarMensaje(phone, "Ok, buscaremos otro chofer para ese pasajero.");
         const session = await getSession(viaje.usuarioPhone);
         if (session) {
           await enviarMensaje(viaje.usuarioPhone, "⏳ Buscando otro chofer...");
-          await asignarChofer(viaje.usuarioPhone, session, [chofer.wialonId]);
+          await asignarChofer(viaje.usuarioPhone, session, [chofer.traccarId]);
         }
       }
       return;
@@ -106,7 +106,7 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
     // para evitar conflicto con la detección GPS automática
     if (buttonId === "llegue_al_punto") {
       const viaje = await Viaje.findOne({
-        choferWialonId: chofer.wialonId,
+        choferTraccarId: chofer.traccarId,
         estado: { $in: ["en_camino", "esperando_pasajero"] },
       });
       if (!viaje) return enviarMensaje(phone, "No tienes viajes activos.");
@@ -149,7 +149,7 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
     }
 
     if (buttonId === "iniciar_viaje") {
-      const viaje = await Viaje.findOne({ choferWialonId: chofer.wialonId, estado: "esperando_pasajero" });
+      const viaje = await Viaje.findOne({ choferTraccarId: chofer.traccarId, estado: "esperando_pasajero" });
       if (!viaje) return enviarMensaje(phone, "No tienes viajes activos.");
       await Viaje.findByIdAndUpdate(viaje._id, { estado: "en_curso" });
       const session = await getSession(viaje.usuarioPhone);
@@ -169,7 +169,7 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
 
     if (buttonId === "cancelar_viaje_chofer") {
       const viaje = await Viaje.findOne({
-        choferWialonId: chofer.wialonId,
+        choferTraccarId: chofer.traccarId,
         estado: { $in: ["en_camino", "esperando_pasajero"] },
       });
       if (viaje) {
@@ -189,7 +189,7 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
     if (buttonId === "terminar_viaje") {
       // Acepta en_curso o esperando_pasajero (edge case: pasajero no subió pero chofer quiere terminar)
       const viaje = await Viaje.findOne({
-        choferWialonId: chofer.wialonId,
+        choferTraccarId: chofer.traccarId,
         estado: { $in: ["en_curso", "esperando_pasajero"] },
       });
       if (!viaje) {
@@ -286,12 +286,12 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
         return;
       }
       try {
-        const pos = await obtenerUbicacionChofer(chofer.wialonId);
+        const pos = await obtenerUbicacionChofer(chofer.traccarId);
         if (pos.minutos > 5) {
           await enviarMensaje(
             phone,
             `⚠️ Tu GPS no está enviando señal en este momento (última señal hace ${pos.minutos} min).\n\n` +
-              `Para recibir viajes necesitas tener *WiaTag abierto y conectado*.\n\n` +
+              `Para recibir viajes necesitas tener *ChatgoTrack abierto y activo*.\n\n` +
               `Revisa:\n✅ WiaTag esté abierto (puede estar en segundo plano)\n✅ Permiso de ubicación *"Permitir todo el tiempo"*\n✅ Internet/datos activos\n✅ Optimización de batería DESACTIVADA para WiaTag\n\n` +
               `Reintenta en 1 minuto presionando 🟢 Libre otra vez.`
           );
@@ -300,7 +300,7 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
       } catch (e) {
         await enviarMensaje(
           phone,
-          `⚠️ No pude detectar tu GPS (${e.message}).\n\nAsegúrate que *WiaTag esté abierto y logueado* con tus credenciales.\n\nSi el problema persiste, contacta al admin: +591 62741818`
+          `⚠️ No pude detectar tu GPS (${e.message}).\n\nAsegúrate que *ChatgoTrack esté activo* con tu identificador correcto.\n\nSi el problema persiste, contacta al admin: +591 62741818`
         );
         return;
       }
@@ -385,7 +385,7 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
 
   // Chat con pasajero durante viaje
   const viajeActivo = await Viaje.findOne({
-    choferWialonId: chofer.wialonId,
+    choferTraccarId: chofer.traccarId,
     estado: { $in: ["en_camino","esperando_pasajero","en_curso"] },
   });
   if (viajeActivo && mensaje && mensaje.type) {
