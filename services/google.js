@@ -329,10 +329,38 @@ async function geocodificarConMemoria(referencia, ciudadUsuario = "Cochabamba") 
     return null;
   }
 
-  // 4. Si Google devolvió una calle genérica (route) sin número exacto,
-  //    NO guardar y retornar con flag de incertidumbre para pedir confirmación
+  // 4. Validar confianza del resultado
   const tipos = coords._tipos || [];
-  const esRutaGenerica = tipos.includes("route") && !tipos.includes("intersection") && !tipos.includes("point_of_interest") && !tipos.includes("establishment");
+
+  // Tipos confiables: intersecciones, calles con número, plus codes
+  const esConfiable =
+    tipos.includes("intersection") ||
+    tipos.includes("street_address") ||
+    tipos.includes("premise") ||
+    tipos.includes("subpremise");
+
+  // Tipos aceptables: puntos de interés conocidos, establecimientos nombrados
+  const esAceptable =
+    tipos.includes("point_of_interest") ||
+    tipos.includes("establishment") ||
+    tipos.includes("transit_station") ||
+    tipos.includes("airport") ||
+    tipos.includes("university") ||
+    tipos.includes("hospital") ||
+    tipos.includes("park");
+
+  // Tipos sospechosos: establecimientos comerciales genéricos sin que el usuario los nombrara
+  const esSospechoso =
+    !esConfiable &&
+    tipos.some(t => ["hair_care","health","food","store","lodging","finance","car_repair"].includes(t));
+
+  if (esSospechoso) {
+    log.warn(`[GEOCOD] "${referencia}" → resultado sospechoso (${tipos.join(",")}) — descartado`);
+    return null;
+  }
+
+  // Ruta genérica sin intersección
+  const esRutaGenerica = tipos.includes("route") && !tipos.includes("intersection") && !esConfiable;
   if (esRutaGenerica) {
     log.warn(`[GEOCOD] "${referencia}" → ruta genérica (${tipos.join(",")}) — requiere confirmación`);
     return { ...coords, _incierto: true };
