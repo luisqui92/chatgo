@@ -71,7 +71,6 @@ const allDeps = {
   enviarMensaje, enviarBotones, enviarImagen, reenviarImagenPorId, reenviarAudioPorId,
   reenviarVideoPorId, reenviarUbicacion, reenviarDocumentoPorId, relayMensajeChat,
   descargarImagenMeta, obtenerUrlMedia, verificarFirmaMeta,
-  wialonLogin, wialonInvalidateCache, obtenerUbicacionChofer, getAppUrl,
   calcularPrecio, distanciaEntrePuntos, evaluarPrecisionReferencia, extraerCoordsDeUrlGmaps,
   resolverUrlCorta, detectarYExtrarCoordsMaps, normalizarReferencia, generarTrigramas, similitudTexto,
   buscarReferenciaEnMemoria, guardarReferenciaVoz, dentroDeCocha, geocodificarConMemoria,
