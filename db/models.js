@@ -47,6 +47,7 @@ const choferSchema = new mongoose.Schema(
   {
     phone: { type: String, unique: true, index: true },
     wialonId: { type: String, unique: true, sparse: true, index: true },
+    traccarId: { type: String, unique: true, sparse: true, index: true },
     placa: String,
     nombre: String,
     tipoVehiculo: { type: String, enum: ["auto", "moto"], default: "auto", index: true },
@@ -75,6 +76,7 @@ const viajeSchema = new mongoose.Schema(
     usuarioPhone: { type: String, index: true },
     choferPhone: { type: String, index: true },
     choferWialonId: { type: String, index: true },
+    choferTraccarId: { type: String, index: true },
     choferNombre: String,
     choferPlaca: String,
     origen: { lat: Number, lng: Number, nombre: String },
