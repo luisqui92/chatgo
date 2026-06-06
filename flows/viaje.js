@@ -5,7 +5,7 @@ const { CONFIG, log } = require("../config");
 const { Usuario, Chofer, Viaje, SessionState, ListaEspera, CodigoPromo } = require("../db/models");
 const { getSession, updateSession, deleteSession, addListaEspera, removeListaEspera, sessionCache } = require("../services/session");
 const { enviarMensaje, enviarBotones } = require("../services/whatsapp");
-const { obtenerUbicacionChofer, buscarChoferDisponible, reservarChofer, liberarReservaChofer } = require("../services/wialon");
+const { buscarChoferDisponibleTraccar, reservarChoferTraccar, liberarReservaChoferTraccar } = require("../services/traccar");
 const { distanciaEntrePuntos, generarLinkRutaConParadas } = require("../services/google");
 const { enviarAlertasChoferes, monitorearViajeEnCurso, procesarReactivaciones } = require("../ai");
 const { choferPagoAlDia, consumirCodigoPromo, enPromoGratis, fechaStrBolivia } = require("../services/utils");
@@ -18,7 +18,7 @@ const { choferPagoAlDia, consumirCodigoPromo, enPromoGratis, fechaStrBolivia } =
 // ASIGNAR CHOFER — FIX BUG#1 (race condition promo) + FIX BUG#7 (recursión)
 // ═══════════════════════════════════════════════════════════════════════════
 
-async function asignarChofer(userPhone, session, excludeWialonIds = [], intento = 0) {
+async function asignarChofer(userPhone, session, excludeTraccarIds = [], intento = 0) {
   // Validar que origen y destino no sean el mismo punto
   if (session?.ubicaciones?.origen && session?.ubicaciones?.destino) {
     const o = session.ubicaciones.origen;
@@ -35,7 +35,6 @@ async function asignarChofer(userPhone, session, excludeWialonIds = [], intento 
     log.warn(`[ASIGNAR] Máximo de reintentos alcanzado para ${userPhone}`);
     await updateSession(userPhone, { ...session, step: "sin_chofer" });
     await addListaEspera(userPhone, { ...session, step: "sin_chofer" });
-    // Solo mandar mensaje si es el primer intento de buscar (intento 0 ya mandó mensaje)
     if (intento === CONFIG.MAX_REINTENTOS_ASIGNAR) {
       const tipoTexto = session.tipoVehiculoSolicitado === "moto" ? "moto" : session.tipoVehiculoSolicitado === "auto" ? "auto" : "móvil";
       await enviarMensaje(userPhone, `⏳ Seguimos buscando tu ${tipoTexto}...\n\n_Escribe CANCELAR si quieres dejar de buscar._`);
@@ -44,7 +43,7 @@ async function asignarChofer(userPhone, session, excludeWialonIds = [], intento 
   }
 
   const tipoSolicitado = session.tipoVehiculoSolicitado || null;
-  const chofer = await buscarChoferDisponible(session.origen, excludeWialonIds, tipoSolicitado);
+  const chofer = await buscarChoferDisponibleTraccar(session.origen, excludeTraccarIds, tipoSolicitado);
 
   if (!chofer) {
     await updateSession(userPhone, { ...session, step: "sin_chofer" });
@@ -61,7 +60,7 @@ async function asignarChofer(userPhone, session, excludeWialonIds = [], intento 
   const viaje = await Viaje.create({
     usuarioPhone: userPhone,
     choferPhone: chofer.phone,
-    choferWialonId: chofer.wialonId,
+    choferTraccarId: chofer.traccarId,
     choferNombre: chofer.nombre,
     choferPlaca: chofer.placa,
     origen: session.origen,
@@ -79,12 +78,12 @@ async function asignarChofer(userPhone, session, excludeWialonIds = [], intento 
     fechaAsignacion: new Date(),
   });
 
-  const reservado = await reservarChofer(chofer.wialonId, viaje._id);
+  const reservado = await reservarChoferTraccar(chofer.traccarId, viaje._id);
   if (!reservado) {
     log.warn(`[ASIGNAR] Chofer ${chofer.nombre} ya fue reservado. Reintentando...`);
     await Viaje.findByIdAndDelete(viaje._id);
     // FIX BUG#7: pasar intento + 1 en lugar de recursión sin límite
-    await asignarChofer(userPhone, session, [...excludeWialonIds, chofer.wialonId], intento + 1);
+    await asignarChofer(userPhone, session, [...excludeTraccarIds, chofer.traccarId], intento + 1);
     return;
   }
 
@@ -100,7 +99,7 @@ async function asignarChofer(userPhone, session, excludeWialonIds = [], intento 
   await updateSession(userPhone, {
     ...session,
     step: "esperando_chofer",
-    choferId: chofer.wialonId,
+    choferId: chofer.traccarId,
     choferPhone: chofer.phone,
     viajeId: viaje._id.toString(),
   });
@@ -165,9 +164,9 @@ async function procesarCancelacionPasajero(phone, session) {
       cancelacionMotivo: "cancelado_por_pasajero",
       fechaFin: new Date(),
     });
-    if (viaje.choferWialonId) {
+    if (viaje.choferTraccarId) {
       await Chofer.findOneAndUpdate(
-        { wialonId: viaje.choferWialonId },
+        { traccarId: viaje.choferTraccarId },
         { estado: "libre", viajeReservado: null, reservadoHasta: null }
       );
       await enviarMensaje(viaje.choferPhone, `❌ El pasajero canceló el viaje. Ya estás LIBRE para recibir otros viajes.`);
