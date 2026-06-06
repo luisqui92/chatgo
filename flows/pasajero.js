@@ -1479,7 +1479,7 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
 
       if (buttonId === "cancelar_viaje_pasajero") {
         await Viaje.findByIdAndUpdate(viajeActivo._id, { estado: "cancelado", fechaFin: new Date(), cancelacionMotivo: "cancelado_por_pasajero" });
-        await Chofer.findOneAndUpdate({ wialonId: viajeActivo.choferWialonId }, { $set: { estado: "libre", viajeReservado: null, reservadoHasta: null } });
+        await Chofer.findOneAndUpdate({ traccarId: viajeActivo.choferTraccarId }, { $set: { estado: "libre", viajeReservado: null, reservadoHasta: null } });
         await enviarMensaje(viajeActivo.choferPhone, `❌ El pasajero canceló el viaje.`);
         await deleteSession(phone);
         await enviarMensaje(phone, "❌ Viaje cancelado. Escribe cuando necesites otro taxi 🚖");
