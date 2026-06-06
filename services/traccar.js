@@ -31,17 +31,28 @@ function isConfigured() {
 // ─── POSICIÓN DE UN CHOFER ───────────────────────────────────────────────────
 async function _obtenerUbicacionRaw(traccarId) {
   if (!isConfigured()) throw new Error("Traccar no configurado");
-  const res = await axios.get(`${TRACCAR_URL}/api/positions`, {
+
+  // Obtener positionId del dispositivo
+  const devRes = await axios.get(`${TRACCAR_URL}/api/devices`, {
     headers: authHeader(),
-    params: { deviceId: traccarId },
+    params: { id: traccarId },
     timeout: 8000,
   });
-  const pos = res.data?.[0];
-  if (!pos) {
-    log.warn(`[TRACCAR] Sin posición para deviceId=${traccarId}. Total posiciones recibidas: ${res.data?.length ?? 0}`);
-    throw new Error("Sin posición disponible en Traccar");
-  }
+  const device = devRes.data?.[0];
+  if (!device) throw new Error("Dispositivo no encontrado en Traccar");
+  if (!device.positionId) throw new Error("Sin posición disponible en Traccar");
+
+  // Obtener la posición por su ID
+  const posRes = await axios.get(`${TRACCAR_URL}/api/positions`, {
+    headers: authHeader(),
+    params: { id: device.positionId },
+    timeout: 8000,
+  });
+  const pos = posRes.data?.[0];
+  if (!pos) throw new Error("Sin posición disponible en Traccar");
+
   const minutos = Math.round((Date.now() - new Date(pos.fixTime).getTime()) / 60000);
+  log.info(`[TRACCAR] Posición device ${traccarId}: lat=${pos.latitude} lng=${pos.longitude} minutos=${minutos}`);
   return { lat: pos.latitude, lng: pos.longitude, minutos };
 }
 
@@ -101,24 +112,51 @@ async function buscarChoferDisponibleTraccar(origenUsuario, excludeTraccarIds = 
   const choferes = await Chofer.find(filtro);
   if (!choferes.length) return null;
 
-  // Obtener posiciones bulk desde Traccar
-  let posicionesTraccar = [];
+  // Obtener dispositivos con su positionId
+  let dispositivos = [];
   try {
-    const res = await axios.get(`${TRACCAR_URL}/api/positions`, {
+    const devRes = await axios.get(`${TRACCAR_URL}/api/devices`, {
       headers: authHeader(),
       timeout: 8000,
     });
-    posicionesTraccar = res.data || [];
+    dispositivos = devRes.data || [];
   } catch (e) {
-    log.error("[TRACCAR_BUSCAR]", e.message);
+    log.error("[TRACCAR_BUSCAR] Error obteniendo dispositivos:", e.message);
     return null;
+  }
+
+  // Obtener posiciones por IDs
+  const positionIds = dispositivos
+    .filter(d => d.positionId)
+    .map(d => d.positionId);
+
+  let posicionesTraccar = [];
+  if (positionIds.length > 0) {
+    try {
+      const posRes = await axios.get(`${TRACCAR_URL}/api/positions`, {
+        headers: authHeader(),
+        params: { id: positionIds.join(",") },
+        timeout: 8000,
+      });
+      posicionesTraccar = posRes.data || [];
+    } catch (e) {
+      log.error("[TRACCAR_BUSCAR] Error obteniendo posiciones:", e.message);
+    }
+  }
+
+  // Mapa deviceId -> posicion
+  const posMap = {};
+  for (const pos of posicionesTraccar) {
+    posMap[String(pos.deviceId)] = pos;
   }
 
   const ahoraMs = Date.now();
   const candidatos = [];
 
   for (const chofer of choferes) {
-    const pos = posicionesTraccar.find(p => String(p.deviceId) === String(chofer.traccarId));
+    const dev = dispositivos.find(d => String(d.id) === String(chofer.traccarId));
+    if (!dev || !dev.positionId) continue;
+    const pos = posMap[String(chofer.traccarId)];
     if (!pos) continue;
     const minutos = Math.round((ahoraMs - new Date(pos.fixTime).getTime()) / 60000);
     if (minutos > 10) continue;
