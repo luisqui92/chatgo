@@ -18,7 +18,10 @@ const POS_CACHE_MS = 8 * 1000;
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
 function authHeader() {
   const b64 = Buffer.from(`${TRACCAR_USER}:${TRACCAR_PASS}`).toString("base64");
-  return { Authorization: `Basic ${b64}` };
+  return {
+    Authorization: `Basic ${b64}`,
+    "Accept": "application/json",
+  };
 }
 
 function isConfigured() {
@@ -34,7 +37,10 @@ async function _obtenerUbicacionRaw(traccarId) {
     timeout: 8000,
   });
   const pos = res.data?.[0];
-  if (!pos) throw new Error("Sin posición disponible en Traccar");
+  if (!pos) {
+    log.warn(`[TRACCAR] Sin posición para deviceId=${traccarId}. Total posiciones recibidas: ${res.data?.length ?? 0}`);
+    throw new Error("Sin posición disponible en Traccar");
+  }
   const minutos = Math.round((Date.now() - new Date(pos.fixTime).getTime()) / 60000);
   return { lat: pos.latitude, lng: pos.longitude, minutos };
 }
