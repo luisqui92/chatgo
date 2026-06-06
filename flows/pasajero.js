@@ -562,16 +562,28 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
       // Si la IA extrajo esquina con calle1+calle2, buscar en EsquinaMapeada antes de Google
       async function resolverEsquinaCompartida(det) {
         if (!det || det.tipo !== "esquina" || !det.calle1 || !det.calle2) return null;
-        const esquina = await buscarEsquinaMapeada(det.calle1, det.calle2, det.zona);
-        if (esquina && esquina.lat && esquina.lng) {
-          log.info(`[CROWDSOURCE] Esquina conocida: ${det.calle1} y ${det.calle2} → ${esquina.zona || "?"} (usos: ${esquina.usos})`);
-          // Incrementar contador
-          esquina.usos = (esquina.usos || 0) + 1;
-          esquina.ultimoUso = new Date();
-          esquina.save().catch(()=>{});
-          return { lat: esquina.lat, lng: esquina.lng, nombre: `${esquina.calle1} y ${esquina.calle2}${esquina.zona ? " ("+esquina.zona+")" : ""}` };
+        const resultado = await buscarEsquinaMapeada(det.calle1, det.calle2, det.zona);
+        if (!resultado || !resultado.esquina) return null;
+        const esquina = resultado.esquina;
+        
+        // PROTECCIÓN 3: Si la esquina necesita confirmación (pocos usos o múltiples zonas),
+        // no usar coords directo — devolver con bandera para que el bot pregunte
+        if (resultado.requiereConfirmacion) {
+          log.info(`[CROWDSOURCE] Esquina ${det.calle1} y ${det.calle2} encontrada pero requiere confirmación (usos: ${esquina.usos})`);
+          return { 
+            lat: esquina.lat, lng: esquina.lng, 
+            nombre: `${esquina.calle1} y ${esquina.calle2}${esquina.zona ? " ("+esquina.zona+")" : ""}`,
+            requiereConfirmacion: true,
+            alternativas: resultado.alternativas || null,
+          };
         }
-        return null;
+        
+        // Esquina confiable: incrementar uso y devolver
+        log.info(`[CROWDSOURCE] Esquina conocida confiable: ${det.calle1} y ${det.calle2} → ${esquina.zona || "?"} (usos: ${esquina.usos})`);
+        esquina.usos = (esquina.usos || 0) + 1;
+        esquina.ultimoUso = new Date();
+        esquina.save().catch(()=>{});
+        return { lat: esquina.lat, lng: esquina.lng, nombre: `${esquina.calle1} y ${esquina.calle2}${esquina.zona ? " ("+esquina.zona+")" : ""}` };
       }
       
       const esquinaOrigen = await resolverEsquinaCompartida(detOrigen);
