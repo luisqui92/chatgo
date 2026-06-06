@@ -14,7 +14,7 @@ const { Usuario, Chofer, Viaje, SessionState, ListaEspera, RateLimit, CodigoProm
 // Services
 const { getSession, setSession, updateSession, deleteSession, ensureSession, addListaEspera, removeListaEspera, checkRateLimit, sessionCache, processedMsgIds, yaProcesoMensaje } = require("./services/session");
 const { enviarMensaje, enviarBotones, enviarImagen, reenviarImagenPorId, reenviarAudioPorId, reenviarVideoPorId, reenviarUbicacion, reenviarDocumentoPorId, relayMensajeChat, descargarImagenMeta, obtenerUrlMedia, verificarFirmaMeta } = require("./services/whatsapp");
-const { wialonLogin, wialonInvalidateCache, obtenerUbicacionChofer, getAppUrl, generarLinkRastreoPropio, generarLinkLocator, buscarChoferDisponible, reservarChofer, liberarReservaChofer } = require("./services/wialon");
+// Wialon reemplazado por Traccar
 const { calcularPrecio, distanciaEntrePuntos, evaluarPrecisionReferencia, extraerCoordsDeUrlGmaps, resolverUrlCorta, detectarYExtrarCoordsMaps, normalizarReferencia, generarTrigramas, similitudTexto, buscarReferenciaEnMemoria, guardarReferenciaVoz, dentroDeCocha, geocodificarConMemoria, calcularDistancia, calcularDistanciaConParadas, generarLinkRutaConParadas, geocodificarDireccion, obtenerDireccion } = require("./services/google");
 const { transcribirAudio, extraerUbicaciones, validarComprobantePago } = require("./services/openai");
 const { fechaStrBolivia, horaStrBolivia, formatearFechaPromo, promoCodigosActiva, enPromoGratis, generarCodigoUnico, crearCodigoPromo, validarCodigoPromo, consumirCodigoPromo, mensajeCodigoEntregado, enviarCodigoDescuento, validarPlaca, normalizarPlaca, acortarParaBoton, esIntentoCancelar, esPedidoAyuda, esPlusCode, detectarIncompatibilidadMoto, obtenerUltimoViaje, obtenerDestinosFrecuentes, guardarRutaFrecuente, construirBotonesHistorial, choferPagoAlDia } = require("./services/utils");
@@ -72,7 +72,6 @@ const allDeps = {
   reenviarVideoPorId, reenviarUbicacion, reenviarDocumentoPorId, relayMensajeChat,
   descargarImagenMeta, obtenerUrlMedia, verificarFirmaMeta,
   wialonLogin, wialonInvalidateCache, obtenerUbicacionChofer, getAppUrl,
-  generarLinkRastreoPropio, generarLinkLocator, buscarChoferDisponible, reservarChofer, liberarReservaChofer,
   calcularPrecio, distanciaEntrePuntos, evaluarPrecisionReferencia, extraerCoordsDeUrlGmaps,
   resolverUrlCorta, detectarYExtrarCoordsMaps, normalizarReferencia, generarTrigramas, similitudTexto,
   buscarReferenciaEnMemoria, guardarReferenciaVoz, dentroDeCocha, geocodificarConMemoria,
