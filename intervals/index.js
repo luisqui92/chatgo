@@ -6,6 +6,7 @@ const { Usuario, Chofer, Viaje, SessionState, ListaEspera } = require("../db/mod
 const { getSession, updateSession, deleteSession, removeListaEspera, sessionCache } = require("../services/session");
 const { enviarMensaje, enviarBotones } = require("../services/whatsapp");
 const { obtenerUbicacionChofer, buscarChoferDisponibleTraccar, liberarReservaChoferTraccar } = require("../services/traccar");
+const { calcularTiempoConTrafico, distanciaEntrePuntos: distPuntos } = require("../services/google");
 const { distanciaEntrePuntos } = require("../services/google");
 const { registrarEventoChofer, registrarViajeEnDemanda, monitorearSeguridad, enviarAlertasChoferes, procesarReactivaciones, actualizarUltimoViaje } = require("../ai");
 const { asignarChofer } = require("../flows/viaje");
@@ -328,6 +329,103 @@ setInterval(async () => {
     log.error("[MONITOREO_SEG_INTERVAL]", e.message);
   }
 }, 90 * 1000); // cada 90 segundos
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MONITOREO DE TRÁFICO Y DESVÍO DE RUTA — cada 2 minutos
+// ═══════════════════════════════════════════════════════════════════════════
+const alertasTraficoEnviadas = new Set(); // viajeId_tipo → evitar spam
+
+setInterval(async () => {
+  try {
+    const enCurso = await Viaje.find({
+      estado: "en_curso",
+      "destino.lat": { $exists: true },
+      tiempoEstimadoMin: { $exists: true, $ne: null },
+    }).limit(20).lean();
+
+    for (const viaje of enCurso) {
+      try {
+        if (!viaje.choferTraccarId) continue;
+
+        const posChofer = await obtenerUbicacionChofer(viaje.choferTraccarId);
+        if (!posChofer || posChofer.minutos > 3) continue;
+
+        // ─── A) TIMEOUT: ¿lleva más del doble del tiempo estimado? ───────
+        const minutosEnViaje = viaje.fechaInicioViaje
+          ? Math.round((Date.now() - new Date(viaje.fechaInicioViaje).getTime()) / 60000)
+          : null;
+
+        const limiteMinutos = viaje.tiempoEstimadoMin * 2;
+
+        if (minutosEnViaje && minutosEnViaje > limiteMinutos) {
+          const keyTimeout = `${viaje._id}_timeout`;
+          if (!alertasTraficoEnviadas.has(keyTimeout)) {
+            alertasTraficoEnviadas.add(keyTimeout);
+
+            // Consultar tráfico actual desde posición del chofer al destino
+            const traficoActual = await calcularTiempoConTrafico(
+              posChofer.lat, posChofer.lng,
+              viaje.destino.lat, viaje.destino.lng
+            );
+
+            const linkMonitoreo = \`https://chatgo.ia.bo/rastreo.html?id=\${viaje._id}&api=\${encodeURIComponent(\`https://chatgo-production.up.railway.app/track/\${viaje._id}/pos\`)}\`;
+
+            if (traficoActual?.hayTrafico) {
+              // Hay tráfico real — avisar al chofer
+              const linkAlternativo = \`https://www.google.com/maps/dir/?api=1&origin=\${posChofer.lat},\${posChofer.lng}&destination=\${viaje.destino.lat},\${viaje.destino.lng}&travelmode=driving\`;
+              await enviarMensaje(
+                viaje.choferPhone,
+                \`🚦 *Aviso de tráfico*\n\nHay tráfico significativo en tu zona (factor x\${traficoActual.factorTrafico}).\n\nTiempo estimado restante: ~\${traficoActual.minutosConTrafico} min\n\n🗺️ Considera ruta alternativa:\n\${linkAlternativo}\`
+              );
+              log.info(\`[TRAFICO] Viaje \${viaje._id} — tráfico x\${traficoActual.factorTrafico}, avisando a chofer\`);
+            } else {
+              // No hay tráfico pero igual se está tardando — posible desvío
+              const distDestino = distPuntos(posChofer.lat, posChofer.lng, viaje.destino.lat, viaje.destino.lng);
+              await enviarMensaje(
+                CONFIG.ADMIN_PHONE,
+                \`🚨 *Posible desvío de ruta*\n\n👤 Chofer: \${viaje.choferNombre} (+\${viaje.choferPhone})\n🚗 Placa: \${viaje.choferPlaca}\n⏱️ Lleva \${minutosEnViaje} min (estimado: \${viaje.tiempoEstimadoMin} min)\n📍 A \${Math.round(distDestino * 1000)}m del destino\n\n🔍 Monitoreo: \${linkMonitoreo}\`
+              );
+              log.warn(\`[DESVIO] Viaje \${viaje._id} — \${minutosEnViaje}min / estimado \${viaje.tiempoEstimadoMin}min\`);
+            }
+          }
+        }
+
+        // ─── B) DESVÍO GEOGRÁFICO: ¿está muy lejos de la línea origen-destino? ──
+        // Calcular si el chofer se alejó más de 1km de la línea recta origen→destino
+        if (viaje.origen?.lat && viaje.destino?.lat) {
+          const distAlOrigen = distPuntos(posChofer.lat, posChofer.lng, viaje.origen.lat, viaje.origen.lng);
+          const distAlDestino = distPuntos(posChofer.lat, posChofer.lng, viaje.destino.lat, viaje.destino.lng);
+          const distOrigenDestino = distPuntos(viaje.origen.lat, viaje.origen.lng, viaje.destino.lat, viaje.destino.lng);
+
+          // Si la suma de distancias es más del doble de la distancia directa → desvío
+          const ratioDesvio = (distAlOrigen + distAlDestino) / (distOrigenDestino || 1);
+          const keyDesvio = \`\${viaje._id}_desvio_geo\`;
+
+          if (ratioDesvio > 2.5 && !alertasTraficoEnviadas.has(keyDesvio)) {
+            alertasTraficoEnviadas.add(keyDesvio);
+            const linkMonitoreo = \`https://chatgo.ia.bo/rastreo.html?id=\${viaje._id}&api=\${encodeURIComponent(\`https://chatgo-production.up.railway.app/track/\${viaje._id}/pos\`)}\`;
+            await enviarMensaje(
+              CONFIG.ADMIN_PHONE,
+              \`🚨 *Desvío de ruta detectado*\n\n👤 Chofer: \${viaje.choferNombre} (+\${viaje.choferPhone})\n🚗 Placa: \${viaje.choferPlaca}\n📐 Ratio de desvío: x\${Math.round(ratioDesvio * 10) / 10}\n\n🔍 Monitoreo: \${linkMonitoreo}\`
+            );
+            log.warn(\`[DESVIO_GEO] Viaje \${viaje._id} — ratio \${ratioDesvio.toFixed(2)}\`);
+          }
+        }
+
+      } catch (e) {
+        log.warn("[TRAFICO_DESVIO]", e.message);
+      }
+    }
+
+    // Limpiar alertas de viajes terminados
+    if (alertasTraficoEnviadas.size > 200) {
+      alertasTraficoEnviadas.clear();
+    }
+
+  } catch (e) {
+    log.error("[TRAFICO_INTERVAL]", e.message);
+  }
+}, 2 * 60 * 1000); // cada 2 minutos
 
   log.info("✅ Todos los intervals iniciados");
 }
