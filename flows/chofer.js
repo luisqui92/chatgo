@@ -20,7 +20,7 @@ const { Usuario, Chofer, Viaje, LocationReference } = require("../db/models");
 const { getSession, setSession, updateSession, deleteSession } = require("../services/session");
 const { enviarMensaje, enviarBotones, enviarImagen, reenviarImagenPorId, relayMensajeChat, descargarImagenMeta } = require("../services/whatsapp");
 const { obtenerUbicacionChofer, liberarReservaChoferTraccar, generarLinkRastreoPropio } = require("../services/traccar");
-const { normalizarReferencia, guardarReferenciaVoz, calcularDistancia, calcularDistanciaConParadas } = require("../services/google");
+const { normalizarReferencia, guardarReferenciaVoz, calcularDistancia, calcularDistanciaConParadas, calcularTiempoConTrafico } = require("../services/google");
 const { validarComprobantePago } = require("../services/openai");
 const { registrarEventoChofer, calcularMultiplierSurge, aplicarSurge, textoSurge, registrarViajeEnDemanda, actualizarUltimoViaje } = require("../ai");
 const { asignarChofer, procesarPedidoAyuda, solicitarRating } = require("../flows/viaje");
@@ -182,7 +182,21 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
     if (buttonId === "iniciar_viaje") {
       const viaje = await Viaje.findOne({ choferTraccarId: chofer.traccarId, estado: "esperando_pasajero" });
       if (!viaje) return enviarMensaje(phone, "No tienes viajes activos.");
-      await Viaje.findByIdAndUpdate(viaje._id, { estado: "en_curso" });
+      // Calcular tiempo estimado con tráfico al iniciar
+      let tiempoEstimadoMin = null;
+      try {
+        const trafico = await calcularTiempoConTrafico(
+          viaje.origen.lat, viaje.origen.lng,
+          viaje.destino.lat, viaje.destino.lng
+        );
+        if (trafico) tiempoEstimadoMin = trafico.minutosConTrafico;
+      } catch(e) { log.error("[INICIO_VIAJE_TRAFICO]", e.message); }
+
+      await Viaje.findByIdAndUpdate(viaje._id, {
+        estado: "en_curso",
+        tiempoEstimadoMin,
+        fechaInicioViaje: new Date(),
+      });
       const session = await getSession(viaje.usuarioPhone);
       if (session) await updateSession(viaje.usuarioPhone, { ...session, step: "en_curso" });
       await enviarMensaje(viaje.usuarioPhone, `🚖 *Viaje iniciado*\n\n¡Disfruta tu viaje con ChatGo!`);
