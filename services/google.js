@@ -399,6 +399,44 @@ async function calcularDistancia(origen, destino) {
   }
 }
 
+// Calcula tiempo en ruta con tráfico en tiempo real
+async function calcularTiempoConTrafico(origenLat, origenLng, destinoLat, destinoLng) {
+  try {
+    const res = await axios.get(
+      "https://maps.googleapis.com/maps/api/distancematrix/json",
+      {
+        params: {
+          origins: `${origenLat},${origenLng}`,
+          destinations: `${destinoLat},${destinoLng}`,
+          key: CONFIG.GOOGLE_MAPS_KEY,
+          mode: "driving",
+          departure_time: "now",
+          traffic_model: "best_guess",
+        },
+        timeout: CONFIG.TIMEOUT_GOOGLE,
+      }
+    );
+    if (res.data.status !== "OK") return null;
+    const element = res.data.rows?.[0]?.elements?.[0];
+    if (!element || element.status !== "OK") return null;
+
+    const duracionNormal = element.duration?.value || 0;       // segundos sin tráfico
+    const duracionTrafico = element.duration_in_traffic?.value || duracionNormal; // segundos con tráfico
+    const factorTrafico = duracionNormal > 0 ? duracionTrafico / duracionNormal : 1;
+
+    return {
+      minutosSinTrafico: Math.round(duracionNormal / 60),
+      minutosConTrafico: Math.round(duracionTrafico / 60),
+      factorTrafico: Math.round(factorTrafico * 100) / 100,
+      hayTrafico: factorTrafico > 1.3, // más de 30% de demora = tráfico significativo
+      distanciaKm: Math.round((element.distance?.value || 0) / 100) / 10,
+    };
+  } catch (e) {
+    log.error("[TRAFICO]", e.message);
+    return null;
+  }
+}
+
 async function calcularDistanciaConParadas(origen, paradas, destino) {
   const puntos = [origen, ...(paradas || []), destino];
   let kmTotal = 0, minTotal = 0, huboFallback = false;
@@ -571,4 +609,4 @@ async function verificarTraficoEnRuta(origen, destino) {
 }
 
 
-module.exports = { distanciaEntrePuntos, evaluarPrecisionReferencia, extraerCoordsDeUrlGmaps, resolverUrlCorta, extraerNombreLugarDeUrl, detectarYExtrarCoordsMaps, normalizarReferencia, generarTrigramas, similitudTexto, buscarReferenciaEnMemoria, guardarReferenciaVoz, dentroDeCocha, geocodificarConMemoria, calcularDistancia, calcularDistanciaConParadas, generarLinkRutaConParadas, geocodificarDireccion, obtenerDireccion, verificarTraficoEnRuta };
+module.exports = { distanciaEntrePuntos, calcularTiempoConTrafico, evaluarPrecisionReferencia, extraerCoordsDeUrlGmaps, resolverUrlCorta, extraerNombreLugarDeUrl, detectarYExtrarCoordsMaps, normalizarReferencia, generarTrigramas, similitudTexto, buscarReferenciaEnMemoria, guardarReferenciaVoz, dentroDeCocha, geocodificarConMemoria, calcularDistancia, calcularDistanciaConParadas, generarLinkRutaConParadas, geocodificarDireccion, obtenerDireccion, verificarTraficoEnRuta };
