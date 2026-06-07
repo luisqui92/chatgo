@@ -5,7 +5,7 @@ const { CONFIG, log } = require("../config");
 const { Usuario, Chofer, Viaje, SessionState, ListaEspera } = require("../db/models");
 const { getSession, updateSession, deleteSession, removeListaEspera, sessionCache } = require("../services/session");
 const { enviarMensaje, enviarBotones } = require("../services/whatsapp");
-const { obtenerUbicacionChofer, buscarChoferDisponible, liberarReservaChofer } = require("../services/wialon");
+const { obtenerUbicacionChofer, buscarChoferDisponibleTraccar, liberarReservaChoferTraccar } = require("../services/traccar");
 const { distanciaEntrePuntos } = require("../services/google");
 const { registrarEventoChofer, registrarViajeEnDemanda, monitorearSeguridad, enviarAlertasChoferes, procesarReactivaciones, actualizarUltimoViaje } = require("../ai");
 const { asignarChofer } = require("../flows/viaje");
@@ -64,12 +64,12 @@ setInterval(async () => {
 
         const segundos = (ahora.getTime() - new Date(espera.timestamp).getTime()) / 1000;
 
-        if (espera.ofertaActivaWialonId && espera.ofertaActivaHasta) {
+        if (espera.ofertaActivaTraccarId && espera.ofertaActivaHasta) {
           const expirada = new Date(espera.ofertaActivaHasta) < ahora;
           if (!expirada) continue;
           log.info(`[ESPERA] Oferta expirada para ${espera.userPhone}`);
-          espera.ofertasRechazadas = [...(espera.ofertasRechazadas || []), espera.ofertaActivaWialonId];
-          espera.ofertaActivaWialonId = null;
+          espera.ofertasRechazadas = [...(espera.ofertasRechazadas || []), espera.ofertaActivaTraccarId];
+          espera.ofertaActivaTraccarId = null;
           espera.ofertaActivaHasta = null;
           await espera.save();
         }
@@ -85,7 +85,7 @@ setInterval(async () => {
           continue;
         }
 
-        const chofer = await buscarChoferDisponible(
+        const chofer = await buscarChoferDisponibleTraccar(
           { lat: espera.origen.lat, lng: espera.origen.lng },
           espera.ofertasRechazadas || [],
           espera.tipoVehiculoSolicitado || null
@@ -99,7 +99,7 @@ setInterval(async () => {
         const puedeMandarMensaje = msSinMensaje > 90000;
 
         if (chofer) {
-          espera.ofertaActivaWialonId = chofer.wialonId;
+          espera.ofertaActivaTraccarId = chofer.traccarId;
           espera.ofertaActivaHasta = new Date(ahoraMs + CONFIG.ESPERA_OFERTA_VIGENCIA * 1000);
 
           if (puedeMandarMensaje) {
@@ -158,7 +158,7 @@ setInterval(async () => {
     for (const viaje of pendientes) {
       try {
         log.warn(`[TIMEOUT] Viaje ${viaje._id} sin respuesta del chofer ${viaje.choferPhone}`);
-        await liberarReservaChofer(viaje.choferWialonId);
+        await liberarReservaChoferTraccar(viaje.choferTraccarId);
         await Viaje.findByIdAndUpdate(viaje._id, { estado: "buscando_otro_chofer", cancelacionMotivo: "timeout_chofer" });
         await enviarMensaje(viaje.choferPhone, "⏰ Se te pasó el tiempo para aceptar el viaje. Pasamos al siguiente chofer.");
         const session = await getSession(viaje.usuarioPhone);
@@ -171,7 +171,7 @@ setInterval(async () => {
             // Pequeño delay para que el mensaje de timeout llegue antes que el de nuevo chofer
           await enviarMensaje(viaje.usuarioPhone, "⏳ El chofer no respondió a tiempo. Buscando otro...");
           await new Promise(r => setTimeout(r, 1500));
-          await asignarChofer(viaje.usuarioPhone, session, [viaje.choferWialonId]);
+          await asignarChofer(viaje.usuarioPhone, session, [viaje.choferTraccarId]);
           }
         }
       } catch (eInner) {
@@ -224,7 +224,7 @@ setInterval(async () => {
     const enCamino = await Viaje.find({ estado: "en_camino", llegadaOrigenNotificada: false });
     for (const viaje of enCamino) {
       try {
-        const posChofer = await obtenerUbicacionChofer(viaje.choferWialonId);
+        const posChofer = await obtenerUbicacionChofer(viaje.choferTraccarId);
         if (posChofer.minutos > 5) continue;
         const distOrigen = distanciaEntrePuntos(posChofer.lat, posChofer.lng, viaje.origen.lat, viaje.origen.lng);
         if (distOrigen <= 0.05) {
@@ -242,7 +242,7 @@ setInterval(async () => {
           const emoji = tipoVeh === "moto" ? "🏍️" : "🚗";
           const label = tipoVeh === "moto" ? "moto" : "auto";
 
-          const choferColorGPS = await Chofer.findOne({ wialonId: viaje.choferWialonId }).lean();
+          const choferColorGPS = await Chofer.findOne({ traccarId: viaje.choferTraccarId }).lean();
           const colorGPS = choferColorGPS?.colorVehiculo ? ` ${choferColorGPS.colorVehiculo}` : "";
           await enviarMensaje(
             viaje.usuarioPhone,
@@ -270,7 +270,7 @@ setInterval(async () => {
     const enCurso = await Viaje.find({ estado: "en_curso", llegadaNotificada: false });
     for (const viaje of enCurso) {
       try {
-        const posChofer = await obtenerUbicacionChofer(viaje.choferWialonId);
+        const posChofer = await obtenerUbicacionChofer(viaje.choferTraccarId);
 
         // IA SEGURIDAD: monitorear comportamiento sospechoso
         if (!viaje.alertaSeguridad) {
@@ -302,8 +302,8 @@ setInterval(async () => {
     const enCurso = await Viaje.find({ estado: { $in: ["en_camino", "en_curso"] } }).limit(50);
     for (const viaje of enCurso) {
       try {
-        if (!viaje.choferWialonId) continue;
-        const pos = await obtenerUbicacionChofer(viaje.choferWialonId);
+        if (!viaje.choferTraccarId) continue;
+        const pos = await obtenerUbicacionChofer(viaje.choferTraccarId);
         if (!pos) continue;
         
         const posAnterior = ultimasPosViaje.get(String(viaje._id));
