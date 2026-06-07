@@ -48,6 +48,8 @@ const choferSchema = new mongoose.Schema(
     phone: { type: String, unique: true, index: true },
     wialonId: { type: String, unique: true, sparse: true, index: true },
     traccarId: { type: String, unique: true, sparse: true, index: true },
+    fotoChofer: { type: String },
+    fotoVehiculo: { type: String },
     placa: String,
     nombre: String,
     tipoVehiculo: { type: String, enum: ["auto", "moto"], default: "auto", index: true },
