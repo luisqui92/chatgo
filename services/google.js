@@ -258,7 +258,7 @@ async function buscarReferenciaEnMemoria(referencia, ciudadUsuario = "Cochabamba
   const todas = await LocationReference.find({}).lean();
   let mejorMatch = null;
   let mejorSimilitud = 0;
-  const UMBRAL_SIMILITUD = 0.45; // 45% de similitud mínima
+  const UMBRAL_SIMILITUD = 0.85; // 85% de similitud mínima — evita falsos positivos en calles
 
   for (const doc of todas) {
     const sim = similitudTexto(norm, doc.referencia);
