@@ -311,7 +311,7 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
             phone,
             `⚠️ Tu GPS no está enviando señal en este momento (última señal hace ${pos.minutos} min).\n\n` +
               `Para recibir viajes necesitas tener *ChatgoTrack abierto y activo*.\n\n` +
-              `Revisa:\n✅ WiaTag esté abierto (puede estar en segundo plano)\n✅ Permiso de ubicación *"Permitir todo el tiempo"*\n✅ Internet/datos activos\n✅ Optimización de batería DESACTIVADA para WiaTag\n\n` +
+              `Revisa:\n✅ ChatgoTrack esté abierto (puede estar en segundo plano)\n✅ Permiso de ubicación *"Permitir todo el tiempo"*\n✅ Internet/datos activos\n✅ Optimización de batería DESACTIVADA para ChatgoTrack\n\n` +
               `Reintenta en 1 minuto presionando 🟢 Libre otra vez.`
           );
           return;
