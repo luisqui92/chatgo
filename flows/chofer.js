@@ -1,4 +1,16 @@
 // ChatGo — Flow chofer
+
+function calcularDistanciaSimple(lat1, lng1, lat2, lng2) {
+  const R = 6371;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLng = ((lng2 - lng1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((lat1 * Math.PI) / 180) *
+    Math.cos((lat2 * Math.PI) / 180) *
+    Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
 const mongoose = require("mongoose");
 const https = require("https");
 const http = require("http");
@@ -216,7 +228,32 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
         return;
       }
       if (viaje) {
-        await Viaje.findByIdAndUpdate(viaje._id, { estado: "completado", fechaFin: new Date() });
+        // ─── VALIDACIÓN: verificar distancia al destino ───────────────────
+        const METROS_MAX_DESTINO = 150;
+        let finalizacionSospechosa = false;
+        let distanciaAlDestino = null;
+
+        if (viaje.destino?.lat && viaje.destino?.lng) {
+          try {
+            const posChofer = await obtenerUbicacionChofer(chofer.traccarId);
+            const distKm = calcularDistanciaSimple(posChofer.lat, posChofer.lng, viaje.destino.lat, viaje.destino.lng);
+            distanciaAlDestino = Math.round(distKm * 1000); // en metros
+            if (distanciaAlDestino > METROS_MAX_DESTINO) {
+              finalizacionSospechosa = true;
+              log.warn(`[FIN_VIAJE] Chofer ${chofer.phone} finalizó a ${distanciaAlDestino}m del destino (max ${METROS_MAX_DESTINO}m)`);
+            }
+          } catch (e) {
+            log.error("[FIN_VIAJE] Error verificando distancia:", e.message);
+          }
+        }
+        // ─────────────────────────────────────────────────────────────────
+
+        await Viaje.findByIdAndUpdate(viaje._id, {
+          estado: "completado",
+          fechaFin: new Date(),
+          finalizacionSospechosa,
+          distanciaAlDestinoAlFinalizar: distanciaAlDestino,
+        });
         await Usuario.findOneAndUpdate({ phone: viaje.usuarioPhone }, { $inc: { viajesTotal: 1 } });
 
         const choferActual = await Chofer.findById(chofer._id);
@@ -279,6 +316,31 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
             log.error("[PROMO] Error generando código post-viaje:", e.message);
           }
         }
+
+        // ─── Notificar si la finalización fue sospechosa ─────────────────
+        if (finalizacionSospechosa && distanciaAlDestino !== null) {
+          // Advertir al chofer
+          await enviarMensaje(
+            phone,
+            `⚠️ *Atención*: Finalizaste el viaje a *${distanciaAlDestino} metros* del destino acordado.\n\nRecuerda llevar al pasajero hasta el punto de destino.`
+          );
+          // Consultar al pasajero
+          await enviarBotones(
+            viaje.usuarioPhone,
+            `⚠️ Detectamos que el viaje finalizó a *${distanciaAlDestino} metros* del destino.\n\n¿Llegaste a tu destino correctamente?`,
+            [
+              { id: `viaje_ok_${viaje._id}`, title: "✅ Sí, llegué bien" },
+              { id: `viaje_problema_${viaje._id}`, title: "❌ No llegué" },
+            ]
+          );
+          // Notificar al admin
+          await enviarMensaje(
+            CONFIG.ADMIN_PHONE,
+            `🚨 *Finalización sospechosa*\n\n👤 Chofer: ${chofer.nombre} (+${phone})\n🚗 Placa: ${chofer.placa}\n📍 Finalizó a *${distanciaAlDestino}m* del destino\n🗺️ Destino: ${viaje.destino?.nombre || "—"}\n🆔 Viaje: ${viaje._id}`
+          );
+          log.warn(`[ALERTA_VIAJE] Finalización sospechosa - chofer ${chofer.phone} a ${distanciaAlDestino}m del destino`);
+        }
+        // ─────────────────────────────────────────────────────────────────
 
         await solicitarRating(viaje.usuarioPhone, viaje._id);
 
