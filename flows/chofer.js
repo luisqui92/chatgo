@@ -69,7 +69,7 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
       // Enviar foto del vehículo si existe
       if (chofer.fotoVehiculo) {
         await enviarImagen(
-          `${userPhone}@c.us`,
+          userPhone,
           chofer.fotoVehiculo,
           `${emojiV} ${labelV}${colorVStr} · Placa: ${chofer.placa}`
         ).catch(() => {});
@@ -78,7 +78,7 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
       // Enviar foto del chofer si existe
       if (chofer.fotoChofer) {
         await enviarImagen(
-          `${userPhone}@c.us`,
+          userPhone,
           chofer.fotoChofer,
           `👤 Tu chofer: ${chofer.nombre}`
         ).catch(() => {});
