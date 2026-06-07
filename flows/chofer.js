@@ -220,7 +220,7 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
         await Usuario.findOneAndUpdate({ phone: viaje.usuarioPhone }, { $inc: { viajesTotal: 1 } });
 
         const choferActual = await Chofer.findById(chofer._id);
-        const sigueAlDia = choferPagoAlDia(choferActual);
+        const sigueAlDia = enPromoGratis() || choferPagoAlDia(choferActual);
         await Chofer.findByIdAndUpdate(chofer._id, {
           estado: sigueAlDia ? "libre" : "offline",
           $inc: { viajesTotal: 1 },
@@ -287,7 +287,7 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
             { id: "chofer_ocupado", title: "🔴 Ocupado" },
             { id: "chofer_ayuda", title: "❓ Ayuda" },
           ]);
-        } else {
+        } else if (!enPromoGratis()) {
           await enviarMensaje(phone, `✅ Viaje finalizado!\n\n⚠️ Tu pago diario no está al día. Debes pagar Bs 10 para seguir recibiendo viajes.`);
           if (CONFIG.QR_IMAGE_URL) await enviarImagen(phone, CONFIG.QR_IMAGE_URL, `📲 Escanea el QR y envíame la *foto del comprobante*.`);
           await setSession(phone, { step: "chofer_esperando_comprobante" });
