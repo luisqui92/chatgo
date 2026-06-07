@@ -100,6 +100,16 @@ iniciarIntervals(allDeps);
 // ─── HEALTH CHECK ─────────────────────────────────────────────────────────────
 app.get("/", (_req, res) => res.send("ChatGo v6.0 Modular - RastreoPlus - Operativo ✅"));
 
+// Servir fotos de choferes
+app.get("/fotos/:filename", (req, res) => {
+  const path = require("path");
+  const fs = require("fs");
+  const file = path.join(__dirname, "public", "fotos", req.params.filename);
+  if (!fs.existsSync(file)) return res.status(404).send("Not found");
+  res.setHeader("Cache-Control", "public, max-age=86400");
+  res.sendFile(file);
+});
+
 // ─── SERVER ───────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => log.info(`🚀 ChatGo v6.0 corriendo en puerto ${PORT}`));
