@@ -334,6 +334,29 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
     return;
   }
   
+  // Respuesta del pasajero a finalización sospechosa
+  if (buttonId?.startsWith("viaje_ok_")) {
+    await enviarMensaje(phone, "✅ Gracias por confirmar. ¡Nos alegra que hayas llegado bien!");
+    return;
+  }
+
+  if (buttonId?.startsWith("viaje_problema_")) {
+    const viajeId = buttonId.replace("viaje_problema_", "");
+    // Registrar incidente en MongoDB
+    await Viaje.findByIdAndUpdate(viajeId, {
+      incidenteReportado: true,
+      incidenteDescripcion: "Pasajero reportó que no llegó al destino",
+      incidenteFecha: new Date(),
+    }).catch(() => {});
+    // Notificar al admin
+    await enviarMensaje(
+      CONFIG.ADMIN_PHONE,
+      `🚨 *Incidente confirmado por pasajero*\n\n📞 Pasajero: +${phone}\n🆔 Viaje: ${viajeId}\n\nEl pasajero indicó que NO llegó a su destino.`
+    );
+    await enviarMensaje(phone, "⚠️ Gracias por reportarlo. Hemos notificado al equipo de ChatGo para revisar este caso. Lamentamos los inconvenientes.");
+    return;
+  }
+
   if (buttonId === "pedir_otro_taxi") {
     await deleteSession(phone);
     // Redirigir al flujo normal de inicio
