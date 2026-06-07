@@ -66,11 +66,30 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
       const labelV = tipoVeh === "moto" ? "Moto" : "Auto";
       const colorVStr = chofer.colorVehiculo ? ` ${chofer.colorVehiculo}` : "";
 
+      // Enviar foto del vehículo si existe
+      if (chofer.fotoVehiculo) {
+        await enviarImagen(
+          `${userPhone}@c.us`,
+          chofer.fotoVehiculo,
+          `${emojiV} ${labelV}${colorVStr} · Placa: ${chofer.placa}`
+        ).catch(() => {});
+      }
+
+      // Enviar foto del chofer si existe
+      if (chofer.fotoChofer) {
+        await enviarImagen(
+          `${userPhone}@c.us`,
+          chofer.fotoChofer,
+          `👤 Tu chofer: ${chofer.nombre}`
+        ).catch(() => {});
+      }
+
       await enviarMensaje(
         userPhone,
         `🎉 *¡Viaje aceptado!*\n\n` +
-          `👤 Chofer: ${chofer.nombre}\n${emojiV} ${labelV}${colorVStr} · placa: ${chofer.placa}\n\n` +
-          `📍 Rastrea tu chofer:\n${linkRastreo}\n\n` +
+          `👤 Chofer: *${chofer.nombre}*\n` +
+          `${emojiV} ${labelV}${colorVStr} · Placa: *${chofer.placa}*\n\n` +
+          `📍 Rastrea tu chofer en tiempo real:\n${linkRastreo}\n\n` +
           `💬 Escribe cualquier mensaje para chatear con él.\n` +
           `_Escribe CANCELAR si necesitas cancelar, o AYUDA para soporte._`
       );
