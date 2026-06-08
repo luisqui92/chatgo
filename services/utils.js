@@ -481,20 +481,41 @@ function mensajePidiendoReferencia(detalle, evaluacion, esOrigen = true) {
 
 
 // ─── CÁLCULO DE PRECIO POR TIPO DE VEHÍCULO ─────────────────────────────────
-// Tarifas reales Cochabamba 2026:
-//  - Auto: Bs 7 base + Bs 3.5 por km (mínimo Bs 8)
-//  - Moto: Bs 5 base + Bs 2.5 por km (mínimo Bs 6)
+// Tarifas ChatGo Cochabamba 2026 (escalonadas):
+// AUTO:  <4km→Bs3.5/km | 4-10km→Bs2.5/km | >10km→Bs2.0/km | mínimo Bs6
+// MOTO:  <4km→Bs2.5/km | 4-10km→Bs2.0/km | >10km→Bs1.5/km | mínimo Bs5
+// NOCTURNO: 23:00-06:00 → +15%
 function calcularPrecio(km, tipoVehiculo) {
+  // Tarifa escalonada según distancia
   const tarifas = {
-    auto: { base: 7, porKm: 3.5, minimo: 8 },
-    moto: { base: 5, porKm: 2.5, minimo: 6 },
+    auto: [
+      { hasta: 4,        porKm: 3.5, minimo: 6 },
+      { hasta: 10,       porKm: 2.5, minimo: 6 },
+      { hasta: Infinity, porKm: 2.0, minimo: 6 },
+    ],
+    moto: [
+      { hasta: 4,        porKm: 2.5, minimo: 5 },
+      { hasta: 10,       porKm: 2.0, minimo: 5 },
+      { hasta: Infinity, porKm: 1.5, minimo: 5 },
+    ],
   };
-  const t = tarifas[tipoVehiculo] || tarifas.auto;
-  const calculado = t.base + (km * t.porKm);
+
+  const escalones = tarifas[tipoVehiculo] || tarifas.auto;
+  const escalon = escalones.find(e => km <= e.hasta);
+  const minimo = escalon.minimo;
+  const precioPorKm = escalon.porKm;
+
+  let calculado = km * precioPorKm;
+
+  // Tarifa nocturna: 23:00 a 06:00 → +15%
+  const horaBolivia = new Date(Date.now() + CONFIG.OFFSET_HORAS * 60 * 60 * 1000).getUTCHours();
+  const esNocturno = horaBolivia >= 23 || horaBolivia < 6;
+  if (esNocturno) calculado = calculado * 1.15;
   const total = Math.max(Math.round(calculado), t.minimo);
   return {
     total,
-    precioPorKm: t.porKm,
+    precioPorKm: precioPorKm,
+    esNocturno,
     base: t.base,
   };
 }
