@@ -1,15 +1,13 @@
-// Script de aprobación masiva de 25 choferes completos
-// Ejecutar: cd /tmp/migra && node /tmp/aprobar_masivo.js
-
 const http = require("http");
+const https = require("https");
+
 const MONGO_URI = "mongodb+srv://chatgo:chatgo2024@cluster0.vya3p9l.mongodb.net/chatgo";
-const TRACCAR_URL = "http://34.61.45.154:8082";
 const TRACCAR_USER = "Luis.qui92@gmail.com";
 const TRACCAR_PASS = "Carlo1012.";
-const GREENAPI_INSTANCE = process.env.GREENAPI_INSTANCE;
-const GREENAPI_TOKEN = process.env.GREENAPI_TOKEN;
+const GREEN_API_ID = "7107586637";
+const GREEN_API_TOKEN = "b33613c1d7ff46888346c21c7b848d5c7ab3a74016b84c8783";
 const APK_LINK = "https://drive.google.com/file/d/1f6ueNXW8soAAtiy4U1xyHC-I63D79hen/view?usp=drivesdk";
-const BOT_VIAJES = "59162741818"; // número del bot de viajes
+const BOT_VIAJES = "59162741818";
 
 const authHeader = "Basic " + Buffer.from(`${TRACCAR_USER}:${TRACCAR_PASS}`).toString("base64");
 
@@ -19,22 +17,15 @@ async function traccarRequest(method, path, body) {
   return new Promise((resolve, reject) => {
     const data = body ? JSON.stringify(body) : null;
     const options = {
-      hostname: "34.61.45.154",
-      port: 8082,
-      path,
-      method,
+      hostname: "34.61.45.154", port: 8082, path, method,
       headers: {
-        "Authorization": authHeader,
-        "Content-Type": "application/json",
+        "Authorization": authHeader, "Content-Type": "application/json",
         ...(data ? { "Content-Length": Buffer.byteLength(data) } : {})
       },
     };
     const req = http.request(options, (res) => {
-      let d = "";
-      res.on("data", c => d += c);
-      res.on("end", () => {
-        try { resolve(JSON.parse(d)); } catch { resolve(d); }
-      });
+      let d = ""; res.on("data", c => d += c);
+      res.on("end", () => { try { resolve(JSON.parse(d)); } catch { resolve(d); } });
     });
     req.on("error", reject);
     if (data) req.write(data);
@@ -42,10 +33,24 @@ async function traccarRequest(method, path, body) {
   });
 }
 
-async function enviarMensaje(phone, mensaje) {
-  // Usar la API de GreenAPI o WhatsApp directamente
-  // Como no tenemos acceso directo, guardamos en un archivo para envío manual
-  return; // se maneja por el bot
+async function enviarWhatsApp(phone, mensaje) {
+  return new Promise((resolve, reject) => {
+    const chatId = phone + "@c.us";
+    const body = JSON.stringify({ chatId, message: mensaje });
+    const options = {
+      hostname: "api.green-api.com",
+      path: `/waInstance${GREEN_API_ID}/sendMessage/${GREEN_API_TOKEN}`,
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) },
+    };
+    const req = https.request(options, (res) => {
+      let d = ""; res.on("data", c => d += c);
+      res.on("end", () => { console.log(`  📤 WhatsApp ${phone}: ${d}`); resolve(d); });
+    });
+    req.on("error", reject);
+    req.write(body);
+    req.end();
+  });
 }
 
 async function main() {
@@ -54,7 +59,6 @@ async function main() {
   await client.connect();
   const db = client.db("chatgo");
 
-  // Obtener los 25 completos
   const registros = await db.collection("choferregistros").find({
     aprobado: false,
     rechazado: { $ne: true },
@@ -65,66 +69,59 @@ async function main() {
     soatVencimiento: { $exists: true }
   }).toArray();
 
-  console.log(`Aprobando ${registros.length} choferes...`);
+  console.log(`Aprobando y notificando ${registros.length} choferes...`);
   let ok = 0, errores = 0;
 
   for (const reg of registros) {
     const phone = reg.phone;
     const uniqueId = phone.startsWith("591") ? phone.slice(3) : phone;
     const nombre = `${(reg.placa || "").toUpperCase()} - ${(reg.nombre || "Chofer").split(" ")[0]}`;
+    const nombreCorto = (reg.nombre || "Conductor").split(" ")[0];
 
     try {
-      // 1. Verificar si ya tiene dispositivo en Traccar
+      // 1. Crear o verificar dispositivo Traccar
       const existing = await traccarRequest("GET", `/api/devices?uniqueId=${uniqueId}`);
       let deviceId;
-
       if (Array.isArray(existing) && existing.length > 0) {
         deviceId = existing[0].id;
         console.log(`  EXISTE ${nombre} → id=${deviceId}`);
       } else {
         const device = await traccarRequest("POST", "/api/devices", { name: nombre, uniqueId });
         deviceId = device.id;
-        if (!deviceId) throw new Error("Sin ID: " + JSON.stringify(device));
+        if (!deviceId) throw new Error("Sin ID Traccar");
         console.log(`  CREADO ${nombre} → id=${deviceId}`);
       }
 
-      // 2. Aprobar en registro
+      // 2. Aprobar en MongoDB
       await db.collection("choferregistros").updateOne(
         { _id: reg._id },
         { $set: {
-          aprobado: true,
-          aprobadoAt: new Date(),
-          traccarCreado: true,
-          traccarDeviceId: deviceId,
-          traccarUniqueId: uniqueId,
+          aprobado: true, aprobadoAt: new Date(),
+          traccarCreado: true, traccarDeviceId: deviceId, traccarUniqueId: uniqueId,
         }}
       );
 
-      // 3. Crear/actualizar en colección chofers
+      // 3. Crear en colección chofers
       await db.collection("chofers").findOneAndUpdate(
         { phone },
         { $set: {
-          phone,
-          nombre: reg.nombre,
-          placa: reg.placa,
+          phone, nombre: reg.nombre, placa: reg.placa,
           traccarId: String(deviceId),
           tipoVehiculo: reg.tipoVehiculo || "auto",
-          aceptoTerminos: true,
-          estado: "offline",
+          aceptoTerminos: true, estado: "offline",
         }},
-        { upsert: true, new: true }
+        { upsert: true }
       );
 
-      // 4. Guardar mensaje a enviar
-      const nombreCorto = (reg.nombre || "Conductor").split(" ")[0];
-      const emoji = reg.tipoVehiculo === "moto" ? "🏍️" : "🚗";
-      const msg = `🎉 *¡FELICITACIONES ${nombreCorto.toUpperCase()}!*\n\n` +
+      // 4. Enviar mensaje de bienvenida por WhatsApp
+      const msg =
+        `🎉 *¡FELICITACIONES ${nombreCorto.toUpperCase()}!*\n\n` +
         `Tu registro como conductor de ChatGo fue *APROBADO* ✅\n\n` +
         `━━━━━━━━━━━━━━━━━\n` +
         `📱 *PASO 1 — Instala ChatgoTrack*\n` +
         `━━━━━━━━━━━━━━━━━\n\n` +
-        `Descarga e instala la app desde este link:\n${APK_LINK}\n\n` +
-        `*(Es un archivo .zip, descomprímelo e instala el .apk)*\n\n` +
+        `Descarga e instala la app:\n${APK_LINK}\n\n` +
+        `_(Descomprime el .zip e instala el .apk)_\n\n` +
         `━━━━━━━━━━━━━━━━━\n` +
         `🔑 *PASO 2 — Tu identificador*\n` +
         `━━━━━━━━━━━━━━━━━\n\n` +
@@ -145,15 +142,9 @@ async function main() {
         `📱 https://wa.me/${BOT_VIAJES}\n\n` +
         `¿Dudas? Escribe al +591 62741818 🚖`;
 
-      // Guardar en archivo para revisión
-      const fs = require("fs");
-      fs.appendFileSync("/tmp/mensajes_pendientes.txt",
-        `\n=== ${phone} - ${reg.nombre} ===\n${msg}\n`
-      );
-
+      await enviarWhatsApp(phone, msg);
       ok++;
-      console.log(`  ✅ ${reg.nombre} (${phone}) aprobado`);
-      await sleep(500);
+      await sleep(2000); // 2s entre mensajes para no ser bloqueado
 
     } catch (e) {
       console.error(`  ❌ ERROR ${phone}: ${e.message}`);
@@ -161,9 +152,7 @@ async function main() {
     }
   }
 
-  console.log(`\n✅ Completado: ${ok} aprobados, ${errores} errores`);
-  console.log(`📄 Mensajes guardados en /tmp/mensajes_pendientes.txt`);
-  console.log(`\n⚠️  Debes enviar manualmente los mensajes desde el bot o WhatsApp`);
+  console.log(`\n✅ Completado: ${ok} aprobados y notificados, ${errores} errores`);
   await client.close();
 }
 
