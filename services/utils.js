@@ -511,12 +511,11 @@ function calcularPrecio(km, tipoVehiculo) {
   const horaBolivia = new Date(Date.now() + CONFIG.OFFSET_HORAS * 60 * 60 * 1000).getUTCHours();
   const esNocturno = horaBolivia >= 23 || horaBolivia < 6;
   if (esNocturno) calculado = calculado * 1.15;
-  const total = Math.max(Math.round(calculado), t.minimo);
+  const total = Math.max(Math.round(calculado), minimo);
   return {
     total,
-    precioPorKm: precioPorKm,
+    precioPorKm,
     esNocturno,
-    base: t.base,
   };
 }
 
