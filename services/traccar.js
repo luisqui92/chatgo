@@ -125,29 +125,22 @@ async function buscarChoferDisponibleTraccar(origenUsuario, excludeTraccarIds = 
     return null;
   }
 
-  // Obtener posiciones por IDs
-  const positionIds = dispositivos
-    .filter(d => d.positionId)
-    .map(d => d.positionId);
-
-  let posicionesTraccar = [];
-  if (positionIds.length > 0) {
+  // Obtener posiciones una por una (Traccar no soporta múltiples IDs en bulk)
+  const posMap = {};
+  for (const dev of dispositivos) {
+    if (!dev.positionId) continue;
     try {
       const posRes = await axios.get(`${TRACCAR_URL}/api/positions`, {
         headers: authHeader(),
-        params: { id: positionIds.join(",") },
-        timeout: 8000,
+        params: { id: dev.positionId },
+        timeout: 5000,
       });
-      posicionesTraccar = posRes.data || [];
+      if (posRes.data?.[0]) {
+        posMap[String(dev.id)] = posRes.data[0];
+      }
     } catch (e) {
-      log.error("[TRACCAR_BUSCAR] Error obteniendo posiciones:", e.message);
+      // Ignorar errores individuales
     }
-  }
-
-  // Mapa deviceId -> posicion
-  const posMap = {};
-  for (const pos of posicionesTraccar) {
-    posMap[String(pos.deviceId)] = pos;
   }
 
   const ahoraMs = Date.now();
