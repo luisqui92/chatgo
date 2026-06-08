@@ -3,6 +3,7 @@ const { CONFIG, log } = require("../config");
 const crypto = require("crypto");
 const os = require("os");
 const { CodigoPromo, Usuario, Viaje } = require("../db/models");
+const { enviarMensaje } = require("../services/whatsapp");
 
 function fechaStrBolivia(date = new Date()) {
   const t = new Date(date.getTime() + CONFIG.OFFSET_HORAS * 60 * 60 * 1000);
