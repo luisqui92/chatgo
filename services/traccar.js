@@ -125,22 +125,18 @@ async function buscarChoferDisponibleTraccar(origenUsuario, excludeTraccarIds = 
     return null;
   }
 
-  // Obtener posiciones una por una (Traccar no soporta múltiples IDs en bulk)
+  // Una sola llamada — /api/positions sin params devuelve todas las posiciones actuales
   const posMap = {};
-  for (const dev of dispositivos) {
-    if (!dev.positionId) continue;
-    try {
-      const posRes = await axios.get(`${TRACCAR_URL}/api/positions`, {
-        headers: authHeader(),
-        params: { id: dev.positionId },
-        timeout: 5000,
-      });
-      if (posRes.data?.[0]) {
-        posMap[String(dev.id)] = posRes.data[0];
-      }
-    } catch (e) {
-      // Ignorar errores individuales
+  try {
+    const posRes = await axios.get(`${TRACCAR_URL}/api/positions`, {
+      headers: authHeader(),
+      timeout: 8000,
+    });
+    for (const pos of (posRes.data || [])) {
+      posMap[String(pos.deviceId)] = pos;
     }
+  } catch (e) {
+    log.error("[TRACCAR_BUSCAR] Error obteniendo posiciones:", e.message);
   }
 
   const ahoraMs = Date.now();
