@@ -5,7 +5,7 @@ const { CONFIG, log } = require("../config");
 const { Usuario, Chofer, Viaje, SessionState, ListaEspera } = require("../db/models");
 const { getSession, updateSession, deleteSession, removeListaEspera, sessionCache } = require("../services/session");
 const { enviarMensaje, enviarBotones } = require("../services/whatsapp");
-const { obtenerUbicacionChofer, buscarChoferDisponibleTraccar, liberarReservaChoferTraccar } = require("../services/traccar");
+function getTraccar() { return require("../services/traccar"); }
 const { calcularTiempoConTrafico, distanciaEntrePuntos: distPuntos } = require("../services/google");
 const { distanciaEntrePuntos } = require("../services/google");
 const { registrarEventoChofer, registrarViajeEnDemanda, monitorearSeguridad, enviarAlertasChoferes, procesarReactivaciones, actualizarUltimoViaje } = require("../ai");
@@ -14,7 +14,7 @@ const { asignarChofer } = require("../flows/viaje");
 function iniciarIntervals(deps) {
   const {
     enviarMensaje, enviarBotones, getSession, updateSession, deleteSession,
-    sessionCache, obtenerUbicacionChofer, distanciaEntrePuntos,
+    sessionCache, distanciaEntrePuntos,
     monitorearSeguridad, asignarChofer,
     registrarViajeEnDemanda, actualizarUltimoViaje, registrarEventoChofer,
     Chofer, Viaje, ListaEspera, SessionState, Usuario, CONFIG, log
@@ -86,7 +86,7 @@ setInterval(async () => {
           continue;
         }
 
-        const chofer = await buscarChoferDisponibleTraccar(
+        const chofer = await getTraccar().buscarChoferDisponibleTraccar(
           { lat: espera.origen.lat, lng: espera.origen.lng },
           espera.ofertasRechazadas || [],
           espera.tipoVehiculoSolicitado || null
@@ -159,7 +159,7 @@ setInterval(async () => {
     for (const viaje of pendientes) {
       try {
         log.warn(`[TIMEOUT] Viaje ${viaje._id} sin respuesta del chofer ${viaje.choferPhone}`);
-        await liberarReservaChoferTraccar(viaje.choferTraccarId);
+        await getTraccar().liberarReservaChoferTraccar(viaje.choferTraccarId);
         await Viaje.findByIdAndUpdate(viaje._id, { estado: "buscando_otro_chofer", cancelacionMotivo: "timeout_chofer" });
         await enviarMensaje(viaje.choferPhone, "⏰ Se te pasó el tiempo para aceptar el viaje. Pasamos al siguiente chofer.");
         const session = await getSession(viaje.usuarioPhone);
@@ -225,7 +225,7 @@ setInterval(async () => {
     const enCamino = await Viaje.find({ estado: "en_camino", llegadaOrigenNotificada: false });
     for (const viaje of enCamino) {
       try {
-        const posChofer = await obtenerUbicacionChofer(viaje.choferTraccarId);
+        const posChofer = await getTraccar().obtenerUbicacionChofer(viaje.choferTraccarId);
         if (posChofer.minutos > 5) continue;
         const distOrigen = distanciaEntrePuntos(posChofer.lat, posChofer.lng, viaje.origen.lat, viaje.origen.lng);
         if (distOrigen <= 0.05) {
@@ -271,7 +271,7 @@ setInterval(async () => {
     const enCurso = await Viaje.find({ estado: "en_curso", llegadaNotificada: false });
     for (const viaje of enCurso) {
       try {
-        const posChofer = await obtenerUbicacionChofer(viaje.choferTraccarId);
+        const posChofer = await getTraccar().obtenerUbicacionChofer(viaje.choferTraccarId);
 
         // IA SEGURIDAD: monitorear comportamiento sospechoso
         if (!viaje.alertaSeguridad) {
@@ -304,7 +304,7 @@ setInterval(async () => {
     for (const viaje of enCurso) {
       try {
         if (!viaje.choferTraccarId) continue;
-        const pos = await obtenerUbicacionChofer(viaje.choferTraccarId);
+        const pos = await getTraccar().obtenerUbicacionChofer(viaje.choferTraccarId);
         if (!pos) continue;
         
         const posAnterior = ultimasPosViaje.get(String(viaje._id));
@@ -347,7 +347,7 @@ setInterval(async () => {
       try {
         if (!viaje.choferTraccarId) continue;
 
-        const posChofer = await obtenerUbicacionChofer(viaje.choferTraccarId);
+        const posChofer = await getTraccar().obtenerUbicacionChofer(viaje.choferTraccarId);
         if (!posChofer || posChofer.minutos > 3) continue;
 
         // ─── A) TIMEOUT: ¿lleva más del doble del tiempo estimado? ───────
