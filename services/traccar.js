@@ -1,70 +1,87 @@
-// ChatGo — Traccar GPS
+// ChatGo — Traccar GPS (optimizado)
 const axios = require("axios");
 const { CONFIG, log } = require("../config");
 const { Chofer } = require("../db/models");
 const { enPromoGratis, fechaStrBolivia } = require("../services/utils");
 
-// ─── CONFIG ──────────────────────────────────────────────────────────────────
-// TRACCAR_URL ej: https://traccar-production-056d.up.railway.app
-// TRACCAR_USER / TRACCAR_PASS: credenciales del admin
 const TRACCAR_URL  = process.env.TRACCAR_URL  || "";
 const TRACCAR_USER = process.env.TRACCAR_USER || "";
 const TRACCAR_PASS = process.env.TRACCAR_PASS || "";
 
-// Cache de posiciones: traccarId -> { pos, expira }
-const posCache = new Map();
-const POS_CACHE_MS = 8 * 1000;
+// Timeout corto para no colgar el bot si Traccar está lento
+const TRACCAR_TIMEOUT = 3000;
 
-// ─── HELPERS ─────────────────────────────────────────────────────────────────
+// ─── CACHÉ GLOBAL DE POSICIONES ──────────────────────────────────────────────
+// En lugar de consultar Traccar en cada request, mantenemos un snapshot
+// de TODAS las posiciones y dispositivos, refrescado en background.
+let snapshotPosiciones = {};   // deviceId -> posición
+let snapshotDispositivos = {}; // deviceId -> dispositivo (con positionId)
+let snapshotActualizado = 0;   // timestamp de la última actualización OK
+const SNAPSHOT_TTL_MS = 6000;  // si el snapshot tiene menos de 6s, se usa directo
+
+let refrescando = false;
+
 function authHeader() {
   const b64 = Buffer.from(`${TRACCAR_USER}:${TRACCAR_PASS}`).toString("base64");
-  return {
-    Authorization: `Basic ${b64}`,
-    "Accept": "application/json",
-  };
+  return { Authorization: `Basic ${b64}`, "Accept": "application/json" };
 }
 
 function isConfigured() {
   return TRACCAR_URL && TRACCAR_USER && TRACCAR_PASS;
 }
 
+// Refresca el snapshot completo con UNA sola llamada a cada endpoint.
+// Se llama desde un interval en background y bajo demanda si está viejo.
+async function refrescarSnapshot() {
+  if (!isConfigured()) return false;
+  if (refrescando) return false; // evitar refrescos concurrentes
+  refrescando = true;
+  try {
+    const [devRes, posRes] = await Promise.all([
+      axios.get(`${TRACCAR_URL}/api/devices`,   { headers: authHeader(), timeout: TRACCAR_TIMEOUT }),
+      axios.get(`${TRACCAR_URL}/api/positions`, { headers: authHeader(), timeout: TRACCAR_TIMEOUT }),
+    ]);
+
+    const devs = {};
+    for (const d of (devRes.data || [])) devs[String(d.id)] = d;
+
+    const pos = {};
+    for (const p of (posRes.data || [])) pos[String(p.deviceId)] = p;
+
+    snapshotDispositivos = devs;
+    snapshotPosiciones = pos;
+    snapshotActualizado = Date.now();
+    return true;
+  } catch (e) {
+    log.error("[TRACCAR_SNAPSHOT]", e.message);
+    return false;
+  } finally {
+    refrescando = false;
+  }
+}
+
+// Garantiza que el snapshot no esté viejo. Si lo está, lo refresca.
+async function asegurarSnapshot() {
+  if (Date.now() - snapshotActualizado < SNAPSHOT_TTL_MS) return true;
+  return await refrescarSnapshot();
+}
+
 // ─── POSICIÓN DE UN CHOFER ───────────────────────────────────────────────────
-async function _obtenerUbicacionRaw(traccarId) {
-  if (!isConfigured()) throw new Error("Traccar no configurado");
+async function obtenerUbicacionChofer(traccarId) {
+  await asegurarSnapshot();
 
-  // Obtener positionId del dispositivo
-  const devRes = await axios.get(`${TRACCAR_URL}/api/devices`, {
-    headers: authHeader(),
-    params: { id: traccarId },
-    timeout: 8000,
-  });
-  const device = devRes.data?.[0];
-  if (!device) throw new Error("Dispositivo no encontrado en Traccar");
-  if (!device.positionId) throw new Error("Sin posición disponible en Traccar");
+  const dev = snapshotDispositivos[String(traccarId)];
+  if (!dev) throw new Error("Dispositivo no encontrado en Traccar");
+  if (!dev.positionId) throw new Error("Sin posición disponible en Traccar");
 
-  // Obtener la posición por su ID
-  const posRes = await axios.get(`${TRACCAR_URL}/api/positions`, {
-    headers: authHeader(),
-    params: { id: device.positionId },
-    timeout: 8000,
-  });
-  const pos = posRes.data?.[0];
+  const pos = snapshotPosiciones[String(traccarId)];
   if (!pos) throw new Error("Sin posición disponible en Traccar");
 
   const minutos = Math.round((Date.now() - new Date(pos.fixTime).getTime()) / 60000);
-  log.info(`[TRACCAR] Posición device ${traccarId}: lat=${pos.latitude} lng=${pos.longitude} minutos=${minutos}`);
   return { lat: pos.latitude, lng: pos.longitude, minutos };
 }
 
-async function obtenerUbicacionChofer(traccarId) {
-  const cached = posCache.get(traccarId);
-  if (cached && cached.expira > Date.now()) return cached.pos;
-  const pos = await _obtenerUbicacionRaw(traccarId);
-  posCache.set(traccarId, { pos, expira: Date.now() + POS_CACHE_MS });
-  return pos;
-}
-
-// ─── BUSCAR CHOFER DISPONIBLE ────────────────────────────────────────────────
+// ─── DISTANCIA ───────────────────────────────────────────────────────────────
 function distanciaEntrePuntos(lat1, lng1, lat2, lng2) {
   const R = 6371;
   const dLat = ((lat2 - lat1) * Math.PI) / 180;
@@ -77,6 +94,7 @@ function distanciaEntrePuntos(lat1, lng1, lat2, lng2) {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
+// ─── BUSCAR CHOFER DISPONIBLE ────────────────────────────────────────────────
 async function buscarChoferDisponibleTraccar(origenUsuario, excludeTraccarIds = [], tipoVehiculo = null) {
   if (!isConfigured()) return null;
 
@@ -112,40 +130,20 @@ async function buscarChoferDisponibleTraccar(origenUsuario, excludeTraccarIds = 
   const choferes = await Chofer.find(filtro);
   if (!choferes.length) return null;
 
-  // Obtener dispositivos con su positionId
-  let dispositivos = [];
-  try {
-    const devRes = await axios.get(`${TRACCAR_URL}/api/devices`, {
-      headers: authHeader(),
-      timeout: 8000,
-    });
-    dispositivos = devRes.data || [];
-  } catch (e) {
-    log.error("[TRACCAR_BUSCAR] Error obteniendo dispositivos:", e.message);
+  // Lee del snapshot en memoria — sin llamadas extra a Traccar
+  const ok = await asegurarSnapshot();
+  if (!ok && snapshotActualizado === 0) {
+    log.error("[TRACCAR_BUSCAR] Snapshot no disponible");
     return null;
-  }
-
-  // Una sola llamada — /api/positions sin params devuelve todas las posiciones actuales
-  const posMap = {};
-  try {
-    const posRes = await axios.get(`${TRACCAR_URL}/api/positions`, {
-      headers: authHeader(),
-      timeout: 8000,
-    });
-    for (const pos of (posRes.data || [])) {
-      posMap[String(pos.deviceId)] = pos;
-    }
-  } catch (e) {
-    log.error("[TRACCAR_BUSCAR] Error obteniendo posiciones:", e.message);
   }
 
   const ahoraMs = Date.now();
   const candidatos = [];
 
   for (const chofer of choferes) {
-    const dev = dispositivos.find(d => String(d.id) === String(chofer.traccarId));
+    const dev = snapshotDispositivos[String(chofer.traccarId)];
     if (!dev || !dev.positionId) continue;
-    const pos = posMap[String(chofer.traccarId)];
+    const pos = snapshotPosiciones[String(chofer.traccarId)];
     if (!pos) continue;
     const minutos = Math.round((ahoraMs - new Date(pos.fixTime).getTime()) / 60000);
     if (minutos > 10) continue;
@@ -159,8 +157,6 @@ async function buscarChoferDisponibleTraccar(origenUsuario, excludeTraccarIds = 
   }
 
   if (!candidatos.length) return null;
-
-  // Elegir el más cercano (mismo criterio simple que Wialon)
   candidatos.sort((a, b) => a.distanciaAlUsuario - b.distanciaAlUsuario);
   return candidatos[0];
 }
@@ -184,32 +180,30 @@ async function liberarReservaChoferTraccar(traccarId) {
 }
 
 // ─── FRECUENCIA DE REPORTE ───────────────────────────────────────────────────
-// Cambia el intervalo de reporte del dispositivo (30s libre, 10s en viaje)
 async function setFrecuenciaReporte(traccarId, segundos) {
   if (!isConfigured()) return;
   try {
-    // Traccar permite enviar comandos al dispositivo
     await axios.post(`${TRACCAR_URL}/api/commands/send`, {
       deviceId: parseInt(traccarId),
       type: "setReportingInterval",
       attributes: { frequency: segundos },
     }, {
       headers: { ...authHeader(), "Content-Type": "application/json" },
-      timeout: 5000,
+      timeout: TRACCAR_TIMEOUT,
     });
-    log.info(`[TRACCAR] Frecuencia ${segundos}s → device ${traccarId}`);
   } catch (e) {
     log.error(`[TRACCAR_FREQ]`, e.message);
   }
 }
 
-// ─── LIMPIEZA CACHE ───────────────────────────────────────────────────────────
-setInterval(() => {
-  const now = Date.now();
-  for (const [id, data] of posCache.entries()) {
-    if (data.expira < now) posCache.delete(id);
-  }
-}, 5 * 60 * 1000);
+// ─── REFRESCO EN BACKGROUND ──────────────────────────────────────────────────
+// Mantiene el snapshot caliente. Una sola llamada cada 5s sirve a TODO el bot,
+// sin importar cuántos viajes o consultas haya simultáneamente.
+if (isConfigured()) {
+  setInterval(() => { refrescarSnapshot(); }, 5000);
+  // Primer refresco al arrancar
+  refrescarSnapshot();
+}
 
 function getAppUrl() {
   return process.env.APP_URL || "https://chatgo-production.up.railway.app";
@@ -228,4 +222,5 @@ module.exports = {
   setFrecuenciaReporte,
   isTraccarConfigured: isConfigured,
   generarLinkRastreoPropio,
+  distanciaEntrePuntos,
 };
