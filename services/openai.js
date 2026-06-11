@@ -7,15 +7,10 @@ const os = require("os");
 const FormData = require("form-data");
 const { CONFIG, log } = require("../config");
 
-async function transcribirAudio(audioUrl) {
-  const audioRes = await axios.get(audioUrl, {
-    responseType: "arraybuffer",
-    headers: { Authorization: `Bearer ${CONFIG.WHATSAPP_TOKEN}` },
-    timeout: CONFIG.TIMEOUT_META,
-  });
+async function transcribirAudioConModelo(audioBuffer, modelo) {
   const formData = new FormData();
-  formData.append("file", Buffer.from(audioRes.data), { filename: "audio.ogg", contentType: "audio/ogg" });
-  formData.append("model", "whisper-1");
+  formData.append("file", Buffer.from(audioBuffer), { filename: "audio.ogg", contentType: "audio/ogg" });
+  formData.append("model", modelo);
   formData.append("language", "es");
   // Prompt con lugares locales para mejorar reconocimiento de nombres de Cochabamba
   // (evita errores como "Juan de la Rosa" -> "Juan de la tosa"). Se pueden agregar mas lugares.
@@ -30,6 +25,22 @@ async function transcribirAudio(audioUrl) {
     }
   );
   return res.data.text;
+}
+
+async function transcribirAudio(audioUrl) {
+  const audioRes = await axios.get(audioUrl, {
+    responseType: "arraybuffer",
+    headers: { Authorization: `Bearer ${CONFIG.WHATSAPP_TOKEN}` },
+    timeout: CONFIG.TIMEOUT_META,
+  });
+  // Intentar primero con el modelo nuevo (gpt-4o-transcribe = menos errores).
+  // Si falla por cualquier razon (ej: formato ogg), usar whisper-1 como respaldo.
+  try {
+    return await transcribirAudioConModelo(audioRes.data, "gpt-4o-transcribe");
+  } catch (e) {
+    log.warn("[TRANSCRIBIR] gpt-4o-transcribe fallo, usando whisper-1:", e.response?.data?.error?.message || e.message);
+    return await transcribirAudioConModelo(audioRes.data, "whisper-1");
+  }
 }
 
 async function extraerUbicacionesDetalle(texto) {
