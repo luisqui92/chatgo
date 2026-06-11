@@ -17,6 +17,9 @@ async function transcribirAudio(audioUrl) {
   formData.append("file", Buffer.from(audioRes.data), { filename: "audio.ogg", contentType: "audio/ogg" });
   formData.append("model", "whisper-1");
   formData.append("language", "es");
+  // Prompt con lugares locales para mejorar reconocimiento de nombres de Cochabamba
+  // (evita errores como "Juan de la Rosa" -> "Juan de la tosa"). Se pueden agregar mas lugares.
+  formData.append("prompt", "Pedido de taxi en Cochabamba, Bolivia. Lugares y barrios comunes: Juan de la Rosa, Plaza Sucre, Plaza Colon, Plaza 14 de Septiembre, Plaza Quintanilla, Plazuela Constitucion, Cala Cala, Sarco, Tupuraya, Recoleta, Las Cuadras, Sacaba, Quillacollo, Tiquipaya, Vinto, Colcapirhua, Mayorazgo, Temporal, Hipodromo, Muyurina, Pacata, Sarcobamba, Villa Busch, Alalay, Ticti, Itocta, Valle Hermoso, Piñami, UMSS, Cine Center, Mercado La Cancha, Mercado 25 de Mayo, Aeropuerto Wilstermann, Hospital Viedma, Hospital del Niño, Avenida America, Avenida Heroinas, Avenida Ayacucho, Avenida Blanco Galindo, Avenida Circunvalacion, Avenida Villazon, Avenida Pando, Avenida Melchor Perez, Avenida Oquendo, Calle Jordan.");
 
   const res = await axios.post(
     "https://api.openai.com/v1/audio/transcriptions",
@@ -63,6 +66,11 @@ REGLAS:
 
 2. **tipo="lugar"** cuando es un sitio con nombre propio:
    - "Cine Center", "UMSS", "Aeropuerto Wilstermann", "Mall Las Américas", "Plaza Colón", "Hospital Viedma", "Mercado La Cancha"
+   - IMPORTANTE: si el texto dice "Plaza", "Plazuela", "Mercado", "Parque", "Hospital", "Mall", "Cine", "Estadio", "Coliseo", "Terminal" seguido de un nombre, ESE TIPO ES PARTE DEL NOMBRE y se conserva completo en "texto".
+     - "Plaza Sucre" → texto="Plaza Sucre" (NO "Sucre", que es una calle distinta)
+     - "Mercado 25 de Mayo" → texto="Mercado 25 de Mayo" (NO "25 de Mayo")
+     - "Plazuela Constitución" → texto="Plazuela Constitución"
+   - NUNCA recortes el tipo de lugar. "Plaza X" jamás debe quedar solo como "X".
 
 3. **tipo="personal"** cuando el usuario dice algo propio:
    - "mi casa", "casa", "a casa", "estoy en casa" → lugar_personal="casa"
