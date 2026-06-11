@@ -505,7 +505,23 @@ async function geocodificarDireccion(direccion, reintentoInterseccion = true, ci
       log.warn(`[GEOCOD] Sin resultados para: "${direccion}"`);
       return null;
     }
-    const result = res.data.results[0];
+    // Si la búsqueda es un lugar con nombre (Plaza, Mercado, Parque, etc.),
+    // NO agarrar ciegamente el primer resultado: Google a veces pone la CALLE
+    // del mismo nombre primero (ej: "Plaza Bolívar" devuelve la calle Bolívar).
+    // Elegimos el resultado que sea un lugar real y no una simple ruta/calle.
+    const esLugarConNombre = /^\s*(plaza|plazuela|mercado|parque|hospital|mall|cine|estadio|coliseo|terminal|universidad|colegio|iglesia|catedral|aeropuerto|cementerio)\b/i.test(direccion);
+    let result = res.data.results[0];
+    if (esLugarConNombre && res.data.results.length > 1) {
+      // Buscar el primer resultado que NO sea solo una calle (route)
+      const noCalle = res.data.results.find(r => {
+        const t = r.types || [];
+        return !t.includes("route") || t.includes("establishment") || t.includes("park") || t.includes("point_of_interest");
+      });
+      if (noCalle) {
+        result = noCalle;
+        log.info(`[GEOCOD] Lugar con nombre "${direccion}": se eligió resultado tipo [${(noCalle.types||[]).join(",")}] en vez de la calle`);
+      }
+    }
     const loc = result.geometry.location;
     const tipos = result.types || [];
     log.info(`[GEOCOD] "${direccion}" → (${loc.lat}, ${loc.lng}) | "${result.formatted_address}" | tipos: ${tipos.join(",")}`);
