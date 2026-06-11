@@ -236,6 +236,38 @@ function similitudTexto(a, b) {
   return union === 0 ? 0 : interseccion / union;
 }
 
+// Extrae nombres de calles, quitando palabras genéricas (calle, esquina, avenida, etc.)
+function extraerCallesDeReferencia(textoNorm) {
+  const genericas = new Set(["calle","avenida","av","avda","esquina","esq","plaza","plazuela","pasaje","pje","camino","carretera","ruta","entre","con","final","zona","barrio","frente","cerca","lado","altura","numero","nro","casi"]);
+  return textoNorm.split(" ").filter(p => p.length >= 3 && !genericas.has(p));
+}
+
+// Determina si dos referencias son el MISMO lugar.
+// Para intersecciones (2 calles): una calle debe coincidir fuerte (>=80%) y la otra
+// al menos parcial (>=50%). Esto reconoce el mismo cruce aunque el usuario hable mal
+// (ej: "Apurimac" dicho como "Purimac"), pero NO confunde cruces distintos
+// (ej: "Urpi y Apurimac" vs "Apurimac y Tarata" → NO match, porque la 2da calle difiere).
+function esMismaUbicacion(textoNormA, textoNormB) {
+  if (textoNormA === textoNormB) return true;
+  const callesA = extraerCallesDeReferencia(textoNormA);
+  const callesB = extraerCallesDeReferencia(textoNormB);
+  if (callesA.length === 0 || callesB.length === 0) return false;
+
+  // Caso intersección: ambas tienen 2+ calles
+  if (callesA.length >= 2 && callesB.length >= 2) {
+    const sims = callesA.map(ca => Math.max(...callesB.map(cb => similitudTexto(ca, cb))));
+    sims.sort((a, b) => b - a);
+    const c1 = sims[0] || 0;
+    const c2 = sims[1] || 0;
+    return c1 >= 0.8 && c2 >= 0.5;
+  }
+
+  // Caso lugar simple (1 calle/nombre): debe coincidir fuerte
+  const setB = new Set(callesB);
+  const comunes = callesA.filter(p => setB.has(p) || callesB.some(pb => similitudTexto(p, pb) >= 0.7));
+  return comunes.length / Math.max(callesA.length, callesB.length) >= 0.99;
+}
+
 async function buscarReferenciaEnMemoria(referencia, ciudadUsuario = "Cochabamba") {
   if (!referencia || referencia.length < 4) return null;
   const norm = normalizarReferencia(referencia);
@@ -256,20 +288,20 @@ async function buscarReferenciaEnMemoria(referencia, ciudadUsuario = "Cochabamba
   if (norm.length < 6) return null;
 
   const todas = await LocationReference.find({}).lean();
-  let mejorMatch = null;
-  let mejorSimilitud = 0;
-  const UMBRAL_SIMILITUD = 0.85; // 85% de similitud mínima — evita falsos positivos en calles
 
+  // NUEVO: match por intersección/palabras clave en vez de similitud global estricta.
+  // Reconoce el mismo lugar aunque el usuario diga las calles distinto, sin confundir
+  // cruces diferentes (ver esMismaUbicacion).
+  let mejorMatch = null;
   for (const doc of todas) {
-    const sim = similitudTexto(norm, doc.referencia);
-    if (sim > mejorSimilitud) {
-      mejorSimilitud = sim;
+    if (esMismaUbicacion(norm, doc.referencia)) {
       mejorMatch = doc;
+      break;
     }
   }
 
-  if (mejorMatch && mejorSimilitud >= UMBRAL_SIMILITUD) {
-    log.info(`[VOICE_MEM] Hit difuso: "${referencia}" ~ "${mejorMatch.referenciaOriginal}" (${Math.round(mejorSimilitud * 100)}%) → (${mejorMatch.lat}, ${mejorMatch.lng})`);
+  if (mejorMatch) {
+    log.info(`[VOICE_MEM] Hit por calles: "${referencia}" ~ "${mejorMatch.referenciaOriginal}" → (${mejorMatch.lat}, ${mejorMatch.lng})`);
     // Guardar también la variante nueva para futuros usos
     await guardarReferenciaVoz(referencia, mejorMatch.lat, mejorMatch.lng, mejorMatch.nombreResuelto);
     return { lat: mejorMatch.lat, lng: mejorMatch.lng, nombre: mejorMatch.nombreResuelto };
