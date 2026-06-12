@@ -776,7 +776,7 @@ app.get("/admin/pendientes-aprobacion", requireAuth(), async (req, res) => {
         placa: c.placa,
         estado: c.estado,
         pagoDiario: c.pagoDiario,
-        linkAprobar: `https://chatgo-production.up.railway.app/admin/aprobar-chofer/${c.phone}`,
+        linkAprobar: `${CONFIG.APP_URL}/admin/aprobar-chofer/${c.phone}`,
       })),
     });
   } catch (e) {

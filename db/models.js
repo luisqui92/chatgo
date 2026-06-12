@@ -217,14 +217,16 @@ const alertaSegSchema = new mongoose.Schema({
 });
 const AlertaSeg = mongoose.model("AlertaSeg", alertaSegSchema);
 
+// Schema unificado: soporta registro histórico (pricing.js) y surge activo por zona
 const surgeSchema = new mongoose.Schema({
-  zona: { type: String, required: true },
+  zona: { type: String, default: "general" },
   multiplier: { type: Number, default: 1.0 },
-  vigenteHasta: { type: Date, required: true },
   motivo: String,
-});
+  viajesAfectados: { type: Number, default: 0 },
+  vigenteHasta: { type: Date, default: null },
+}, { timestamps: true });
 surgeSchema.index({ zona: 1, vigenteHasta: 1 });
-const Surge = mongoose.model("Surge", surgeSchema);
+const Surge = mongoose.model("Surge", surgeSchema, "surges");
 
 // ─── ÍNDICES COMPUESTOS PARA RENDIMIENTO ─────────────────────────────────────
 viajeSchema.index({ estado: 1, fechaAsignacion: 1 });

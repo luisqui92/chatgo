@@ -368,7 +368,7 @@ setInterval(async () => {
               viaje.destino.lat, viaje.destino.lng
             );
 
-            const linkMonitoreo = "https://chatgo.ia.bo/rastreo.html?id=" + viaje._id + "&api=" + encodeURIComponent("https://chatgo-production.up.railway.app/track/" + viaje._id + "/pos");
+            const linkMonitoreo = "https://chatgo.ia.bo/rastreo.html?id=" + viaje._id + "&api=" + encodeURIComponent(CONFIG.APP_URL + "/track/" + viaje._id + "/pos");
 
             if (traficoActual?.hayTrafico) {
               // Hay tráfico real — avisar al chofer
@@ -403,7 +403,7 @@ setInterval(async () => {
 
           if (ratioDesvio > 2.5 && !alertasTraficoEnviadas.has(keyDesvio)) {
             alertasTraficoEnviadas.add(keyDesvio);
-            const linkMonitoreo = "https://chatgo.ia.bo/rastreo.html?id=" + viaje._id + "&api=" + encodeURIComponent("https://chatgo-production.up.railway.app/track/" + viaje._id + "/pos");
+            const linkMonitoreo = "https://chatgo.ia.bo/rastreo.html?id=" + viaje._id + "&api=" + encodeURIComponent(CONFIG.APP_URL + "/track/" + viaje._id + "/pos");
             await enviarMensaje(
               CONFIG.ADMIN_PHONE,
               `🚨 *Desvío de ruta detectado*\n\n👤 Chofer: \${viaje.choferNombre} (+\${viaje.choferPhone})\n🚗 Placa: \${viaje.choferPlaca}\n📐 Ratio de desvío: x\${Math.round(ratioDesvio * 10) / 10}\n\n🔍 Monitoreo: \${linkMonitoreo}`

@@ -206,7 +206,7 @@ if (isConfigured()) {
 }
 
 function getAppUrl() {
-  return process.env.APP_URL || "https://chatgo-production.up.railway.app";
+  return CONFIG.APP_URL || process.env.APP_URL || "";
 }
 
 function generarLinkRastreoPropio(viajeId) {
