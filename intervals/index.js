@@ -20,6 +20,8 @@ function iniciarIntervals(deps) {
     Chofer, Viaje, ListaEspera, SessionState, Usuario, CONFIG, log
   } = deps;
 
+const alertasTraficoEnviadas = new Set(); // viajeId_tipo → evitar spam de alertas
+
 // ═══════════════════════════════════════════════════════════════════════════
 setInterval(async () => {
   try {
@@ -187,22 +189,60 @@ setInterval(async () => {
       { estado: "cancelado_timeout", cancelacionMotivo: "zombie_cleanup", fechaFin: new Date() }
     );
 
-    // ZOMBIE CLEANUP EXTENDIDO — viajes activos que llevan más de 90 min sin completarse
-    // Cubre: en_camino, esperando_pasajero, en_curso olvidados por el chofer
-    const limiteViaje = new Date(Date.now() - 90 * 60 * 1000);
-    const viajesZombie = await Viaje.find({
+    // ZOMBIE CLEANUP INTELIGENTE — límite dinámico según tiempo estimado del viaje
+    // en_camino: 30 min máx (el chofer aceptó estando a <5 min del origen)
+    // esperando_pasajero: 20 min máx esperando que suba
+    // en_curso: tiempoEstimadoMin x2.5 (mín 40) — verificando tráfico real con Google antes de cerrar
+    const viajesActivos = await Viaje.find({
       estado: { $in: ["en_camino", "esperando_pasajero", "en_curso"] },
-      updatedAt: { $lt: limiteViaje },
     }).lean();
 
-    for (const viaje of viajesZombie) {
+    for (const viaje of viajesActivos) {
       try {
+        const minutosTranscurridos = Math.round((Date.now() - new Date(viaje.updatedAt).getTime()) / 60000);
+
+        let limiteMin;
+        if (viaje.estado === "en_camino") limiteMin = 30;
+        else if (viaje.estado === "esperando_pasajero") limiteMin = 20;
+        else limiteMin = Math.max(Math.round((viaje.tiempoEstimadoMin || 20) * 2.5), 40);
+
+        if (minutosTranscurridos < limiteMin) continue;
+
+        // Para en_curso: antes de cerrar, verificar con GPS + Google si sigue avanzando legítimamente
+        if (viaje.estado === "en_curso" && viaje.choferTraccarId && viaje.destino?.lat) {
+          try {
+            const pos = await getTraccar().obtenerUbicacionChofer(viaje.choferTraccarId);
+            if (pos && pos.minutos <= 5) {
+              const distKm = distPuntos(pos.lat, pos.lng, viaje.destino.lat, viaje.destino.lng);
+              const trafico = await calcularTiempoConTrafico(pos.lat, pos.lng, viaje.destino.lat, viaje.destino.lng);
+              const minRestantes = trafico?.minutosConTrafico ?? null;
+
+              // Si está a <1km del destino o Google dice que le faltan ≤15 min, extender (no cerrar)
+              if (distKm < 1 || (minRestantes !== null && minRestantes <= 15)) {
+                // tocar updatedAt para resetear el contador y avisar al admin solo una vez
+                await Viaje.findByIdAndUpdate(viaje._id, { $set: { extendidoPorTrafico: true } });
+                const keyExt = `${viaje._id}_extendido`;
+                if (!alertasTraficoEnviadas.has(keyExt)) {
+                  alertasTraficoEnviadas.add(keyExt);
+                  await enviarMensaje(
+                    CONFIG.ADMIN_PHONE,
+                    `⏱️ *Viaje extendido por tráfico*\n\n🆔 ${viaje._id}\n👤 ${viaje.choferNombre || "—"} (+${viaje.choferPhone || "—"})\n⏳ Lleva ${minutosTranscurridos} min (estimado: ${viaje.tiempoEstimadoMin || "?"} min)\n📍 A ${Math.round(distKm * 1000)}m del destino\n🚦 Google estima ${minRestantes ?? "?"} min restantes\n\nSigue en curso, no se cerró.`
+                  );
+                }
+                continue;
+              }
+            }
+          } catch (eVerif) {
+            log.error("[ZOMBIE_VERIF]", eVerif.message);
+          }
+        }
+
+        // Cerrar el viaje zombie
         await Viaje.findByIdAndUpdate(viaje._id, {
           estado: "cancelado_timeout",
-          cancelacionMotivo: "zombie_viaje_activo",
+          cancelacionMotivo: `zombie_${viaje.estado}_${minutosTranscurridos}min`,
           fechaFin: new Date(),
         });
-        // Liberar al chofer
         if (viaje.choferPhone) {
           await Chofer.findOneAndUpdate(
             { phone: viaje.choferPhone },
@@ -210,21 +250,20 @@ setInterval(async () => {
           );
           await enviarMensaje(
             viaje.choferPhone,
-            "⏱️ El viaje fue cerrado automáticamente por inactividad (más de 90 min). Ya estás *LIBRE* para nuevos viajes."
+            `⏱️ El viaje fue cerrado automáticamente (${minutosTranscurridos} min sin completarse, límite: ${limiteMin} min). Ya estás *LIBRE* para nuevos viajes.\n\nSi olvidaste presionar *Terminar viaje*, recuerda hacerlo al finalizar cada carrera. 🙏`
           );
         }
-        // Notificar al pasajero si corresponde
         if (viaje.usuarioPhone) {
           await enviarMensaje(
             viaje.usuarioPhone,
-            "❌ Tu viaje fue cancelado automáticamente por inactividad. Escribe cuando quieras pedir un nuevo taxi. 🚖"
+            "❌ Tu viaje fue cerrado automáticamente por inactividad. Escribe cuando quieras pedir un nuevo taxi. 🚖"
           );
         }
         await enviarMensaje(
           CONFIG.ADMIN_PHONE,
-          `⚠️ *Viaje zombie cerrado*\n\n🆔 ${viaje._id}\n👤 Chofer: ${viaje.choferNombre || "—"} (+${viaje.choferPhone || "—"})\n🚗 Placa: ${viaje.choferPlaca || "—"}\n📍 Estado anterior: ${viaje.estado}\n⏱️ Duración: >90 min`
+          `⚠️ *Viaje zombie cerrado*\n\n🆔 ${viaje._id}\n👤 Chofer: ${viaje.choferNombre || "—"} (+${viaje.choferPhone || "—"})\n🚗 Placa: ${viaje.choferPlaca || "—"}\n📍 Estado: ${viaje.estado}\n⏱️ ${minutosTranscurridos} min (límite: ${limiteMin} min)`
         );
-        log.warn(`[ZOMBIE] Viaje ${viaje._id} cerrado — estado: ${viaje.estado}, chofer: ${viaje.choferPhone}`);
+        log.warn(`[ZOMBIE] Viaje ${viaje._id} cerrado — ${viaje.estado}, ${minutosTranscurridos}min/${limiteMin}min, chofer: ${viaje.choferPhone}`);
       } catch (eZombie) {
         log.error("[ZOMBIE_ITEM]", eZombie.message);
       }
@@ -376,7 +415,6 @@ setInterval(async () => {
 // ═══════════════════════════════════════════════════════════════════════════
 // MONITOREO DE TRÁFICO Y DESVÍO DE RUTA — cada 2 minutos
 // ═══════════════════════════════════════════════════════════════════════════
-const alertasTraficoEnviadas = new Set(); // viajeId_tipo → evitar spam
 
 setInterval(async () => {
   try {
