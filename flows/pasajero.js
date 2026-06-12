@@ -9,7 +9,7 @@ const { getSession, setSession, updateSession, deleteSession, ensureSession, rem
 const { enviarMensaje, enviarBotones, relayMensajeChat, obtenerUrlMedia } = require("../services/whatsapp");
 const { evaluarPrecisionReferencia, detectarYExtrarCoordsMaps, normalizarReferencia, guardarReferenciaVoz, geocodificarConMemoria, calcularDistancia, calcularDistanciaConParadas, obtenerDireccion } = require("../services/google");
 const { transcribirAudio, extraerUbicaciones } = require("../services/openai");
-const { promoCodigosActiva, crearCodigoPromo, validarCodigoPromo, enviarCodigoDescuento, esIntentoCancelar, esPedidoAyuda, detectarIncompatibilidadMoto, construirBotonesHistorial, buscarEsquinaMapeada, guardarEsquina, obtenerLugarPersonal, guardarLugarPersonal, evaluarReferencia, mensajePidiendoReferencia, calcularPrecio } = require("../services/utils");
+const { promoCodigosActiva, crearCodigoPromo, validarCodigoPromo, enviarCodigoDescuento, esIntentoCancelar, esPedidoAyuda, detectarIncompatibilidadMoto, construirBotonesHistorial, sugerenciaPorHora, buscarEsquinaMapeada, guardarEsquina, obtenerLugarPersonal, guardarLugarPersonal, evaluarReferencia, mensajePidiendoReferencia, calcularPrecio } = require("../services/utils");
 const { calcularMultiplierSurge, aplicarSurge, textoSurge } = require("../ai");
 const { asignarChofer, procesarCancelacionPasajero, procesarPedidoAyuda, registrarRating } = require("../flows/viaje");
 const { procesarMensajeChofer } = require("../flows/chofer");
@@ -402,6 +402,36 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
   }
 
   // ─── Botones historial ───────────────────────────────────────────────────
+  // ─── COPILOTO DE HÁBITOS: el usuario aceptó la sugerencia por hora ────────
+  if (buttonId === "sug_aceptar") {
+    const sug = session.sugerencia;
+    if (sug?.destino && sug?.origen) {
+      // Tenemos origen Y destino habituales → vamos directo a calcular precio
+      await updateSession(phone, {
+        ...session,
+        origen: sug.origen,
+        destino: sug.destino,
+        tipoVehiculoSugerido: sug.tipoVehiculo,
+        step: "preguntando_opciones",
+      });
+      await enviarMensaje(phone, `🎯 ¡Perfecto! Vamos desde *${sug.origen.nombre || "tu origen habitual"}* hasta *${sug.destino.nombre || "tu destino habitual"}*.`);
+      await preguntarOpcionesViaje(phone, await ensureSession(phone, {}));
+    } else if (sug?.destino) {
+      await updateSession(phone, { ...session, destino: sug.destino, step: "esperando_origen_con_destino" });
+      await enviarMensaje(phone, `🎯 ¡Perfecto! Vamos a *${sug.destino.nombre || "tu destino habitual"}*.\n\n📍 Envíame tu *ubicación actual* para recogerte.`);
+    } else {
+      await updateSession(phone, { ...session, step: "esperando_origen" });
+      await enviarMensaje(phone, "📍 Envía tu ubicación de origen con el pin.");
+    }
+    return;
+  }
+
+  if (buttonId === "sug_rechazar") {
+    await updateSession(phone, { ...session, step: "esperando_origen" });
+    await enviarMensaje(phone, "👍 Sin problema. 📍 Envíame tu *ubicación de origen* con el pin de WhatsApp, o mándame un 🎤 audio diciendo a dónde quieres ir.");
+    return;
+  }
+
   if (buttonId === "hist_ultimo") {
     const histData = session.historial;
     if (histData?.ultimo?.destino) {
@@ -910,6 +940,22 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
         try { const dir = await obtenerDireccion(coords.lat, coords.lng); if (dir) origen.nombre = dir; } catch {}
         await updateSession(phone, { ...session, origen, step: "esperando_destino" });
         await enviarMensaje(phone, `✅ *Origen recibido:* ${origen.nombre || "tu ubicación"}\n\n🏁 Ahora envía tu *ubicación de destino* (a dónde quieres ir).`);
+        break;
+      }
+
+      // ─── COPILOTO DE HÁBITOS: ¿hay un patrón de viaje a esta hora? ─────────
+      const sugerencia = await sugerenciaPorHora(phone);
+      if (sugerencia) {
+        const emojiVeh = sugerencia.tipoVehiculo === "moto" ? "🏍️" : "🚗";
+        await updateSession(phone, { ...session, step: "eligiendo_historial", sugerencia });
+        await enviarBotones(
+          phone,
+          `👋 ¡Hola de nuevo!\n\n🎯 Noté que a esta hora sueles ir a *${sugerencia.destinoNombre}* en ${emojiVeh} ${sugerencia.tipoVehiculo}.\n\n¿Vamos para allá?`,
+          [
+            { id: "sug_aceptar", title: `✅ Sí, vamos` },
+            { id: "sug_rechazar", title: "📍 Otro viaje" },
+          ]
+        );
         break;
       }
 

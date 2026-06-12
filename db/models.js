@@ -23,6 +23,11 @@ const usuarioSchema = new mongoose.Schema(
         origen: { lat: Number, lng: Number, nombre: String },
         destino: { lat: Number, lng: Number, nombre: String },
         contador: { type: Number, default: 1 },
+        // Copiloto de hábitos: franjas horarias en que se hace este viaje (0-23)
+        // Guardamos cuántas veces se viajó en cada hora para detectar patrones
+        horas: { type: [Number], default: [] },        // ej: [8, 8, 8, 18] = 3 veces a las 8am, 1 a las 6pm
+        tipoVehiculo: { type: String, default: "auto" }, // último tipo usado en esta ruta
+        ultimoViaje: { type: Date, default: Date.now },
       },
     ],
     // Lugares personales guardados (casa, trabajo, etc.)

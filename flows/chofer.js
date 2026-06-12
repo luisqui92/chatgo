@@ -306,7 +306,7 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
           estado: sigueAlDia ? "libre" : "offline",
           $inc: { viajesTotal: 1 },
         });
-        await guardarRutaFrecuente(viaje.usuarioPhone, viaje.origen, viaje.destino);
+        await guardarRutaFrecuente(viaje.usuarioPhone, viaje.origen, viaje.destino, viaje.tipoVehiculo || "auto");
 
   // IA: registrar evento completado para métricas del chofer
   if (chofer) {

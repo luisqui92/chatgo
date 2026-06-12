@@ -197,15 +197,73 @@ async function obtenerDestinosFrecuentes(phone, limit = 2) {
     .slice(0, limit);
 }
 
-async function guardarRutaFrecuente(phone, origen, destino) {
+async function guardarRutaFrecuente(phone, origen, destino, tipoVehiculo = "auto") {
   const usuario = await Usuario.findOne({ phone });
   if (!usuario) return;
+  // Hora actual en Bolivia (0-23)
+  const horaBolivia = new Date(Date.now() + CONFIG.OFFSET_HORAS * 60 * 60 * 1000).getUTCHours();
   const existente = usuario.rutasFrecuentes.find(
     r => Math.abs(r.origen.lat - origen.lat) < 0.001 && Math.abs(r.destino.lat - destino.lat) < 0.001
   );
-  if (existente) existente.contador += 1;
-  else usuario.rutasFrecuentes.push({ origen, destino, contador: 1 });
+  if (existente) {
+    existente.contador += 1;
+    existente.horas = existente.horas || [];
+    existente.horas.push(horaBolivia);
+    // Mantener máximo 50 registros de hora por ruta (evita crecimiento infinito)
+    if (existente.horas.length > 50) existente.horas = existente.horas.slice(-50);
+    existente.tipoVehiculo = tipoVehiculo;
+    existente.ultimoViaje = new Date();
+  } else {
+    usuario.rutasFrecuentes.push({
+      origen, destino, contador: 1,
+      horas: [horaBolivia], tipoVehiculo, ultimoViaje: new Date(),
+    });
+  }
   await usuario.save();
+}
+
+// ─── COPILOTO DE HÁBITOS: sugerencia inteligente por hora ────────────────────
+// Analiza las rutas frecuentes del usuario y, si detecta un patrón en la hora
+// actual, devuelve una sugerencia lista para ofrecer. Si no hay patrón, null.
+async function sugerenciaPorHora(phone) {
+  try {
+    const usuario = await Usuario.findOne({ phone }).lean();
+    if (!usuario?.rutasFrecuentes?.length) return null;
+
+    const horaActual = new Date(Date.now() + CONFIG.OFFSET_HORAS * 60 * 60 * 1000).getUTCHours();
+
+    let mejor = null;
+    let mejorPuntaje = 0;
+
+    for (const ruta of usuario.rutasFrecuentes) {
+      if (!ruta.destino?.lat || !ruta.horas?.length) continue;
+      // Contar cuántas veces se hizo este viaje en una ventana de ±1 hora de la actual
+      const enVentana = ruta.horas.filter(h => {
+        const diff = Math.min(
+          Math.abs(h - horaActual),
+          24 - Math.abs(h - horaActual) // diferencia circular (23 y 0 están cerca)
+        );
+        return diff <= 1;
+      }).length;
+
+      // Requisito para sugerir: al menos 2 viajes en esta franja horaria
+      if (enVentana >= 2 && enVentana > mejorPuntaje) {
+        mejorPuntaje = enVentana;
+        mejor = ruta;
+      }
+    }
+
+    if (!mejor) return null;
+    return {
+      origen: mejor.origen,
+      destino: mejor.destino,
+      tipoVehiculo: mejor.tipoVehiculo || "auto",
+      veces: mejorPuntaje,
+      destinoNombre: mejor.destino.nombre || "tu destino habitual",
+    };
+  } catch (e) {
+    return null;
+  }
 }
 
 async function construirBotonesHistorial(phone) {
@@ -521,4 +579,4 @@ function calcularPrecio(km, tipoVehiculo) {
 }
 
 
-module.exports = { fechaStrBolivia, horaStrBolivia, formatearFechaPromo, promoCodigosActiva, enPromoGratis, choferPagoAlDia, generarCodigoUnico, crearCodigoPromo, validarCodigoPromo, consumirCodigoPromo, mensajeCodigoEntregado, enviarCodigoDescuento, validarPlaca, normalizarPlaca, acortarParaBoton, esIntentoCancelar, esPedidoAyuda, esPlusCode, detectarIncompatibilidadMoto, obtenerUltimoViaje, obtenerDestinosFrecuentes, guardarRutaFrecuente, construirBotonesHistorial, escapeHtml, normalizarNombreCalle, llaveEsquina, buscarEsquinaMapeada, guardarEsquina, obtenerLugarPersonal, guardarLugarPersonal, evaluarReferencia, mensajePidiendoReferencia, calcularPrecio, validarEsquinaConGoogle };
+module.exports = { fechaStrBolivia, horaStrBolivia, formatearFechaPromo, promoCodigosActiva, enPromoGratis, choferPagoAlDia, generarCodigoUnico, crearCodigoPromo, validarCodigoPromo, consumirCodigoPromo, mensajeCodigoEntregado, enviarCodigoDescuento, validarPlaca, normalizarPlaca, acortarParaBoton, esIntentoCancelar, esPedidoAyuda, esPlusCode, detectarIncompatibilidadMoto, obtenerUltimoViaje, obtenerDestinosFrecuentes, guardarRutaFrecuente, sugerenciaPorHora, construirBotonesHistorial, escapeHtml, normalizarNombreCalle, llaveEsquina, buscarEsquinaMapeada, guardarEsquina, obtenerLugarPersonal, guardarLugarPersonal, evaluarReferencia, mensajePidiendoReferencia, calcularPrecio, validarEsquinaConGoogle };
