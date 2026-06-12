@@ -359,6 +359,7 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
         await solicitarRating(viaje.usuarioPhone, viaje._id);
 
         if (sigueAlDia) {
+          await deleteSession(phone); // limpiar sesión para que el webhook no lo confunda con pasajero
           await enviarBotones(phone, `✅ Viaje finalizado!\n🟢 Ya estás LIBRE para el siguiente viaje.`, [
             { id: "chofer_ocupado", title: "🔴 Ocupado" },
             { id: "chofer_ayuda", title: "❓ Ayuda" },
