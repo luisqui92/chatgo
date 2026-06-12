@@ -9,7 +9,6 @@ const { CONFIG, log } = require("../config");
 const { Usuario, Chofer, Viaje, ListaEspera, CodigoPromo, LocationReference } = require("../db/models");
 const { getSession, checkRateLimit, sessionCache, yaProcesoMensaje } = require("../services/session");
 const { enviarMensaje, enviarBotones, verificarFirmaMeta } = require("../services/whatsapp");
-const { wialonLogin, obtenerUbicacionChofer } = require("../services/wialon");
 const { procesarMensajeUsuario } = require("../flows/pasajero");
 const { procesarMensajeChofer } = require("../flows/chofer");
 const { enPromoGratis, fechaStrBolivia, formatearFechaPromo, promoCodigosActiva } = require("../services/utils");
