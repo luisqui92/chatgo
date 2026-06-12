@@ -73,35 +73,37 @@ app.post("/webhook", limitWebhook, async (req, res) => {
           continue;
         }
 
-        // FIX BUG#8 — routing chofer/pasajero mejorado
+        // ROUTING chofer/pasajero
         const esChofer = await Chofer.exists({ phone });
         const session = await getSession(phone);
 
-        // Un pasajero con sesión activa de viaje NO debe ser re-ruteado al flujo chofer
-        // aunque esté registrado como chofer en la BD
-        const sesionEsPasajero = session && session.step && !session.step.startsWith("chofer_") && session.step !== "eligiendo_rol";
-
-        // Verificar también si hay un viaje activo como pasajero en DB
-        // Esto cubre el caso donde la sesión está corrupta pero el viaje sigue activo
-        const tieneViajeActivoPasajero = sesionEsPasajero ? false : !!(await Viaje.findOne({
+        // Si es chofer registrado, NUNCA lo tratamos como pasajero por sesión residual.
+        // Solo va al flujo pasajero si tiene un viaje activo como pasajero en DB.
+        const tieneViajeActivoPasajero = esChofer ? !!(await Viaje.findOne({
           usuarioPhone: phone,
           estado: { $in: ["pendiente","en_camino","esperando_pasajero","en_curso"] },
-        }).lean());
+        }).lean()) : false;
+
+        // Para no-choferes: sesión activa los mantiene en flujo pasajero
+        const sesionEsPasajero = !esChofer && session && session.step &&
+          !session.step.startsWith("chofer_") && session.step !== "eligiendo_rol";
 
         const esRegistroChofer =
-          !sesionEsPasajero && !tieneViajeActivoPasajero && (
+          !esChofer && !sesionEsPasajero && (
             textoUpper === "CHOFER" ||
             textoUpper === "SOY CHOFER" ||
             textoUpper === "CONDUCTOR" ||
             (session && session.step?.startsWith("chofer_"))
           );
 
-        // Prioridad: si tiene viaje activo como pasajero → siempre pasajero
-        // Si está registrado como chofer Y no tiene sesión de pasajero → chofer
-        if (tieneViajeActivoPasajero || sesionEsPasajero) {
+        log.info(`[ROUTING] phone=${phone} esChofer=${!!esChofer} step=${session?.step || "null"} tieneViajeActivoPasajero=${tieneViajeActivoPasajero}`);
+
+        if (tieneViajeActivoPasajero) {
           await procesarMensajeUsuario(phone, msg, buttonId);
         } else if (esChofer || esRegistroChofer) {
           await procesarMensajeChofer(phone, msg.text?.body || "", buttonId, mediaId, msg);
+        } else if (sesionEsPasajero) {
+          await procesarMensajeUsuario(phone, msg, buttonId);
         } else {
           await procesarMensajeUsuario(phone, msg, buttonId);
         }
