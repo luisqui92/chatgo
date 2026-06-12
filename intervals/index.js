@@ -355,11 +355,6 @@ setInterval(async () => {
       try {
         const posChofer = await getTraccar().obtenerUbicacionChofer(viaje.choferTraccarId);
 
-        // IA SEGURIDAD: monitorear comportamiento sospechoso
-        if (!viaje.alertaSeguridad) {
-          monitorearViajeEnCurso(viaje, posChofer, enviarMensaje).catch(() => {});
-        }
-
         const distDestino = distanciaEntrePuntos(posChofer.lat, posChofer.lng, viaje.destino.lat, viaje.destino.lng);
         if (distDestino < 0.15) {
           await Viaje.findByIdAndUpdate(viaje._id, { llegadaNotificada: true });
@@ -376,41 +371,30 @@ setInterval(async () => {
 
   
 // ═══════════════════════════════════════════════════════════════════════════
-// MONITOREO DE SEGURIDAD DEL VIAJE — cada 90 segundos
+// COPILOTO IA — MONITOREO DE SEGURIDAD MULTINIVEL — cada 60 segundos
+// Reemplaza los monitoreos dispersos anteriores con el motor unificado ai/copiloto.js
 // ═══════════════════════════════════════════════════════════════════════════
-const ultimasPosViaje = new Map(); // viajeId -> { lat, lng, timestamp }
+const { evaluarViaje } = require("../ai/copiloto");
 
 setInterval(async () => {
   try {
-    const enCurso = await Viaje.find({ estado: { $in: ["en_camino", "en_curso"] } }).limit(50);
+    // Solo viajes en curso (el pasajero está a bordo = donde importa la seguridad)
+    const enCurso = await Viaje.find({ estado: "en_curso" }).limit(50);
     for (const viaje of enCurso) {
       try {
         if (!viaje.choferTraccarId) continue;
         const pos = await getTraccar().obtenerUbicacionChofer(viaje.choferTraccarId);
-        if (!pos) continue;
-        
-        const posAnterior = ultimasPosViaje.get(String(viaje._id));
-        const posActual = { lat: pos.lat, lng: pos.lng, timestamp: Date.now() };
-        
-        await monitorearSeguridad(viaje, posActual, posAnterior, enviarMensaje);
-        
-        ultimasPosViaje.set(String(viaje._id), posActual);
+        // evaluarViaje maneja internamente GPS muerto, desvío, detención, velocidad, retraso
+        // y escala verde→amarillo→naranja→rojo con sus acciones
+        await evaluarViaje(viaje, pos);
       } catch (e) {
-        log.warn("[MONITOREO_SEG]", e.message);
-      }
-    }
-    
-    // Limpiar posiciones de viajes ya terminados
-    if (ultimasPosViaje.size > 100) {
-      const activos = new Set(enCurso.map(v => String(v._id)));
-      for (const id of ultimasPosViaje.keys()) {
-        if (!activos.has(id)) ultimasPosViaje.delete(id);
+        log.warn("[COPILOTO_ITEM]", e.message);
       }
     }
   } catch (e) {
-    log.error("[MONITOREO_SEG_INTERVAL]", e.message);
+    log.error("[COPILOTO_INTERVAL]", e.message);
   }
-}, 90 * 1000); // cada 90 segundos
+}, 60 * 1000); // cada 60 segundos
 
 // ═══════════════════════════════════════════════════════════════════════════
 // MONITOREO DE TRÁFICO Y DESVÍO DE RUTA — cada 2 minutos

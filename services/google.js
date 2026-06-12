@@ -432,6 +432,67 @@ async function calcularDistancia(origen, destino) {
 }
 
 // Calcula tiempo en ruta con tráfico en tiempo real
+// ─── COPILOTO IA: ruta completa con polilínea (Directions API) ──────────────
+// Decodifica el formato polyline de Google a array de {lat,lng}
+function decodificarPolyline(encoded) {
+  const puntos = [];
+  let index = 0, lat = 0, lng = 0;
+  while (index < encoded.length) {
+    let b, shift = 0, result = 0;
+    do { b = encoded.charCodeAt(index++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+    lat += ((result & 1) ? ~(result >> 1) : (result >> 1));
+    shift = 0; result = 0;
+    do { b = encoded.charCodeAt(index++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+    lng += ((result & 1) ? ~(result >> 1) : (result >> 1));
+    puntos.push({ lat: lat / 1e5, lng: lng / 1e5 });
+  }
+  return puntos;
+}
+
+// Obtiene la ruta recomendada: polilínea, distancia, tiempo. Para guardar al aceptar el viaje.
+async function obtenerRutaCompleta(origenLat, origenLng, destinoLat, destinoLng) {
+  try {
+    const res = await axios.get(
+      "https://maps.googleapis.com/maps/api/directions/json",
+      {
+        params: {
+          origin: `${origenLat},${origenLng}`,
+          destination: `${destinoLat},${destinoLng}`,
+          key: CONFIG.GOOGLE_MAPS_KEY,
+          mode: "driving",
+          departure_time: "now",
+          traffic_model: "best_guess",
+        },
+        timeout: CONFIG.TIMEOUT_GOOGLE,
+      }
+    );
+    if (res.data.status !== "OK" || !res.data.routes?.length) return null;
+    const route = res.data.routes[0];
+    const leg = route.legs?.[0];
+    const encoded = route.overview_polyline?.points || null;
+    return {
+      polilinea: encoded,
+      puntos: encoded ? decodificarPolyline(encoded) : [],
+      distanciaKm: leg ? Math.round((leg.distance?.value || 0) / 100) / 10 : null,
+      minutosEstimados: leg ? Math.round((leg.duration_in_traffic?.value || leg.duration?.value || 0) / 60) : null,
+    };
+  } catch (e) {
+    log.error("[RUTA_COMPLETA]", e.message);
+    return null;
+  }
+}
+
+// Distancia mínima (metros) de un punto a la polilínea de la ruta. Para detectar desvío.
+function distanciaARuta(lat, lng, puntosRuta) {
+  if (!puntosRuta || puntosRuta.length === 0) return null;
+  let minMetros = Infinity;
+  for (const p of puntosRuta) {
+    const d = distanciaEntrePuntos(lat, lng, p.lat, p.lng) * 1000; // km → m
+    if (d < minMetros) minMetros = d;
+  }
+  return Math.round(minMetros);
+}
+
 async function calcularTiempoConTrafico(origenLat, origenLng, destinoLat, destinoLng) {
   try {
     const res = await axios.get(
@@ -657,4 +718,4 @@ async function verificarTraficoEnRuta(origen, destino) {
 }
 
 
-module.exports = { distanciaEntrePuntos, calcularTiempoConTrafico, evaluarPrecisionReferencia, extraerCoordsDeUrlGmaps, resolverUrlCorta, extraerNombreLugarDeUrl, detectarYExtrarCoordsMaps, normalizarReferencia, generarTrigramas, similitudTexto, buscarReferenciaEnMemoria, guardarReferenciaVoz, dentroDeCocha, geocodificarConMemoria, calcularDistancia, calcularDistanciaConParadas, generarLinkRutaConParadas, geocodificarDireccion, obtenerDireccion, verificarTraficoEnRuta };
+module.exports = { distanciaEntrePuntos, calcularTiempoConTrafico, obtenerRutaCompleta, distanciaARuta, decodificarPolyline, evaluarPrecisionReferencia, extraerCoordsDeUrlGmaps, resolverUrlCorta, extraerNombreLugarDeUrl, detectarYExtrarCoordsMaps, normalizarReferencia, generarTrigramas, similitudTexto, buscarReferenciaEnMemoria, guardarReferenciaVoz, dentroDeCocha, geocodificarConMemoria, calcularDistancia, calcularDistanciaConParadas, generarLinkRutaConParadas, geocodificarDireccion, obtenerDireccion, verificarTraficoEnRuta };

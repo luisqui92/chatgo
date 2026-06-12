@@ -96,6 +96,8 @@ const viajeSchema = new mongoose.Schema(
     fechaInicio: { type: Date, default: Date.now },
     fechaAsignacion: Date,
     fechaAceptacion: Date,
+    fechaInicioViaje: Date,
+    tiempoEstimadoMin: Number,
     fechaFin: Date,
     llegadaNotificada: { type: Boolean, default: false },
     llegadaOrigenNotificada: { type: Boolean, default: false },
@@ -104,6 +106,25 @@ const viajeSchema = new mongoose.Schema(
     comentarioPasajero: String,
     ratingSolicitado: { type: Boolean, default: false },
     codigoPromoGenerado: String,
+    // ─── COPILOTO IA: ruta y monitoreo de seguridad ───────────────────────
+    rutaPolilinea: { type: String, default: null },      // polyline codificada de Google (overview_polyline)
+    rutaPuntos: [{ lat: Number, lng: Number }],          // puntos decodificados para cálculo de desvío
+    nivelAlerta: { type: String, enum: ["verde", "amarillo", "naranja", "rojo"], default: "verde", index: true },
+    eventosSeguridad: [{
+      tipo: String,        // desvio | retraso | detenido | velocidad_anormal | panico | zona_aislada
+      nivel: String,       // amarillo | naranja | rojo
+      detalle: String,
+      lat: Number,
+      lng: Number,
+      timestamp: { type: Date, default: Date.now },
+    }],
+    detenidoDesde: { type: Date, default: null },         // cuándo empezó a estar detenido (para timeout)
+    ultimaPosicionLat: Number,
+    ultimaPosicionLng: Number,
+    ultimaPosicionAt: Date,
+    panicoActivado: { type: Boolean, default: false },
+    panicoAt: Date,
+    extendidoPorTrafico: { type: Boolean, default: false },
   },
   { timestamps: true }
 );

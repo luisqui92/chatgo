@@ -20,7 +20,7 @@ const { Usuario, Chofer, Viaje, LocationReference } = require("../db/models");
 const { getSession, setSession, updateSession, deleteSession } = require("../services/session");
 const { enviarMensaje, enviarBotones, enviarImagen, reenviarImagenPorId, relayMensajeChat, descargarImagenMeta } = require("../services/whatsapp");
 const { obtenerUbicacionChofer, liberarReservaChoferTraccar, generarLinkRastreoPropio } = require("../services/traccar");
-const { normalizarReferencia, guardarReferenciaVoz, calcularDistancia, calcularDistanciaConParadas, calcularTiempoConTrafico } = require("../services/google");
+const { normalizarReferencia, guardarReferenciaVoz, calcularDistancia, calcularDistanciaConParadas, calcularTiempoConTrafico, obtenerRutaCompleta } = require("../services/google");
 const { validarComprobantePago } = require("../services/openai");
 const { registrarEventoChofer, calcularMultiplierSurge, aplicarSurge, textoSurge, registrarViajeEnDemanda, actualizarUltimoViaje } = require("../ai");
 const { asignarChofer, procesarPedidoAyuda, solicitarRating } = require("../flows/viaje");
@@ -47,6 +47,20 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
   if (!buttonId && mensajeTexto && esPedidoAyuda(mensajeTexto)) {
     await procesarPedidoAyuda(phone, true);
     return;
+  }
+
+  // ─── COPILOTO IA: pánico del chofer por palabra clave ────────────────────
+  if (!buttonId && mensajeTexto && /\b(emergencia|auxilio|me asaltan|me est[aá]n robando|s[aá]quenme|pánico|panico)\b/i.test(mensajeTexto)) {
+    const { activarPanico } = require("../ai/copiloto");
+    const viajePanico = await Viaje.findOne({
+      choferPhone: phone,
+      estado: { $in: ["en_curso", "esperando_pasajero", "en_camino"] },
+    }).sort({ createdAt: -1 });
+    if (viajePanico) {
+      await activarPanico(viajePanico, "chofer");
+      await enviarMensaje(phone, "🆘 Alerta enviada. Nuestro equipo fue notificado y seguimos tu ubicación. Si es grave, llama al 110.");
+      return;
+    }
   }
 
   if (buttonId) {
@@ -182,20 +196,36 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
     if (buttonId === "iniciar_viaje") {
       const viaje = await Viaje.findOne({ choferTraccarId: chofer.traccarId, estado: "esperando_pasajero" });
       if (!viaje) return enviarMensaje(phone, "No tienes viajes activos.");
-      // Calcular tiempo estimado con tráfico al iniciar
+      // Calcular ruta completa (polilínea + tiempo con tráfico) al iniciar
       let tiempoEstimadoMin = null;
+      let rutaUpdate = {};
       try {
-        const trafico = await calcularTiempoConTrafico(
+        const ruta = await obtenerRutaCompleta(
           viaje.origen.lat, viaje.origen.lng,
           viaje.destino.lat, viaje.destino.lng
         );
-        if (trafico) tiempoEstimadoMin = trafico.minutosConTrafico;
-      } catch(e) { log.error("[INICIO_VIAJE_TRAFICO]", e.message); }
+        if (ruta) {
+          tiempoEstimadoMin = ruta.minutosEstimados;
+          rutaUpdate = {
+            rutaPolilinea: ruta.polilinea,
+            rutaPuntos: ruta.puntos,
+          };
+        } else {
+          // fallback: al menos el tiempo con tráfico
+          const trafico = await calcularTiempoConTrafico(
+            viaje.origen.lat, viaje.origen.lng,
+            viaje.destino.lat, viaje.destino.lng
+          );
+          if (trafico) tiempoEstimadoMin = trafico.minutosConTrafico;
+        }
+      } catch(e) { log.error("[INICIO_VIAJE_RUTA]", e.message); }
 
       await Viaje.findByIdAndUpdate(viaje._id, {
         estado: "en_curso",
         tiempoEstimadoMin,
         fechaInicioViaje: new Date(),
+        nivelAlerta: "verde",
+        ...rutaUpdate,
       });
       const session = await getSession(viaje.usuarioPhone);
       if (session) await updateSession(viaje.usuarioPhone, { ...session, step: "en_curso" });

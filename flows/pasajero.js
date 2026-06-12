@@ -299,6 +299,35 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
     }
   }
 
+  // ─── COPILOTO IA: respuesta del pasajero a alerta de seguridad ───────────
+  if (buttonId === "seg_todo_bien" || buttonId === "seg_necesito_ayuda") {
+    const { manejarRespuestaPasajero } = require("../ai/copiloto");
+    const viajeSeg = await Viaje.findOne({
+      usuarioPhone: phone,
+      estado: { $in: ["en_curso", "esperando_pasajero", "en_camino"] },
+    }).sort({ createdAt: -1 });
+    if (viajeSeg) {
+      await manejarRespuestaPasajero(viajeSeg, buttonId);
+    } else {
+      await enviarMensaje(phone, "No encontramos un viaje activo. Si es una emergencia, llama al 110.");
+    }
+    return;
+  }
+
+  // ─── COPILOTO IA: botón de pánico manual del pasajero ────────────────────
+  if (buttonId === "seg_panico" || (texto && !buttonId && /\b(emergencia|auxilio|ayuda urgente|me est[aá]n|s[aá]quenme|secuestr)\b/i.test(texto))) {
+    const { activarPanico } = require("../ai/copiloto");
+    const viajePanico = await Viaje.findOne({
+      usuarioPhone: phone,
+      estado: { $in: ["en_curso", "esperando_pasajero", "en_camino"] },
+    }).sort({ createdAt: -1 });
+    if (viajePanico) {
+      await activarPanico(viajePanico, "pasajero");
+      await enviarMensaje(phone, "🆘 Alerta enviada. Nuestro equipo fue notificado y seguimos tu ubicación. Si es grave, llama al 110.");
+    }
+    return;
+  }
+
   // ─── AYUDA por palabra clave ─────────────────────────────────────────────
   if (texto && !buttonId && esPedidoAyuda(texto)) {
     await procesarPedidoAyuda(phone, false);
