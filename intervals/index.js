@@ -186,6 +186,49 @@ setInterval(async () => {
       { estado: "buscando_otro_chofer", updatedAt: { $lt: limiteZombie } },
       { estado: "cancelado_timeout", cancelacionMotivo: "zombie_cleanup", fechaFin: new Date() }
     );
+
+    // ZOMBIE CLEANUP EXTENDIDO — viajes activos que llevan más de 90 min sin completarse
+    // Cubre: en_camino, esperando_pasajero, en_curso olvidados por el chofer
+    const limiteViaje = new Date(Date.now() - 90 * 60 * 1000);
+    const viajesZombie = await Viaje.find({
+      estado: { $in: ["en_camino", "esperando_pasajero", "en_curso"] },
+      updatedAt: { $lt: limiteViaje },
+    }).lean();
+
+    for (const viaje of viajesZombie) {
+      try {
+        await Viaje.findByIdAndUpdate(viaje._id, {
+          estado: "cancelado_timeout",
+          cancelacionMotivo: "zombie_viaje_activo",
+          fechaFin: new Date(),
+        });
+        // Liberar al chofer
+        if (viaje.choferPhone) {
+          await Chofer.findOneAndUpdate(
+            { phone: viaje.choferPhone },
+            { estado: "libre", viajeReservado: null, reservadoHasta: null }
+          );
+          await enviarMensaje(
+            viaje.choferPhone,
+            "⏱️ El viaje fue cerrado automáticamente por inactividad (más de 90 min). Ya estás *LIBRE* para nuevos viajes."
+          );
+        }
+        // Notificar al pasajero si corresponde
+        if (viaje.usuarioPhone) {
+          await enviarMensaje(
+            viaje.usuarioPhone,
+            "❌ Tu viaje fue cancelado automáticamente por inactividad. Escribe cuando quieras pedir un nuevo taxi. 🚖"
+          );
+        }
+        await enviarMensaje(
+          CONFIG.ADMIN_PHONE,
+          `⚠️ *Viaje zombie cerrado*\n\n🆔 ${viaje._id}\n👤 Chofer: ${viaje.choferNombre || "—"} (+${viaje.choferPhone || "—"})\n🚗 Placa: ${viaje.choferPlaca || "—"}\n📍 Estado anterior: ${viaje.estado}\n⏱️ Duración: >90 min`
+        );
+        log.warn(`[ZOMBIE] Viaje ${viaje._id} cerrado — estado: ${viaje.estado}, chofer: ${viaje.choferPhone}`);
+      } catch (eZombie) {
+        log.error("[ZOMBIE_ITEM]", eZombie.message);
+      }
+    }
   } catch (e) {
     log.error("[TIMEOUT_LOOP]", e.message);
   }
