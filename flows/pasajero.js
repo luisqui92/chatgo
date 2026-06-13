@@ -155,22 +155,33 @@ async function flujoRapidoVoz(phone, session) {
       step: "confirmando_viaje_voz",
     });
 
-    const tiempoTxt = duracion ? `como ${duracion} minutos` : "unos minutos";
-    // Texto VISUAL corto (el audio ya dice todo el detalle, no repetirlo)
-    const mensaje = `🚗 *${session.destino?.nombre || "Tu viaje"}* — Bs ${precioAuto}\n\n¿Confirmo el viaje?`;
-    // Texto de VOZ completo (lo que el adulto mayor escucha)
+    // Texto de tiempo limpio (duracion puede venir como número o con "min")
+    const minNum = typeof duracion === "number" ? duracion : parseInt(String(duracion)) || null;
+    const tiempoTxt = minNum ? `unos ${minNum} minutos` : "pocos minutos";
+
+    // Mensaje de VOZ: el audio dice todo y pide confirmar hablando
     const mensajeVoz =
       `${infoChofer}El viaje a ${session.destino?.nombre || "su destino"} ` +
-      `dura ${tiempoTxt} y le cuesta ${precioAuto} bolivianos. ¿Confirmo el viaje? Dígame sí o no.`;
+      `dura ${tiempoTxt} y le cuesta ${precioAuto} bolivianos. ` +
+      `Si está de acuerdo, respóndame con un sí.`;
 
-    await enviarBotones(
-      phone, mensaje,
-      [
+    // Texto VISUAL mínimo de referencia (corto, no repite todo)
+    const mensajeTexto = `🚗 ${session.destino?.nombre || "Tu viaje"} — *Bs ${precioAuto}*\n\n_Respóndeme con un 🎤 "sí" para confirmar._`;
+
+    // Como la IA entendió todo con claridad, vamos por VOZ PURA (sin botones).
+    // El usuario confirma diciendo "sí" por audio. El step confirmando_viaje_voz
+    // intercepta su próximo audio y lo interpreta.
+    if (await _usuarioUsaVoz(phone)) {
+      const audio = await generarAudioDesdeTexto(limpiarParaVoz(mensajeVoz));
+      if (audio) await enviarVoz(phone, audio);
+      await enviarMensajeRaw(phone, mensajeTexto); // referencia visual corta
+    } else {
+      // Respaldo (no debería pasar en flujo voz, pero por seguridad): botones
+      await enviarBotonesRaw(phone, `🚗 ${session.destino?.nombre || "Tu viaje"} — Bs ${precioAuto}\n\n¿Confirmo el viaje?`, [
         { id: "confirmar_viaje_voz_si", title: "✅ Sí, confirmar" },
         { id: "confirmar_viaje_voz_no", title: "❌ No" },
-      ],
-      mensajeVoz
-    );
+      ]);
+    }
     return true;
   } catch (e) {
     log.error("[FLUJO_VOZ]", e.message);
