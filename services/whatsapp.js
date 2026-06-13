@@ -82,51 +82,64 @@ async function reenviarAudioPorId(to, audioId) {
   }
 }
 
-// ─── ENVIAR VOZ (TTS): sube un audio MP3 a WhatsApp y lo envía ──────────────
-// Usado por el modo adulto mayor para responder hablando en vez de con texto.
+// ─── ENVIAR VOZ (TTS): sube audio MP3 a WhatsApp y lo envía ─────────────────
+// Replica el método probado del bot parroquial: FormData + Blob NATIVOS de Node 18+
+// (NO la librería form-data, que Meta a veces rechaza).
 async function enviarVoz(to, audioBuffer) {
   if (!audioBuffer || audioBuffer.length === 0) {
     log.warn("[WSP] enviarVoz: buffer vacío");
     return false;
   }
   try {
-    // 1) Subir el audio MP3 a WhatsApp para obtener un media ID
-    const form = new FormData();
-    form.append("messaging_product", "whatsapp");
-    form.append("file", audioBuffer, {
-      filename: "respuesta.mp3",
-      contentType: "audio/mpeg",
-    });
-    form.append("type", "audio/mpeg");
+    // 1) Subir el audio usando Blob + FormData nativos (igual que el bot que funcionaba)
+    const blob = new Blob([audioBuffer], { type: "audio/mpeg" });
+    const formData = new FormData();
+    formData.append("file", blob, "audio.mp3");
+    formData.append("messaging_product", "whatsapp");
+    formData.append("type", "audio/mpeg");
 
-    const upload = await axios.post(
+    const upRes = await fetch(
       `https://graph.facebook.com/v19.0/${CONFIG.WHATSAPP_PHONE_ID}/media`,
-      form,
       {
-        headers: { Authorization: `Bearer ${CONFIG.WHATSAPP_TOKEN}`, ...form.getHeaders() },
-        timeout: CONFIG.TIMEOUT_META,
-        maxBodyLength: Infinity,
-        maxContentLength: Infinity,
+        method: "POST",
+        headers: { Authorization: `Bearer ${CONFIG.WHATSAPP_TOKEN}` },
+        body: formData,
       }
     );
-    const mediaId = upload.data?.id;
-    if (!mediaId) {
-      log.error("[WSP] enviarVoz: no se obtuvo mediaId del upload");
+    const upData = await upRes.json();
+    if (!upData.id) {
+      log.error(`[WSP] enviarVoz: error subiendo audio: ${JSON.stringify(upData)}`);
       return false;
     }
-    log.info(`[WSP] enviarVoz: audio MP3 subido, mediaId=${mediaId}`);
+    log.info(`[WSP] enviarVoz: audio subido, media_id=${upData.id}`);
 
-    // 2) Enviar como audio (sin voice:true; MP3 va como audio reproducible)
-    await axios.post(
+    // 2) Enviar el audio con el media_id
+    const sendRes = await fetch(
       `https://graph.facebook.com/v19.0/${CONFIG.WHATSAPP_PHONE_ID}/messages`,
-      { messaging_product: "whatsapp", to, type: "audio", audio: { id: mediaId } },
-      { headers: { Authorization: `Bearer ${CONFIG.WHATSAPP_TOKEN}` }, timeout: CONFIG.TIMEOUT_META }
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${CONFIG.WHATSAPP_TOKEN}`,
+        },
+        body: JSON.stringify({
+          messaging_product: "whatsapp",
+          recipient_type: "individual",
+          to,
+          type: "audio",
+          audio: { id: upData.id },
+        }),
+      }
     );
+    const sendData = await sendRes.json();
+    if (!sendRes.ok) {
+      log.error(`[WSP] enviarVoz: error enviando audio: ${JSON.stringify(sendData)}`);
+      return false;
+    }
     log.info(`[WSP] enviarVoz: audio enviado a ${to}`);
     return true;
   } catch (e) {
-    let detalle = e.response?.data?.error?.message || e.message;
-    log.error(`[WSP] enviarVoz falló: ${detalle}`);
+    log.error(`[WSP] enviarVoz falló: ${e.message}`);
     return false;
   }
 }

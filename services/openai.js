@@ -202,18 +202,17 @@ Solo JSON.`,
 }
 
 // ─── TEXT-TO-SPEECH: genera audio amigable desde texto (modo adulto mayor) ──
-// Devuelve un Buffer con el audio en formato OGG/Opus (compatible con WhatsApp voice).
-// Usa la API de TTS de OpenAI. Voz "nova" o "shimmer" suenan cálidas y claras.
-async function generarAudioDesdeTexto(texto, voz = "shimmer") {
+// Devuelve un Buffer con el audio MP3 (formato probado con WhatsApp).
+// Usa la API de TTS de OpenAI. Voz "onyx" es cálida y natural en español.
+async function generarAudioDesdeTexto(texto, voz = "onyx") {
   try {
     const res = await axios.post(
       "https://api.openai.com/v1/audio/speech",
       {
         model: "tts-1",
         voice: voz,
-        input: texto,
-        response_format: "mp3", // mp3 = formato universal que WhatsApp acepta sin problemas
-        speed: 0.95,
+        input: texto.substring(0, 4000), // límite de caracteres de TTS
+        response_format: "mp3", // mp3 = formato probado con el bot que funcionaba
       },
       {
         headers: {
