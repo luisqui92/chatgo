@@ -165,8 +165,8 @@ async function flujoRapidoVoz(phone, session) {
       `dura ${tiempoTxt} y le cuesta ${precioAuto} bolivianos. ` +
       `Si está de acuerdo, respóndame con un sí.`;
 
-    // Texto VISUAL mínimo de referencia (corto, no repite todo)
-    const mensajeTexto = `🚗 ${session.destino?.nombre || "Tu viaje"} — *Bs ${precioAuto}*\n\n_Respóndeme con un 🎤 "sí" para confirmar._`;
+    // Texto VISUAL mínimo de referencia (el audio ya dice todo, incluyendo "responda sí")
+    const mensajeTexto = `🚗 ${session.destino?.nombre || "Tu viaje"} — *Bs ${precioAuto}*`;
 
     // Como la IA entendió todo con claridad, vamos por VOZ PURA (sin botones).
     // El usuario confirma diciendo "sí" por audio. El step confirmando_viaje_voz
@@ -766,14 +766,17 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
       );
       // Marcar que ya se explicó — no volver a mostrar este mensaje
       await Usuario.findOneAndUpdate({ phone }, { audioOnboardingHecho: true });
-    } else {
+    } else if (!(await _usuarioUsaVoz(phone))) {
+      // Solo mostrar "Procesando" si NO está en modo voz (en voz, el audio de respuesta basta)
       await enviarMensajeRaw(phone, "🎤 _Procesando tu audio..._");
     }
     try {
       const audioUrl = await obtenerUrlMedia(mensaje.audio?.id || mensaje.voice?.id);
       const transcripcion = await transcribirAudio(audioUrl);
-      // "Escuché" va como texto de referencia, sin audio (para no duplicar voz)
-      await enviarMensajeRaw(phone, `🎤 Escuché: _"${transcripcion}"_`);
+      // "Escuché" solo en modo texto (en voz sería redundante con el audio de respuesta)
+      if (!(await _usuarioUsaVoz(phone))) {
+        await enviarMensajeRaw(phone, `🎤 Escuché: _"${transcripcion}"_`);
+      }
       const ubicaciones = await extraerUbicaciones(transcripcion);
       // Detalle estructurado (nuevo formato: tipo, calle1, calle2, etc.)
       const detOrigen = ubicaciones.origenDetalle;
