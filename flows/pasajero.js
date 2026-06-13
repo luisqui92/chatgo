@@ -156,10 +156,9 @@ async function flujoRapidoVoz(phone, session) {
     });
 
     const tiempoTxt = duracion ? `como ${duracion} minutos` : "unos minutos";
-    const mensaje =
-      `🚗 *${session.destino?.nombre || "Tu viaje"}*\n\n` +
-      `${infoChofer}El viaje dura ${tiempoTxt} y cuesta *Bs ${precioAuto}*.\n\n` +
-      `¿Confirmo el viaje?`;
+    // Texto VISUAL corto (el audio ya dice todo el detalle, no repetirlo)
+    const mensaje = `🚗 *${session.destino?.nombre || "Tu viaje"}* — Bs ${precioAuto}\n\n¿Confirmo el viaje?`;
+    // Texto de VOZ completo (lo que el adulto mayor escucha)
     const mensajeVoz =
       `${infoChofer}El viaje a ${session.destino?.nombre || "su destino"} ` +
       `dura ${tiempoTxt} y le cuesta ${precioAuto} bolivianos. ¿Confirmo el viaje? Dígame sí o no.`;
