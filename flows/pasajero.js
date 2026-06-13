@@ -14,6 +14,7 @@ const { calcularMultiplierSurge, aplicarSurge, textoSurge } = require("../ai");
 const { generarAudioDesdeTexto } = require("../services/openai");
 const { enviarVoz } = require("../services/whatsapp");
 const { asignarChofer, procesarCancelacionPasajero, procesarPedidoAyuda, registrarRating } = require("../flows/viaje");
+const { buscarChoferDisponibleTraccar } = require("../services/traccar");
 const { procesarMensajeChofer } = require("../flows/chofer");
 
 // ─── SISTEMA DE VOZ GLOBAL (Opción C: espejo + forzado) ──────────────────────
@@ -59,9 +60,10 @@ async function enviarMensaje(phone, texto) {
 
 // Wrapper de enviarBotones: los botones SIEMPRE van como texto (el usuario los necesita ver
 // para tocarlos), pero si está en modo voz, primero le mandamos un audio leyendo el mensaje.
-async function enviarBotones(phone, texto, botones) {
+// textoVoz opcional: versión corta/natural para el audio (si no, usa el texto visual).
+async function enviarBotones(phone, texto, botones, textoVoz) {
   if (await _usuarioUsaVoz(phone)) {
-    const audio = await generarAudioDesdeTexto(limpiarParaVoz(texto));
+    const audio = await generarAudioDesdeTexto(limpiarParaVoz(textoVoz || texto));
     if (audio) await enviarVoz(phone, audio);
   }
   await enviarBotonesRaw(phone, texto, botones);
@@ -113,6 +115,87 @@ async function preguntarOpcionesViaje(phone, session) {
   botones.push({ id: "ver_precio", title: "💰 Ver precio" });
 
   await enviarBotones(phone, resumen, botones);
+}
+
+// ─── FLUJO RÁPIDO POR VOZ (adultos mayores / audio claro) ────────────────────
+// Cuando origen y destino ya están resueltos y el usuario va por voz, salta la
+// cadena de botones: calcula precio, ve si hay auto cerca, y pregunta por voz
+// "tengo un móvil a X min, cuesta Y Bs, ¿confirmo?". El usuario responde "sí"
+// por audio (o toca un botón de respaldo). Devuelve true si manejó el flujo.
+async function flujoRapidoVoz(phone, session) {
+  try {
+    if (!session.origen?.lat || !session.destino?.lat) return false;
+
+    const { km, duracion } = await calcularDistancia(session.origen, session.destino);
+    const auto = calcularPrecio(km, "auto");
+    const { multiplier } = await calcularMultiplierSurge(session.origen?.lat, session.origen?.lng);
+    const precioAuto = aplicarSurge(auto.total, multiplier);
+
+    // Ver si hay un chofer cerca
+    let infoChofer;
+    try {
+      const chofer = await buscarChoferDisponibleTraccar(session.origen, [], "auto");
+      if (chofer?.ubicacion?.minutos != null) {
+        const min = Math.max(chofer.ubicacion.minutos, 2);
+        infoChofer = `Tengo un móvil cerca, a unos ${min} minutos. `;
+      } else {
+        infoChofer = "Voy a buscar un móvil para usted. ";
+      }
+    } catch {
+      infoChofer = "Voy a buscar un móvil para usted. ";
+    }
+
+    await updateSession(phone, {
+      ...session,
+      distancia: km,
+      duracionEstimada: duracion,
+      precioAuto,
+      tipoVehiculo: "auto",
+      multiplier,
+      step: "confirmando_viaje_voz",
+    });
+
+    const tiempoTxt = duracion ? `como ${duracion} minutos` : "unos minutos";
+    const mensaje =
+      `🚗 *${session.destino?.nombre || "Tu viaje"}*\n\n` +
+      `${infoChofer}El viaje dura ${tiempoTxt} y cuesta *Bs ${precioAuto}*.\n\n` +
+      `¿Confirmo el viaje?`;
+    const mensajeVoz =
+      `${infoChofer}El viaje a ${session.destino?.nombre || "su destino"} ` +
+      `dura ${tiempoTxt} y le cuesta ${precioAuto} bolivianos. ¿Confirmo el viaje? Dígame sí o no.`;
+
+    await enviarBotones(
+      phone, mensaje,
+      [
+        { id: "confirmar_viaje_voz_si", title: "✅ Sí, confirmar" },
+        { id: "confirmar_viaje_voz_no", title: "❌ No" },
+      ],
+      mensajeVoz
+    );
+    return true;
+  } catch (e) {
+    log.error("[FLUJO_VOZ]", e.message);
+    return false;
+  }
+}
+
+// Detecta si una transcripción de audio corto significa "sí" o "no"
+function interpretarSiNo(texto) {
+  if (!texto) return null;
+  const t = texto.toLowerCase().trim().replace(/[.,!¡¿?]/g, "");
+
+  // Frases de duda que NO son rechazo (no cancelar el viaje por estas)
+  const dudas = ["no se", "no sé", "no entiendo", "no escucho", "no oigo", "no sé qué", "no estoy seguro"];
+  for (const d of dudas) if (t.includes(d)) return null;
+
+  const siPalabras = ["si", "sí", "sa", "ya", "yap", "claro", "dale", "bueno", "esta bien", "está bien", "confirmo", "confirma", "acepto", "ok", "okay", "okey", "correcto", "afirmativo", "de acuerdo"];
+  const noPalabras = ["no", "nop", "para nada", "mejor no", "cancela", "cancelar", "negativo", "no quiero", "no gracias"];
+
+  // "sí" tiene prioridad si aparece claramente
+  for (const s of siPalabras) if (t === s || t.includes(s)) return "si";
+  // "no" solo como palabra sola, al inicio claro, o frases de rechazo explícito
+  for (const n of noPalabras) if (t === n || t.startsWith(n + " ") || t.startsWith(n + ",")) return "no";
+  return null;
 }
 
 async function procesarCalculoViaje(phone, session) {
@@ -378,7 +461,7 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
     // Estados con viaje activo → confirmar antes de cancelar
     const stepsViaje = ["esperando_chofer","chofer_en_camino","chofer_esperando_pasajero","sin_chofer","confirmado","esperando_confirmacion","en_curso"];
     // Estados de flujo de pedido → cancelar directo sin confirmar
-    const stepsPedido = ["esperando_origen","esperando_origen_con_destino","esperando_destino","eligiendo_historial","preguntando_opciones","calculando","eligiendo_tipo_vehiculo","confirmando_moto_incompatible","ofreciendo_codigo","esperando_codigo","esperando_parada","esperando_observacion","confirmando_ubicaciones_voz","aprendiendo_origen_voz","aprendiendo_destino_voz"];
+    const stepsPedido = ["esperando_origen","esperando_origen_con_destino","esperando_destino","eligiendo_historial","preguntando_opciones","calculando","eligiendo_tipo_vehiculo","confirmando_moto_incompatible","ofreciendo_codigo","esperando_codigo","esperando_parada","esperando_observacion","confirmando_ubicaciones_voz","confirmando_viaje_voz","aprendiendo_origen_voz","aprendiendo_destino_voz"];
 
     if (stepsViaje.includes(session.step)) {
       await updateSession(phone, { ...session, step: "confirmando_cancelacion" });
@@ -628,6 +711,31 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
     await updateSession(phone, { ...session, ultimaInteraccionVoz: true });
     session = { ...session, ultimaInteraccionVoz: true };
     _setVozCache(phone, true); // activar voz al instante (sin esperar la DB)
+
+    // INTERCEPCIÓN: si estamos esperando que confirme el viaje por voz (sí/no),
+    // transcribir el audio corto e interpretarlo como sí o no.
+    if (session.step === "confirmando_viaje_voz") {
+      try {
+        const audioUrl = await obtenerUrlMedia(mensaje.audio?.id || mensaje.voice?.id);
+        const transcripcion = await transcribirAudio(audioUrl);
+        const decision = interpretarSiNo(transcripcion);
+        if (decision === "si") {
+          const sessionViaje = { ...session, tipoVehiculo: session.tipoVehiculo || "auto", precioFinal: session.precioAuto };
+          await asignarChofer(phone, sessionViaje);
+        } else if (decision === "no") {
+          await deleteSession(phone);
+          await setSession(phone, { step: "inicio" });
+          await enviarMensaje(phone, "Está bien, cancelé el viaje. Cuando quiera otro, solo dígame a dónde quiere ir. 🚖");
+        } else {
+          await enviarMensaje(phone, "No le entendí bien. ¿Confirmo el viaje? Por favor dígame *sí* o *no*.");
+        }
+      } catch (e) {
+        log.error("[VOZ_CONFIRM]", e.message);
+        await enviarMensaje(phone, "Tuve un problema escuchando. ¿Confirmo el viaje? Dígame *sí* o *no*.");
+      }
+      return;
+    }
+
     // Onboarding de audio: explicar UNA SOLA VEZ cómo funciona y que ayudan a construir el mapa
     const usuarioParaAudio = await Usuario.findOne({ phone }).lean();
     if (!usuarioParaAudio?.audioOnboardingHecho) {
@@ -649,12 +757,13 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
       // Marcar que ya se explicó — no volver a mostrar este mensaje
       await Usuario.findOneAndUpdate({ phone }, { audioOnboardingHecho: true });
     } else {
-      await enviarMensaje(phone, "🎤 _Procesando tu audio..._");
+      await enviarMensajeRaw(phone, "🎤 _Procesando tu audio..._");
     }
     try {
       const audioUrl = await obtenerUrlMedia(mensaje.audio?.id || mensaje.voice?.id);
       const transcripcion = await transcribirAudio(audioUrl);
-      await enviarMensaje(phone, `🎤 Escuché: _"${transcripcion}"_`);
+      // "Escuché" va como texto de referencia, sin audio (para no duplicar voz)
+      await enviarMensajeRaw(phone, `🎤 Escuché: _"${transcripcion}"_`);
       const ubicaciones = await extraerUbicaciones(transcripcion);
       // Detalle estructurado (nuevo formato: tipo, calle1, calle2, etc.)
       const detOrigen = ubicaciones.origenDetalle;
@@ -913,9 +1022,20 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
       const { coords: destinoCoords, aprender: aprenderDestino, referencia: refDestino } = result2;
 
       if (origenCoords && destinoCoords) {
-        // Ambos resueltos — confirmar con el usuario
+        // Ambos resueltos
         origenCoords.nombre = origenCoords.nombre || ubicaciones.origen;
         destinoCoords.nombre = destinoCoords.nombre || ubicaciones.destino;
+
+        // FLUJO RÁPIDO POR VOZ: si el usuario habló (audio claro y completo),
+        // saltamos la confirmación de ubicaciones y la cadena de botones.
+        // Vamos directo a "tengo un móvil a X min, cuesta Y, ¿confirmo?".
+        if (await _usuarioUsaVoz(phone)) {
+          const sesionConViaje = { ...session, origen: origenCoords, destino: destinoCoords };
+          const manejado = await flujoRapidoVoz(phone, sesionConViaje);
+          if (manejado) return;
+          // Si el flujo rápido falló por algo, caemos a la confirmación normal
+        }
+
         await updateSession(phone, {
           ...session,
           origenPendiente: origenCoords,
@@ -929,7 +1049,8 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
             { id: "confirmar_ubicaciones", title: "✅ Sí" },
             { id: "corregir_origen", title: "Cambiar origen" },
             { id: "corregir_destino", title: "Cambiar destino" },
-          ]
+          ],
+          `Vas desde ${ubicaciones.origen}, hasta ${ubicaciones.destino}. Si está bien, toca el botón verde que dice Sí.`
         );
       } else if (origenCoords && !destinoCoords) {
         // Origen OK, destino no mapeado — pedir pin del destino para aprender
@@ -1461,6 +1582,33 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
         await enviarMensaje(phone, "🏁 Envía tu *ubicación de destino* con el pin.");
       }
       break;
+
+    // ─── FLUJO RÁPIDO POR VOZ: el usuario confirma el viaje hablando ─────────
+    case "confirmando_viaje_voz": {
+      // El "sí/no" puede venir como botón o como audio (interpretado antes)
+      let decision = null;
+      if (buttonId === "confirmar_viaje_voz_si") decision = "si";
+      else if (buttonId === "confirmar_viaje_voz_no") decision = "no";
+      else if (texto) decision = interpretarSiNo(texto); // por si escribió "sí"/"no"
+
+      if (decision === "si") {
+        // Confirmado: armar viaje con auto y precio ya calculados, buscar chofer
+        const sessionViaje = {
+          ...session,
+          tipoVehiculo: session.tipoVehiculo || "auto",
+          precioFinal: session.precioAuto,
+        };
+        await asignarChofer(phone, sessionViaje);
+      } else if (decision === "no") {
+        await deleteSession(phone);
+        await setSession(phone, { step: "inicio" });
+        await enviarMensaje(phone, "Está bien, cancelé el viaje. Cuando quiera otro, solo dígame a dónde quiere ir. 🚖");
+      } else {
+        // No se entendió la respuesta — repetir la pregunta de forma simple
+        await enviarMensaje(phone, "No le entendí. ¿Confirmo el viaje? Por favor dígame *sí* o *no*.");
+      }
+      break;
+    }
 
     case "preguntando_opciones": {
       if (buttonId === "agregar_parada") {
