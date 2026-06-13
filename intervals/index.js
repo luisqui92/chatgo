@@ -248,12 +248,14 @@ setInterval(async () => {
             { phone: viaje.choferPhone },
             { estado: "libre", viajeReservado: null, reservadoHasta: null }
           );
+          await deleteSession(viaje.choferPhone); // limpiar sesión del chofer
           await enviarMensaje(
             viaje.choferPhone,
             `⏱️ El viaje fue cerrado automáticamente (${minutosTranscurridos} min sin completarse, límite: ${limiteMin} min). Ya estás *LIBRE* para nuevos viajes.\n\nSi olvidaste presionar *Terminar viaje*, recuerda hacerlo al finalizar cada carrera. 🙏`
           );
         }
         if (viaje.usuarioPhone) {
+          await deleteSession(viaje.usuarioPhone); // limpiar sesión del pasajero (evita step zombie)
           await enviarMensaje(
             viaje.usuarioPhone,
             "❌ Tu viaje fue cerrado automáticamente por inactividad. Escribe cuando quieras pedir un nuevo taxi. 🚖"
