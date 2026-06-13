@@ -289,6 +289,25 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
   const texto = mensaje.text?.body?.trim() || "";
   const textoUpper = texto.toUpperCase();
 
+  // ─── COMANDO DE PRUEBA TTS (temporal, para diagnóstico) ─────────────────
+  // Escribir "/voz algo" hace que el bot responda eso en audio. Para verificar TTS.
+  if (texto && texto.toLowerCase().startsWith("/voz")) {
+    const textoAProbar = texto.slice(4).trim() || "Hola, esta es una prueba de voz de ChatGo. Si escuchas este mensaje, el sistema funciona correctamente.";
+    const { generarAudioDesdeTexto } = require("../services/openai");
+    const { enviarVoz } = require("../services/whatsapp");
+    await enviarMensaje(phone, "🔊 Generando audio de prueba...");
+    const audio = await generarAudioDesdeTexto(textoAProbar);
+    if (!audio) {
+      await enviarMensaje(phone, "❌ Falló la generación del audio (TTS). Revisa los logs [TTS].");
+      return;
+    }
+    const ok = await enviarVoz(phone, audio);
+    if (!ok) {
+      await enviarMensaje(phone, "⚠️ El audio se generó pero falló el envío a WhatsApp. Revisa los logs [WSP] enviarVoz.");
+    }
+    return;
+  }
+
   // ─── CANCELACIÓN por palabra clave ──────────────────────────────────────
   // ─── Comando: "mis lugares" / "casa" / "trabajo" ───────────────────────
   // Detección por texto libre — el usuario quiere gestionar sus lugares guardados
@@ -656,9 +675,35 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
           `   • "${vago.texto} y [otra calle]"\n` +
           `   • "${vago.texto} esquina [calle]"\n` +
           `   • "${vago.texto} al lado de [referencia conocida]"\n\n` +
-          `_O mandame los 📍 pines de las ubicaciones._`;
-        
-        await updateSession(phone, { ...session, step: "esperando_origen" });
+          `_O mandame el 📍 pin de ${origenVago && destinoVago ? "las ubicaciones" : (origenVago ? "tu origen" : "tu destino")}._`;
+
+        // FIX: el step debe coincidir con QUÉ ubicación falta, para que el pin se guarde bien.
+        // Si solo el destino es vago, esperamos el pin del DESTINO (no del origen).
+        if (destinoVago && !origenVago) {
+          // Guardar el origen que sí entendimos, y esperar pin del destino
+          const sessActualizada = { ...session, step: "aprendiendo_destino_voz", referenciaVozDestino: detDestino.texto };
+          // Si el origen del audio se puede resolver, guardarlo
+          if (detOrigen) {
+            const origenCoords = await geocodificarConMemoria(detOrigen.texto);
+            if (origenCoords && !origenCoords._incierto) {
+              sessActualizada.origen = { ...origenCoords, nombre: origenCoords.nombre || detOrigen.texto };
+            }
+          }
+          await updateSession(phone, sessActualizada);
+        } else if (origenVago && !destinoVago) {
+          // Solo el origen es vago: esperar pin del origen, guardar destino si se puede
+          const sessActualizada = { ...session, step: "aprendiendo_origen_voz", referenciaVozOrigen: detOrigen.texto };
+          if (detDestino) {
+            const destinoCoords = await geocodificarConMemoria(detDestino.texto);
+            if (destinoCoords && !destinoCoords._incierto) {
+              sessActualizada.destino = { ...destinoCoords, nombre: destinoCoords.nombre || detDestino.texto };
+            }
+          }
+          await updateSession(phone, sessActualizada);
+        } else {
+          // Ambos vagos: pedir origen primero (flujo de dos pasos)
+          await updateSession(phone, { ...session, step: "aprendiendo_origen_voz", referenciaVozOrigen: detOrigen.texto, referenciaVozDestino: detDestino?.texto });
+        }
         await enviarMensaje(phone, msg);
         return;
       }
