@@ -82,7 +82,7 @@ async function reenviarAudioPorId(to, audioId) {
   }
 }
 
-// ─── ENVIAR VOZ (TTS): sube un buffer de audio a WhatsApp y lo manda como nota de voz ──
+// ─── ENVIAR VOZ (TTS): sube un audio MP3 a WhatsApp y lo envía ──────────────
 // Usado por el modo adulto mayor para responder hablando en vez de con texto.
 async function enviarVoz(to, audioBuffer) {
   if (!audioBuffer || audioBuffer.length === 0) {
@@ -90,15 +90,14 @@ async function enviarVoz(to, audioBuffer) {
     return false;
   }
   try {
-    // 1) Subir el audio a WhatsApp para obtener un media ID
-    // WhatsApp exige audio/ogg con codec opus para notas de voz
+    // 1) Subir el audio MP3 a WhatsApp para obtener un media ID
     const form = new FormData();
     form.append("messaging_product", "whatsapp");
     form.append("file", audioBuffer, {
-      filename: "respuesta.ogg",
-      contentType: "audio/ogg; codecs=opus",
+      filename: "respuesta.mp3",
+      contentType: "audio/mpeg",
     });
-    form.append("type", "audio/ogg; codecs=opus");
+    form.append("type", "audio/mpeg");
 
     const upload = await axios.post(
       `https://graph.facebook.com/v19.0/${CONFIG.WHATSAPP_PHONE_ID}/media`,
@@ -115,15 +114,15 @@ async function enviarVoz(to, audioBuffer) {
       log.error("[WSP] enviarVoz: no se obtuvo mediaId del upload");
       return false;
     }
-    log.info(`[WSP] enviarVoz: audio subido, mediaId=${mediaId}`);
+    log.info(`[WSP] enviarVoz: audio MP3 subido, mediaId=${mediaId}`);
 
-    // 2) Enviar como nota de voz (voice: true)
+    // 2) Enviar como audio (sin voice:true; MP3 va como audio reproducible)
     await axios.post(
       `https://graph.facebook.com/v19.0/${CONFIG.WHATSAPP_PHONE_ID}/messages`,
-      { messaging_product: "whatsapp", to, type: "audio", audio: { id: mediaId, voice: true } },
+      { messaging_product: "whatsapp", to, type: "audio", audio: { id: mediaId } },
       { headers: { Authorization: `Bearer ${CONFIG.WHATSAPP_TOKEN}` }, timeout: CONFIG.TIMEOUT_META }
     );
-    log.info(`[WSP] enviarVoz: nota de voz enviada a ${to}`);
+    log.info(`[WSP] enviarVoz: audio enviado a ${to}`);
     return true;
   } catch (e) {
     let detalle = e.response?.data?.error?.message || e.message;
