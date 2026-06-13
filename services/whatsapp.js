@@ -5,6 +5,7 @@ const https = require("https");
 const http = require("http");
 const url = require("url");
 const os = require("os");
+const FormData = require("form-data");
 const { CONFIG, log } = require("../config");
 
 async function enviarMensaje(to, texto) {
@@ -78,6 +79,42 @@ async function reenviarAudioPorId(to, audioId) {
     );
   } catch (e) {
     log.error("[WSP] reenviarAudio:", e.response?.data?.error?.message || e.message);
+  }
+}
+
+// ─── ENVIAR VOZ (TTS): sube un buffer de audio a WhatsApp y lo manda como nota de voz ──
+// Usado por el modo adulto mayor para responder hablando en vez de con texto.
+async function enviarVoz(to, audioBuffer) {
+  if (!audioBuffer) return false;
+  try {
+    // 1) Subir el audio a WhatsApp para obtener un media ID
+    const form = new FormData();
+    form.append("messaging_product", "whatsapp");
+    form.append("file", audioBuffer, { filename: "respuesta.ogg", contentType: "audio/ogg" });
+    form.append("type", "audio/ogg");
+
+    const upload = await axios.post(
+      `https://graph.facebook.com/v19.0/${CONFIG.WHATSAPP_PHONE_ID}/media`,
+      form,
+      {
+        headers: { Authorization: `Bearer ${CONFIG.WHATSAPP_TOKEN}`, ...form.getHeaders() },
+        timeout: CONFIG.TIMEOUT_META,
+        maxBodyLength: Infinity,
+      }
+    );
+    const mediaId = upload.data?.id;
+    if (!mediaId) return false;
+
+    // 2) Enviar como nota de voz (voice: true hace que se vea como audio de voz)
+    await axios.post(
+      `https://graph.facebook.com/v19.0/${CONFIG.WHATSAPP_PHONE_ID}/messages`,
+      { messaging_product: "whatsapp", to, type: "audio", audio: { id: mediaId, voice: true } },
+      { headers: { Authorization: `Bearer ${CONFIG.WHATSAPP_TOKEN}` }, timeout: CONFIG.TIMEOUT_META }
+    );
+    return true;
+  } catch (e) {
+    log.error("[WSP] enviarVoz:", e.response?.data?.error?.message || e.message);
+    return false;
   }
 }
 
@@ -195,4 +232,4 @@ function verificarFirmaMeta(req) {
   }
 }
 
-module.exports = { enviarMensaje, enviarBotones, enviarImagen, reenviarImagenPorId, reenviarAudioPorId, reenviarVideoPorId, reenviarUbicacion, reenviarDocumentoPorId, relayMensajeChat, descargarImagenMeta, obtenerUrlMedia, verificarFirmaMeta };
+module.exports = { enviarMensaje, enviarBotones, enviarImagen, enviarVoz, reenviarImagenPorId, reenviarAudioPorId, reenviarVideoPorId, reenviarUbicacion, reenviarDocumentoPorId, relayMensajeChat, descargarImagenMeta, obtenerUrlMedia, verificarFirmaMeta };

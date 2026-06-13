@@ -15,6 +15,23 @@ const usuarioSchema = new mongoose.Schema(
     aceptoTerminos: { type: Boolean, default: false },
     fechaRegistro: { type: Date, default: Date.now },
     audioOnboardingHecho: { type: Boolean, default: false },
+    // ─── MODO ADULTO MAYOR + BILLETERA FAMILIAR ───────────────────────────
+    modoAdultoMayor: { type: Boolean, default: false }, // si está activo, las respuestas son por voz (TTS)
+    respuestasPorVoz: { type: Boolean, default: false }, // preferencia de recibir respuestas en audio
+    saldo: { type: Number, default: 0 },                 // saldo en Bs precargado por la familia
+    // Familiares autorizados a gestionar esta cuenta (recargar, guardar lugares)
+    familiaresVinculados: [{
+      phone: String,            // WhatsApp del familiar
+      nombre: String,           // "hija", "hijo", "nieto"
+      fechaVinculo: { type: Date, default: Date.now },
+    }],
+    // Historial de recargas para trazabilidad
+    recargas: [{
+      monto: Number,
+      familiarPhone: String,
+      fecha: { type: Date, default: Date.now },
+      comprobante: String,      // mediaId del comprobante si aplica
+    }],
   ciudad: { type: String, default: null }, // "Cochabamba", "La Paz", "Santa Cruz", etc.
   ciudadDetectada: { type: Boolean, default: false }, // si fue detectada automáticamente
     viajesTotal: { type: Number, default: 0 },
