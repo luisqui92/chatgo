@@ -6,30 +6,80 @@ const os = require("os");
 const { CONFIG, log, CIUDADES, detectarCiudadPorCoords } = require("../config");
 const { Usuario, Chofer, Viaje, ListaEspera, CodigoPromo, LocationReference } = require("../db/models");
 const { getSession, setSession, updateSession, deleteSession, ensureSession, removeListaEspera } = require("../services/session");
-const { enviarMensaje, enviarBotones, relayMensajeChat, obtenerUrlMedia } = require("../services/whatsapp");
+const { enviarMensaje: enviarMensajeRaw, enviarBotones: enviarBotonesRaw, relayMensajeChat, obtenerUrlMedia } = require("../services/whatsapp");
 const { evaluarPrecisionReferencia, detectarYExtrarCoordsMaps, normalizarReferencia, guardarReferenciaVoz, geocodificarConMemoria, calcularDistancia, calcularDistanciaConParadas, obtenerDireccion } = require("../services/google");
 const { transcribirAudio, extraerUbicaciones } = require("../services/openai");
 const { promoCodigosActiva, crearCodigoPromo, validarCodigoPromo, enviarCodigoDescuento, esIntentoCancelar, esPedidoAyuda, detectarIncompatibilidadMoto, construirBotonesHistorial, sugerenciaPorHora, buscarEsquinaMapeada, guardarEsquina, obtenerLugarPersonal, guardarLugarPersonal, evaluarReferencia, mensajePidiendoReferencia, calcularPrecio } = require("../services/utils");
 const { calcularMultiplierSurge, aplicarSurge, textoSurge } = require("../ai");
-const { responderPorVoz } = require("../ai/adulto_mayor");
+const { generarAudioDesdeTexto } = require("../services/openai");
+const { enviarVoz } = require("../services/whatsapp");
 const { asignarChofer, procesarCancelacionPasajero, procesarPedidoAyuda, registrarRating } = require("../flows/viaje");
 const { procesarMensajeChofer } = require("../flows/chofer");
 
-// ─── OPCIÓN C: responder por voz o texto según contexto ──────────────────────
-// Responde por VOZ si: (a) el usuario prefiere voz siempre (respuestasPorVoz/modoAdultoMayor),
-// o (b) su última interacción fue un audio (espejo). Si no, texto normal.
-// Se usa en los mensajes CLAVE del viaje (confirmación, precio, chofer, llegada).
-async function responderClave(phone, texto, session) {
+// ─── SISTEMA DE VOZ GLOBAL (Opción C: espejo + forzado) ──────────────────────
+// enviarMensaje() es un wrapper inteligente: si el usuario está en modo voz
+// (mandó audio, o tiene respuestasPorVoz/modoAdultoMayor), responde HABLANDO.
+// Si no, manda texto normal. Así TODO el flujo responde por voz automáticamente
+// sin tener que tocar cada uno de los ~97 mensajes.
+//
+// Cache corto en memoria para no consultar la DB en cada mensaje (mismo phone).
+const _vozCache = new Map(); // phone -> { usaVoz: bool, ts: number }
+
+async function _usuarioUsaVoz(phone) {
+  const cached = _vozCache.get(phone);
+  if (cached && Date.now() - cached.ts < 60000) return cached.usaVoz;
   try {
     const usuario = await Usuario.findOne({ phone }).lean();
-    const forzado = usuario?.respuestasPorVoz || usuario?.modoAdultoMayor;
-    const espejo = session?.ultimaInteraccionVoz;
-    if (forzado || espejo) {
-      await responderPorVoz(phone, texto, { usuario });
-      return;
+    const session = await getSession(phone);
+    const usaVoz = !!(usuario?.respuestasPorVoz || usuario?.modoAdultoMayor || session?.ultimaInteraccionVoz);
+    _vozCache.set(phone, { usaVoz, ts: Date.now() });
+    return usaVoz;
+  } catch {
+    return false;
+  }
+}
+
+// Marca/desmarca el modo voz para un phone (actualiza cache al instante)
+function _setVozCache(phone, usaVoz) {
+  _vozCache.set(phone, { usaVoz, ts: Date.now() });
+}
+
+// Wrapper de enviarMensaje: decide voz o texto automáticamente
+async function enviarMensaje(phone, texto) {
+  if (await _usuarioUsaVoz(phone)) {
+    const audio = await generarAudioDesdeTexto(limpiarParaVoz(texto));
+    if (audio) {
+      const ok = await enviarVoz(phone, audio);
+      if (ok) return; // voz enviada con éxito, no mandar texto
     }
-  } catch (e) { log.error("[RESPONDER_CLAVE]", e.message); }
-  await enviarMensaje(phone, texto);
+    // Si falló la voz, cae a texto (no dejar al usuario sin respuesta)
+  }
+  await enviarMensajeRaw(phone, texto);
+}
+
+// Wrapper de enviarBotones: los botones SIEMPRE van como texto (el usuario los necesita ver
+// para tocarlos), pero si está en modo voz, primero le mandamos un audio leyendo el mensaje.
+async function enviarBotones(phone, texto, botones) {
+  if (await _usuarioUsaVoz(phone)) {
+    const audio = await generarAudioDesdeTexto(limpiarParaVoz(texto));
+    if (audio) await enviarVoz(phone, audio);
+  }
+  await enviarBotonesRaw(phone, texto, botones);
+}
+
+// Limpia texto para que el TTS no lea emojis, markdown ni URLs en voz alta
+function limpiarParaVoz(texto) {
+  return texto
+    .replace(/[\u{1F000}-\u{1FFFF}\u{2600}-\u{27BF}\u{2190}-\u{21FF}\u{2B00}-\u{2BFF}]/gu, "")
+    .replace(/\*([^*]+)\*/g, "$1")
+    .replace(/_([^_]+)_/g, "$1")
+    .replace(/https?:\/\/\S+/g, "")
+    .replace(/\n{2,}/g, ". ")
+    .replace(/\n/g, ". ")
+    .replace(/\.\s*\.+/g, ".")
+    .replace(/\s{2,}/g, " ")
+    .replace(/\s+([.,])/g, "$1")
+    .trim();
 }
 
 
@@ -289,13 +339,21 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
   const texto = mensaje.text?.body?.trim() || "";
   const textoUpper = texto.toUpperCase();
 
+  // ESPEJO bidireccional: si el usuario escribe texto real (no botón), volver a modo texto.
+  // Si manda audio, el bloque de audio reactiva el modo voz.
+  if (texto && !buttonId && mensaje.type !== "audio" && mensaje.type !== "voice") {
+    _setVozCache(phone, false);
+    try {
+      const s = await getSession(phone);
+      if (s?.ultimaInteraccionVoz) await updateSession(phone, { ...s, ultimaInteraccionVoz: false });
+    } catch {}
+  }
+
   // ─── COMANDO DE PRUEBA TTS (temporal, para diagnóstico) ─────────────────
   // Escribir "/voz algo" hace que el bot responda eso en audio. Para verificar TTS.
   if (texto && texto.toLowerCase().startsWith("/voz")) {
     const textoAProbar = texto.slice(4).trim() || "Hola, esta es una prueba de voz de ChatGo. Si escuchas este mensaje, el sistema funciona correctamente.";
-    const { generarAudioDesdeTexto } = require("../services/openai");
-    const { enviarVoz } = require("../services/whatsapp");
-    await enviarMensaje(phone, "🔊 Generando audio de prueba...");
+    await enviarMensajeRaw(phone, "🔊 Generando audio de prueba...");
     const audio = await generarAudioDesdeTexto(textoAProbar);
     if (!audio) {
       await enviarMensaje(phone, "❌ Falló la generación del audio (TTS). Revisa los logs [TTS].");
@@ -566,10 +624,10 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
 
   // ─── Audio / voz ─────────────────────────────────────────────────────────
   if (mensaje.type === "audio" || mensaje.type === "voice") {
-    // OPCIÓN C - ESPEJO: el usuario mandó audio → marcamos para responderle por voz
-    // Esto se guarda en la sesión y dura mientras esté en este flujo de pedido.
+    // OPCIÓN C - ESPEJO: el usuario mandó audio → el bot le responde por voz
     await updateSession(phone, { ...session, ultimaInteraccionVoz: true });
     session = { ...session, ultimaInteraccionVoz: true };
+    _setVozCache(phone, true); // activar voz al instante (sin esperar la DB)
     // Onboarding de audio: explicar UNA SOLA VEZ cómo funciona y que ayudan a construir el mapa
     const usuarioParaAudio = await Usuario.findOne({ phone }).lean();
     if (!usuarioParaAudio?.audioOnboardingHecho) {
@@ -864,14 +922,6 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
           destinoPendiente: destinoCoords,
           step: "confirmando_ubicaciones_voz",
         });
-        // OPCIÓN C: si interactuó por voz, leerle la confirmación en audio antes de los botones
-        if (session.ultimaInteraccionVoz) {
-          await responderPorVoz(
-            phone,
-            `Entendí que quieres ir desde ${ubicaciones.origen}, hasta ${ubicaciones.destino}. Si está correcto, toca el botón Sí.`,
-            { textoRespaldo: false }
-          );
-        }
         await enviarBotones(
           phone,
           `📍 *¿Confirmas estas ubicaciones?*\n\n🚀 Origen: ${ubicaciones.origen}\n🏁 Destino: ${ubicaciones.destino}`,
