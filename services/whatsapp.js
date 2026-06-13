@@ -5,6 +5,8 @@ const https = require("https");
 const http = require("http");
 const url = require("url");
 const os = require("os");
+const fs = require("fs");
+const path = require("path");
 const FormData = require("form-data");
 const { CONFIG, log } = require("../config");
 
@@ -83,64 +85,59 @@ async function reenviarAudioPorId(to, audioId) {
 }
 
 // ─── ENVIAR VOZ (TTS): sube audio MP3 a WhatsApp y lo envía ─────────────────
-// Replica el método probado del bot parroquial: FormData + Blob NATIVOS de Node 18+
-// (NO la librería form-data, que Meta a veces rechaza).
+// Escribe el audio a un archivo temporal y lo sube con axios + form-data stream.
+// (El fetch+Blob nativo choca con axios: "source.on is not a function").
 async function enviarVoz(to, audioBuffer) {
   if (!audioBuffer || audioBuffer.length === 0) {
     log.warn("[WSP] enviarVoz: buffer vacío");
     return false;
   }
+  const tmpPath = path.join(os.tmpdir(), `voz_${Date.now()}.mp3`);
   try {
-    // 1) Subir el audio usando Blob + FormData nativos (igual que el bot que funcionaba)
-    const blob = new Blob([audioBuffer], { type: "audio/mpeg" });
-    const formData = new FormData();
-    formData.append("file", blob, "audio.mp3");
-    formData.append("messaging_product", "whatsapp");
-    formData.append("type", "audio/mpeg");
+    // 1) Escribir el audio a un archivo temporal
+    fs.writeFileSync(tmpPath, audioBuffer);
 
-    const upRes = await fetch(
+    // 2) Subir usando form-data con un ReadStream (lo que axios maneja bien)
+    const form = new FormData();
+    form.append("messaging_product", "whatsapp");
+    form.append("type", "audio/mpeg");
+    form.append("file", fs.createReadStream(tmpPath), {
+      filename: "audio.mp3",
+      contentType: "audio/mpeg",
+    });
+
+    const upload = await axios.post(
       `https://graph.facebook.com/v19.0/${CONFIG.WHATSAPP_PHONE_ID}/media`,
+      form,
       {
-        method: "POST",
-        headers: { Authorization: `Bearer ${CONFIG.WHATSAPP_TOKEN}` },
-        body: formData,
+        headers: { Authorization: `Bearer ${CONFIG.WHATSAPP_TOKEN}`, ...form.getHeaders() },
+        timeout: CONFIG.TIMEOUT_META,
+        maxBodyLength: Infinity,
+        maxContentLength: Infinity,
       }
     );
-    const upData = await upRes.json();
-    if (!upData.id) {
-      log.error(`[WSP] enviarVoz: error subiendo audio: ${JSON.stringify(upData)}`);
+    const mediaId = upload.data?.id;
+    if (!mediaId) {
+      log.error(`[WSP] enviarVoz: no se obtuvo media_id: ${JSON.stringify(upload.data)}`);
       return false;
     }
-    log.info(`[WSP] enviarVoz: audio subido, media_id=${upData.id}`);
+    log.info(`[WSP] enviarVoz: audio subido, media_id=${mediaId}`);
 
-    // 2) Enviar el audio con el media_id
-    const sendRes = await fetch(
+    // 3) Enviar el audio con el media_id
+    await axios.post(
       `https://graph.facebook.com/v19.0/${CONFIG.WHATSAPP_PHONE_ID}/messages`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${CONFIG.WHATSAPP_TOKEN}`,
-        },
-        body: JSON.stringify({
-          messaging_product: "whatsapp",
-          recipient_type: "individual",
-          to,
-          type: "audio",
-          audio: { id: upData.id },
-        }),
-      }
+      { messaging_product: "whatsapp", recipient_type: "individual", to, type: "audio", audio: { id: mediaId } },
+      { headers: { "Content-Type": "application/json", Authorization: `Bearer ${CONFIG.WHATSAPP_TOKEN}` }, timeout: CONFIG.TIMEOUT_META }
     );
-    const sendData = await sendRes.json();
-    if (!sendRes.ok) {
-      log.error(`[WSP] enviarVoz: error enviando audio: ${JSON.stringify(sendData)}`);
-      return false;
-    }
     log.info(`[WSP] enviarVoz: audio enviado a ${to}`);
     return true;
   } catch (e) {
-    log.error(`[WSP] enviarVoz falló: ${e.message}`);
+    const detalle = e.response?.data?.error?.message || e.message;
+    log.error(`[WSP] enviarVoz falló: ${detalle}`);
     return false;
+  } finally {
+    // Limpiar el archivo temporal
+    try { fs.unlinkSync(tmpPath); } catch {}
   }
 }
 
