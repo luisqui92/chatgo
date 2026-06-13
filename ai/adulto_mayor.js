@@ -32,13 +32,15 @@ async function responderPorVoz(phone, texto, opciones = {}) {
 
   if (audio) {
     const ok = await enviarVoz(phone, audio);
-    // Respaldo en texto: corto, por si quiere leerlo también
-    if (opciones.textoRespaldo !== false) {
+    if (ok) {
+      // Voz enviada. Texto de respaldo solo si se pidió explícitamente.
+      if (opciones.textoRespaldo === true) {
+        await enviarMensaje(phone, texto);
+      }
+    } else {
+      // El envío de voz falló → SIEMPRE caer a texto para no dejar al usuario sin respuesta
+      log.warn(`[VOZ] Falló envío de voz a ${phone}, usando texto como respaldo`);
       await enviarMensaje(phone, texto);
-    }
-    if (!ok) {
-      // Si el envío de voz falló, el texto ya cubre la comunicación
-      log.warn(`[VOZ] Falló envío de voz a ${phone}, se usó texto`);
     }
   } else {
     // TTS falló: caer a texto

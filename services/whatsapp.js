@@ -85,13 +85,20 @@ async function reenviarAudioPorId(to, audioId) {
 // ─── ENVIAR VOZ (TTS): sube un buffer de audio a WhatsApp y lo manda como nota de voz ──
 // Usado por el modo adulto mayor para responder hablando en vez de con texto.
 async function enviarVoz(to, audioBuffer) {
-  if (!audioBuffer) return false;
+  if (!audioBuffer || audioBuffer.length === 0) {
+    log.warn("[WSP] enviarVoz: buffer vacío");
+    return false;
+  }
   try {
     // 1) Subir el audio a WhatsApp para obtener un media ID
+    // WhatsApp exige audio/ogg con codec opus para notas de voz
     const form = new FormData();
     form.append("messaging_product", "whatsapp");
-    form.append("file", audioBuffer, { filename: "respuesta.ogg", contentType: "audio/ogg" });
-    form.append("type", "audio/ogg");
+    form.append("file", audioBuffer, {
+      filename: "respuesta.ogg",
+      contentType: "audio/ogg; codecs=opus",
+    });
+    form.append("type", "audio/ogg; codecs=opus");
 
     const upload = await axios.post(
       `https://graph.facebook.com/v19.0/${CONFIG.WHATSAPP_PHONE_ID}/media`,
@@ -100,20 +107,27 @@ async function enviarVoz(to, audioBuffer) {
         headers: { Authorization: `Bearer ${CONFIG.WHATSAPP_TOKEN}`, ...form.getHeaders() },
         timeout: CONFIG.TIMEOUT_META,
         maxBodyLength: Infinity,
+        maxContentLength: Infinity,
       }
     );
     const mediaId = upload.data?.id;
-    if (!mediaId) return false;
+    if (!mediaId) {
+      log.error("[WSP] enviarVoz: no se obtuvo mediaId del upload");
+      return false;
+    }
+    log.info(`[WSP] enviarVoz: audio subido, mediaId=${mediaId}`);
 
-    // 2) Enviar como nota de voz (voice: true hace que se vea como audio de voz)
+    // 2) Enviar como nota de voz (voice: true)
     await axios.post(
       `https://graph.facebook.com/v19.0/${CONFIG.WHATSAPP_PHONE_ID}/messages`,
       { messaging_product: "whatsapp", to, type: "audio", audio: { id: mediaId, voice: true } },
       { headers: { Authorization: `Bearer ${CONFIG.WHATSAPP_TOKEN}` }, timeout: CONFIG.TIMEOUT_META }
     );
+    log.info(`[WSP] enviarVoz: nota de voz enviada a ${to}`);
     return true;
   } catch (e) {
-    log.error("[WSP] enviarVoz:", e.response?.data?.error?.message || e.message);
+    let detalle = e.response?.data?.error?.message || e.message;
+    log.error(`[WSP] enviarVoz falló: ${detalle}`);
     return false;
   }
 }

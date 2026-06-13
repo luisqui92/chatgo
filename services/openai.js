@@ -209,21 +209,31 @@ async function generarAudioDesdeTexto(texto, voz = "shimmer") {
     const res = await axios.post(
       "https://api.openai.com/v1/audio/speech",
       {
-        model: "gpt-4o-mini-tts",
-        voice: voz,
+        model: "tts-1",          // tts-1 soporta 'speed' y es estable; gpt-4o-mini-tts no soporta speed
+        voice: voz,              // shimmer/nova/alloy = voces cálidas y claras
         input: texto,
-        response_format: "opus", // opus = lo que WhatsApp usa para notas de voz
-        speed: 0.95,             // un pelín más lento, mejor para adultos mayores
+        response_format: "opus", // opus en contenedor OGG = formato de nota de voz de WhatsApp
+        speed: 0.95,             // levemente más lento, mejor para adultos mayores
       },
       {
-        headers: { Authorization: `Bearer ${CONFIG.OPENAI_KEY}` },
+        headers: {
+          Authorization: `Bearer ${CONFIG.OPENAI_KEY}`,
+          "Content-Type": "application/json",
+        },
         timeout: CONFIG.TIMEOUT_OPENAI,
         responseType: "arraybuffer",
       }
     );
-    return Buffer.from(res.data);
+    const buffer = Buffer.from(res.data);
+    log.info(`[TTS] Audio generado OK (${buffer.length} bytes) para texto de ${texto.length} chars`);
+    return buffer;
   } catch (e) {
-    log.error("[TTS]", e.response?.data?.toString?.() || e.message);
+    // El error viene como arraybuffer, hay que decodificarlo para leerlo
+    let detalle = e.message;
+    if (e.response?.data) {
+      try { detalle = Buffer.from(e.response.data).toString("utf8"); } catch {}
+    }
+    log.error(`[TTS] Falló: ${detalle}`);
     return null;
   }
 }

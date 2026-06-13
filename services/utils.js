@@ -496,8 +496,16 @@ function evaluarReferencia(detalle) {
     const esUnico = lugaresUnicos.some(l => tx.includes(normalizarNombreCalle(l)));
     if (esUnico) return { vaga: false };
     
-    // Lugares grandes (UMSS, Estadio, etc.) → vagos, pedir referencia
-    const lugaresGrandes = ["umss", "ucb", "upb", "estadio", "capriles", "mercado", "cancha", "plaza colon", "plaza recoleta"];
+    // Lugares grandes (UMSS, Estadio, etc.) → vagos, pedir referencia/pin
+    // Incluye siglas Y nombres completos (la transcripción de voz suele dar el nombre largo)
+    const lugaresGrandes = [
+      "umss", "universidad mayor de san simon", "san simon",
+      "ucb", "universidad catolica", "upb", "universidad privada",
+      "univalle", "universidad del valle", "unifranz", "uatf",
+      "estadio", "capriles", "felix capriles",
+      "mercado", "cancha", "plaza colon", "plaza recoleta",
+      "facultad", "campus", "ciudad universitaria",
+    ];
     const esGrande = lugaresGrandes.some(l => tx.includes(normalizarNombreCalle(l)));
     if (esGrande) return { vaga: true, motivo: "lugar_grande", texto: detalle.texto };
   }
