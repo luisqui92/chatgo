@@ -11,8 +11,27 @@ const { evaluarPrecisionReferencia, detectarYExtrarCoordsMaps, normalizarReferen
 const { transcribirAudio, extraerUbicaciones } = require("../services/openai");
 const { promoCodigosActiva, crearCodigoPromo, validarCodigoPromo, enviarCodigoDescuento, esIntentoCancelar, esPedidoAyuda, detectarIncompatibilidadMoto, construirBotonesHistorial, sugerenciaPorHora, buscarEsquinaMapeada, guardarEsquina, obtenerLugarPersonal, guardarLugarPersonal, evaluarReferencia, mensajePidiendoReferencia, calcularPrecio } = require("../services/utils");
 const { calcularMultiplierSurge, aplicarSurge, textoSurge } = require("../ai");
+const { responderPorVoz } = require("../ai/adulto_mayor");
 const { asignarChofer, procesarCancelacionPasajero, procesarPedidoAyuda, registrarRating } = require("../flows/viaje");
 const { procesarMensajeChofer } = require("../flows/chofer");
+
+// ─── OPCIÓN C: responder por voz o texto según contexto ──────────────────────
+// Responde por VOZ si: (a) el usuario prefiere voz siempre (respuestasPorVoz/modoAdultoMayor),
+// o (b) su última interacción fue un audio (espejo). Si no, texto normal.
+// Se usa en los mensajes CLAVE del viaje (confirmación, precio, chofer, llegada).
+async function responderClave(phone, texto, session) {
+  try {
+    const usuario = await Usuario.findOne({ phone }).lean();
+    const forzado = usuario?.respuestasPorVoz || usuario?.modoAdultoMayor;
+    const espejo = session?.ultimaInteraccionVoz;
+    if (forzado || espejo) {
+      await responderPorVoz(phone, texto, { usuario });
+      return;
+    }
+  } catch (e) { log.error("[RESPONDER_CLAVE]", e.message); }
+  await enviarMensaje(phone, texto);
+}
+
 
 async function preguntarOpcionesViaje(phone, session) {
   // Guard: si falta origen o destino, pedir lo que falta en lugar de crashear
@@ -528,6 +547,10 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
 
   // ─── Audio / voz ─────────────────────────────────────────────────────────
   if (mensaje.type === "audio" || mensaje.type === "voice") {
+    // OPCIÓN C - ESPEJO: el usuario mandó audio → marcamos para responderle por voz
+    // Esto se guarda en la sesión y dura mientras esté en este flujo de pedido.
+    await updateSession(phone, { ...session, ultimaInteraccionVoz: true });
+    session = { ...session, ultimaInteraccionVoz: true };
     // Onboarding de audio: explicar UNA SOLA VEZ cómo funciona y que ayudan a construir el mapa
     const usuarioParaAudio = await Usuario.findOne({ phone }).lean();
     if (!usuarioParaAudio?.audioOnboardingHecho) {
@@ -796,6 +819,14 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
           destinoPendiente: destinoCoords,
           step: "confirmando_ubicaciones_voz",
         });
+        // OPCIÓN C: si interactuó por voz, leerle la confirmación en audio antes de los botones
+        if (session.ultimaInteraccionVoz) {
+          await responderPorVoz(
+            phone,
+            `Entendí que quieres ir desde ${ubicaciones.origen}, hasta ${ubicaciones.destino}. Si está correcto, toca el botón Sí.`,
+            { textoRespaldo: false }
+          );
+        }
         await enviarBotones(
           phone,
           `📍 *¿Confirmas estas ubicaciones?*\n\n🚀 Origen: ${ubicaciones.origen}\n🏁 Destino: ${ubicaciones.destino}`,
