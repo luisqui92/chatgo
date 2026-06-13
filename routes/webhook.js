@@ -88,23 +88,27 @@ app.post("/webhook", limitWebhook, async (req, res) => {
         const sesionEsPasajero = !esChofer && session && session.step &&
           !session.step.startsWith("chofer_") && session.step !== "eligiendo_rol";
 
+        // OJO: varios steps de PASAJERO tienen prefijo "chofer_" por razones históricas
+        // (ej: chofer_esperando_pasajero, chofer_en_camino = "el chofer va en camino al pasajero").
+        // Esos NO son registro de chofer. El registro real solo se dispara por palabra clave
+        // o por steps que de verdad pertenecen al flujo del conductor.
+        const stepsRegistroChofer = ["chofer_esperando_comprobante", "chofer_registro", "chofer_credenciales"];
         const esRegistroChofer =
-          !esChofer && !sesionEsPasajero && (
+          !esChofer && (
             textoUpper === "CHOFER" ||
             textoUpper === "SOY CHOFER" ||
             textoUpper === "CONDUCTOR" ||
-            (session && session.step?.startsWith("chofer_"))
+            (session && stepsRegistroChofer.includes(session.step))
           );
 
-        log.info(`[ROUTING] phone=${phone} esChofer=${!!esChofer} step=${session?.step || "null"} tieneViajeActivoPasajero=${tieneViajeActivoPasajero}`);
+        log.info(`[ROUTING] phone=${phone} esChofer=${!!esChofer} step=${session?.step || "null"} esRegistroChofer=${esRegistroChofer} tieneViajeActivoPasajero=${tieneViajeActivoPasajero}`);
 
         if (tieneViajeActivoPasajero) {
           await procesarMensajeUsuario(phone, msg, buttonId);
         } else if (esChofer || esRegistroChofer) {
           await procesarMensajeChofer(phone, msg.text?.body || "", buttonId, mediaId, msg);
-        } else if (sesionEsPasajero) {
-          await procesarMensajeUsuario(phone, msg, buttonId);
         } else {
+          // Todos los demás (incluido pasajero con step "chofer_*" legítimo) van a pasajero
           await procesarMensajeUsuario(phone, msg, buttonId);
         }
       } catch (eInner) {
