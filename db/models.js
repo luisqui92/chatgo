@@ -207,16 +207,20 @@ const rateLimitSchema = new mongoose.Schema(
 // FEATURE: Schema para memoria de referencias de voz
 const locationReferenceSchema = new mongoose.Schema(
   {
-    referencia: { type: String, unique: true, index: true }, // normalizada
+    referencia: { type: String, index: true }, // normalizada (única POR CIUDAD, ver índice compuesto abajo)
     referenciaOriginal: String,
     lat: Number,
     lng: Number,
     nombreResuelto: String,
     contador: { type: Number, default: 1 },
     ciudad: { type: String, default: "Cochabamba" },
+    precargado: { type: Boolean, default: false }, // true si vino del script de pre-carga
   },
   { timestamps: true }
 );
+// Único por combinación referencia+ciudad: la misma referencia puede existir en
+// distintas ciudades (ej "avenida piraí" en Cochabamba y en Santa Cruz).
+locationReferenceSchema.index({ referencia: 1, ciudad: 1 }, { unique: true });
 
 const Usuario = mongoose.model("Usuario", usuarioSchema);
 const Chofer = mongoose.model("Chofer", choferSchema);
