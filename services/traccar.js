@@ -105,12 +105,14 @@ async function buscarChoferDisponibleTraccar(origenUsuario, excludeTraccarIds = 
   );
 
   const hoyStr = fechaStrBolivia();
+  const modoDemoPago = String(process.env.MODO_DEMO || "").toLowerCase() === "true";
   const filtro = {
     estado: "libre",
     traccarId: { $exists: true, $ne: null, $nin: excludeTraccarIds },
     $or: [{ viajeReservado: null }, { viajeReservado: { $exists: false } }],
   };
-  if (!enPromoGratis()) {
+  // En modo demo no exigimos pago diario (para presentaciones)
+  if (!enPromoGratis() && !modoDemoPago) {
     filtro["pagoDiario.aprobado"] = true;
     filtro["pagoDiario.fechaStr"] = hoyStr;
   }
@@ -140,19 +142,25 @@ async function buscarChoferDisponibleTraccar(origenUsuario, excludeTraccarIds = 
   const ahoraMs = Date.now();
   const candidatos = [];
 
+  // MODO DEMO: para presentaciones, ignora los filtros de distancia/tiempo
+  // para que el chofer reciba el viaje aunque esté lejos (ej: pasajero en Santa
+  // Cruz, chofer en Cochabamba). Se activa con la variable de entorno MODO_DEMO=true.
+  const modoDemo = String(process.env.MODO_DEMO || "").toLowerCase() === "true";
+
   for (const chofer of choferes) {
     const dev = snapshotDispositivos[String(chofer.traccarId)];
     if (!dev || !dev.positionId) continue;
     const pos = snapshotPosiciones[String(chofer.traccarId)];
     if (!pos) continue;
     const minutos = Math.round((ahoraMs - new Date(pos.fixTime).getTime()) / 60000);
-    if (minutos > 10) continue;
+    if (!modoDemo && minutos > 10) continue;
     const dist = distanciaEntrePuntos(origenUsuario.lat, origenUsuario.lng, pos.latitude, pos.longitude);
-    if (dist > 10) continue;
+    if (!modoDemo && dist > 10) continue;
     candidatos.push({
       ...chofer.toObject(),
-      ubicacion: { lat: pos.latitude, lng: pos.longitude, minutos },
-      distanciaAlUsuario: dist,
+      // En modo demo, mostrar una distancia/tiempo "creíble" para la demo
+      ubicacion: { lat: pos.latitude, lng: pos.longitude, minutos: modoDemo ? 3 : minutos },
+      distanciaAlUsuario: modoDemo ? 1.5 : dist,
     });
   }
 
