@@ -85,8 +85,8 @@ function limpiarParaVoz(texto) {
 
   // Acortar para voz: los audios largos tardan demasiado en generarse (timeout)
   // y nadie quiere escuchar un audio de un minuto. Si es muy largo, cortar al
-  // primer tramo con sentido (hasta ~350 caracteres, terminando en una oración).
-  const MAX_VOZ = 350;
+  // primer tramo con sentido (hasta ~280 caracteres, terminando en una oración).
+  const MAX_VOZ = 280;
   if (t.length > MAX_VOZ) {
     const corte = t.slice(0, MAX_VOZ);
     const ultimoPunto = corte.lastIndexOf(". ");
@@ -957,8 +957,10 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
 
       // Evaluar precisión de las referencias extraídas
       // Si son imprecisas advertimos pero NO bloqueamos — el viaje puede continuar
-      // con el precio que se calcule, pero el pasajero sabe que puede haber diferencia
-      if (ubicaciones.origen || ubicaciones.destino) {
+      // Las advertencias de precisión son largas: útiles en TEXTO, pero en VOZ
+      // se vuelven un audio largo que se cuelga y molesta. En modo voz las omitimos
+      // (el flujo rápido continúa; el precio puede variar pero el viaje funciona).
+      if ((ubicaciones.origen || ubicaciones.destino) && !(await _usuarioUsaVoz(phone))) {
         const evalOrigen = ubicaciones.origen ? evaluarPrecisionReferencia(ubicaciones.origen) : null;
         const evalDestino = ubicaciones.destino ? evaluarPrecisionReferencia(ubicaciones.destino) : null;
         const advertencias = [];
