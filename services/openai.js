@@ -211,7 +211,7 @@ async function generarAudioDesdeTexto(texto, voz = "onyx") {
       {
         model: "tts-1",
         voice: voz,
-        input: texto.substring(0, 4000), // límite de caracteres de TTS
+        input: texto.substring(0, 600), // límite corto: audios largos tardan demasiado
         response_format: "mp3", // mp3 = formato probado con el bot que funcionaba
       },
       {
@@ -219,7 +219,7 @@ async function generarAudioDesdeTexto(texto, voz = "onyx") {
           Authorization: `Bearer ${CONFIG.OPENAI_KEY}`,
           "Content-Type": "application/json",
         },
-        timeout: CONFIG.TIMEOUT_OPENAI,
+        timeout: 60000, // 60s específico para TTS (más margen que el general)
         responseType: "arraybuffer",
       }
     );

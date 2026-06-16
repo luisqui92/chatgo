@@ -283,11 +283,13 @@ async function buscarReferenciaEnMemoria(referencia, ciudadUsuario = "Cochabamba
     return { lat: docExacto.lat, lng: docExacto.lng, nombre: docExacto.nombreResuelto };
   }
 
-  // 2. Búsqueda difusa — comparar similitud con todas las referencias
+  // 2. Búsqueda difusa — comparar similitud con referencias DE LA MISMA CIUDAD
   // Solo si la referencia tiene más de 6 caracteres (evitar falsos positivos)
   if (norm.length < 6) return null;
 
-  const todas = await LocationReference.find({}).lean();
+  // Filtrar por ciudad para no confundir lugares de distintas ciudades
+  // (ej: una "avenida 6 de Agosto" existe en varias ciudades)
+  const todas = await LocationReference.find({ ciudad: ciudadUsuario }).lean();
 
   // NUEVO: match por intersección/palabras clave en vez de similitud global estricta.
   // Reconoce el mismo lugar aunque el usuario diga las calles distinto, sin confundir
@@ -302,8 +304,8 @@ async function buscarReferenciaEnMemoria(referencia, ciudadUsuario = "Cochabamba
 
   if (mejorMatch) {
     log.info(`[VOICE_MEM] Hit por calles: "${referencia}" ~ "${mejorMatch.referenciaOriginal}" → (${mejorMatch.lat}, ${mejorMatch.lng})`);
-    // Guardar también la variante nueva para futuros usos
-    await guardarReferenciaVoz(referencia, mejorMatch.lat, mejorMatch.lng, mejorMatch.nombreResuelto);
+    // Guardar la variante nueva en la MISMA ciudad (no en el default)
+    await guardarReferenciaVoz(referencia, mejorMatch.lat, mejorMatch.lng, mejorMatch.nombreResuelto, ciudadUsuario);
     return { lat: mejorMatch.lat, lng: mejorMatch.lng, nombre: mejorMatch.nombreResuelto };
   }
 
@@ -398,8 +400,8 @@ async function geocodificarConMemoria(referencia, ciudadUsuario = "Cochabamba") 
     return { ...coords, _incierto: true };
   }
 
-  // 5. Guardar en memoria para futuros usos
-  await guardarReferenciaVoz(referencia, coords.lat, coords.lng, coords.nombre);
+  // 5. Guardar en memoria para futuros usos (en la ciudad del usuario)
+  await guardarReferenciaVoz(referencia, coords.lat, coords.lng, coords.nombre, ciudadUsuario);
   return coords;
 }
 

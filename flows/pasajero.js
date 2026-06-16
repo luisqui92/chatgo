@@ -71,7 +71,7 @@ async function enviarBotones(phone, texto, botones, textoVoz) {
 
 // Limpia texto para que el TTS no lea emojis, markdown ni URLs en voz alta
 function limpiarParaVoz(texto) {
-  return texto
+  let t = texto
     .replace(/[\u{1F000}-\u{1FFFF}\u{2600}-\u{27BF}\u{2190}-\u{21FF}\u{2B00}-\u{2BFF}]/gu, "")
     .replace(/\*([^*]+)\*/g, "$1")
     .replace(/_([^_]+)_/g, "$1")
@@ -82,6 +82,17 @@ function limpiarParaVoz(texto) {
     .replace(/\s{2,}/g, " ")
     .replace(/\s+([.,])/g, "$1")
     .trim();
+
+  // Acortar para voz: los audios largos tardan demasiado en generarse (timeout)
+  // y nadie quiere escuchar un audio de un minuto. Si es muy largo, cortar al
+  // primer tramo con sentido (hasta ~350 caracteres, terminando en una oración).
+  const MAX_VOZ = 350;
+  if (t.length > MAX_VOZ) {
+    const corte = t.slice(0, MAX_VOZ);
+    const ultimoPunto = corte.lastIndexOf(". ");
+    t = ultimoPunto > 100 ? corte.slice(0, ultimoPunto + 1) : corte + "...";
+  }
+  return t;
 }
 
 
