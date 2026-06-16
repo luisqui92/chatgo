@@ -221,7 +221,7 @@ function interpretarSiNo(texto) {
 
 async function procesarCalculoViaje(phone, session) {
   await updateSession(phone, { ...session, step: "calculando" });
-  await enviarMensaje(phone, "⏳ Calculando ruta y precio...");
+  await enviarMensajeRaw(phone, "⏳ Calculando ruta y precio...");
 
   try {
     const paradas = session.paradas || [];
