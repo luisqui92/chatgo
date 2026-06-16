@@ -470,6 +470,36 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
     return;
   }
 
+  // ─── COMANDO ADMIN: cargar lugares de una ciudad desde WhatsApp ──────────
+  // "cargar santa cruz" → pre-carga cientos de lugares con Google Places.
+  // Solo el admin puede usarlo. Evita tener que correr scripts en terminal.
+  if (texto && /^cargar\s+/i.test(texto) && phone === CONFIG.ADMIN_PHONE) {
+    const nombreCiudad = texto.replace(/^cargar\s+/i, "").trim();
+    const ciudadCargar = detectarCiudadPorTexto(nombreCiudad);
+    if (!ciudadCargar) {
+      await enviarMensajeRaw(phone, `❌ No reconocí esa ciudad. Ejemplo: *cargar santa cruz*`);
+      return;
+    }
+    await enviarMensajeRaw(phone, `⏳ Cargando lugares de *${ciudadCargar}* desde Google Places...\n\nEsto puede tardar 1-2 minutos. Te aviso cuando termine.`);
+    try {
+      const { precargarCiudad } = require("../services/precarga");
+      const resultado = await precargarCiudad(ciudadCargar, async (msg) => {
+        await enviarMensajeRaw(phone, `📍 ${msg}`);
+      });
+      if (resultado.error === "REQUEST_DENIED") {
+        await enviarMensajeRaw(phone, `❌ Places API no está habilitada en Google Cloud.\n\nActívala en:\nhttps://console.cloud.google.com/apis/library/places-backend.googleapis.com\n\nDetalle: ${resultado.mensaje || "REQUEST_DENIED"}`);
+      } else if (resultado.error) {
+        await enviarMensajeRaw(phone, `❌ Error: ${resultado.error}`);
+      } else {
+        await enviarMensajeRaw(phone, `✅ *${ciudadCargar} cargada.*\n\n📍 ${resultado.guardados} lugares reales guardados\n🗑️ ${resultado.descartados} descartados (fuera de zona)\n\nAhora ChatGo conoce estos lugares. Probá pidiendo un viaje por voz.`);
+      }
+    } catch (e) {
+      log.error("[CMD_CARGAR]", e.message);
+      await enviarMensajeRaw(phone, `❌ Falló la carga: ${e.message}`);
+    }
+    return;
+  }
+
   // ─── COMANDO: fijar ciudad del usuario ──────────────────────────────────
   // Escribir "ciudad santa cruz" (o "/ciudad ...") fija la ciudad del perfil.
   // Esto hace que TODO lo que el usuario pida se busque en esa ciudad.
