@@ -142,4 +142,30 @@ async function precargarCiudad(ciudad, onProgreso = null) {
   return { guardados, descartados };
 }
 
-module.exports = { precargarCiudad, CATEGORIAS };
+module.exports = { precargarCiudad, CATEGORIAS, limpiarBasura };
+
+// Limpia referencias basura: las que dicen estar en una ciudad pero cuyas
+// coordenadas caen FUERA de esa ciudad (datos falsos de pruebas, ej "Ventura Mall
+// Cochabamba" con coords que no son de Cochabamba). Devuelve cuántas borró.
+async function limpiarBasura() {
+  const todas = await LocationReference.find({}).lean();
+  let borradas = 0, revisadas = 0;
+  const ejemplos = [];
+
+  for (const ref of todas) {
+    revisadas++;
+    if (ref.lat == null || ref.lng == null) continue;
+    const cfg = CIUDADES[ref.ciudad];
+    if (!cfg) continue; // ciudad no configurada, no tocar
+    const b = cfg.bounds;
+    const dentro = ref.lat >= b.latMin && ref.lat <= b.latMax &&
+                   ref.lng >= b.lngMin && ref.lng <= b.lngMax;
+    if (!dentro) {
+      // Las coordenadas NO corresponden a la ciudad etiquetada → basura
+      if (ejemplos.length < 10) ejemplos.push(`${ref.referenciaOriginal} (${ref.ciudad})`);
+      await LocationReference.deleteOne({ _id: ref._id });
+      borradas++;
+    }
+  }
+  return { borradas, revisadas, ejemplos };
+}

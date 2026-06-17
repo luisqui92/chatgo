@@ -516,6 +516,24 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
     return;
   }
 
+  // ─── COMANDO ADMIN: limpiar referencias basura ──────────────────────────
+  // "limpiar referencias" → borra lugares cuyas coordenadas no corresponden a su
+  // ciudad (datos falsos de pruebas, ej "Ventura Mall Cochabamba" mal ubicado).
+  if (texto && /^limpiar\s+referencias?/i.test(texto) && phone === CONFIG.ADMIN_PHONE) {
+    await enviarMensajeRaw(phone, `🧹 Limpiando referencias basura...`);
+    try {
+      const { limpiarBasura } = require("../services/precarga");
+      const r = await limpiarBasura();
+      let msg = `✅ *Limpieza terminada.*\n\n🗑️ ${r.borradas} basura borrada\n🔍 ${r.revisadas} revisadas`;
+      if (r.ejemplos.length) msg += `\n\nEjemplos borrados:\n${r.ejemplos.map(e => `• ${e}`).join("\n")}`;
+      await enviarMensajeRaw(phone, msg);
+    } catch (e) {
+      log.error("[CMD_LIMPIAR]", e.message);
+      await enviarMensajeRaw(phone, `❌ Falló: ${e.message}`);
+    }
+    return;
+  }
+
   // ─── COMANDO: fijar ciudad del usuario ──────────────────────────────────
   // Escribir "ciudad santa cruz" (o "/ciudad ...") fija la ciudad del perfil.
   // Esto hace que TODO lo que el usuario pida se busque en esa ciudad.
