@@ -7,7 +7,7 @@ const { CONFIG, log, CIUDADES, detectarCiudadPorCoords, detectarCiudadPorTexto }
 const { Usuario, Chofer, Viaje, ListaEspera, CodigoPromo, LocationReference } = require("../db/models");
 const { getSession, setSession, updateSession, deleteSession, ensureSession, removeListaEspera } = require("../services/session");
 const { enviarMensaje: enviarMensajeRaw, enviarBotones: enviarBotonesRaw, relayMensajeChat, obtenerUrlMedia } = require("../services/whatsapp");
-const { evaluarPrecisionReferencia, detectarYExtrarCoordsMaps, normalizarReferencia, guardarReferenciaVoz, geocodificarConMemoria, calcularDistancia, calcularDistanciaConParadas, obtenerDireccion } = require("../services/google");
+const { evaluarPrecisionReferencia, detectarYExtrarCoordsMaps, normalizarReferencia, guardarReferenciaVoz, geocodificarConMemoria, calcularDistancia, calcularDistanciaConParadas, obtenerDireccion, buscarReferenciaEnMemoria } = require("../services/google");
 const { transcribirAudio, extraerUbicaciones } = require("../services/openai");
 const { promoCodigosActiva, crearCodigoPromo, validarCodigoPromo, enviarCodigoDescuento, esIntentoCancelar, esPedidoAyuda, detectarIncompatibilidadMoto, construirBotonesHistorial, sugerenciaPorHora, buscarEsquinaMapeada, guardarEsquina, obtenerLugarPersonal, guardarLugarPersonal, evaluarReferencia, mensajePidiendoReferencia, calcularPrecio } = require("../services/utils");
 const { calcularMultiplierSurge, aplicarSurge, textoSurge } = require("../ai");
@@ -928,11 +928,15 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
       // Si la IA detecta algo vago, pedir referencia adicional antes de seguir
       const evalOrigenVoz = detOrigen ? evaluarReferencia(detOrigen) : { vaga: false };
       const evalDestinoVoz = detDestino ? evaluarReferencia(detDestino) : { vaga: false };
-      
-      // Solo intervenir si AMBOS son específicos o si AL MENOS UNO es vago
-      // (Ignoramos vaguedad si ya tenemos coords personales)
-      const origenVago = evalOrigenVoz.vaga && !personalOrigen?.coords;
-      const destinoVago = evalDestinoVoz.vaga && !personalDestino?.coords;
+
+      // Si el lugar YA está en la memoria (pre-cargado o aprendido antes), tiene
+      // coordenadas exactas → NO es vago, no hay que pedir más referencias.
+      const memOrigen = ubicaciones.origen ? await buscarReferenciaEnMemoria(ubicaciones.origen, ciudadParaAudio) : null;
+      const memDestino = ubicaciones.destino ? await buscarReferenciaEnMemoria(ubicaciones.destino, ciudadParaAudio) : null;
+
+      // Solo intervenir si AL MENOS UNO es vago Y no está resuelto por memoria ni coords personales
+      const origenVago = evalOrigenVoz.vaga && !personalOrigen?.coords && !memOrigen;
+      const destinoVago = evalDestinoVoz.vaga && !personalDestino?.coords && !memDestino;
       
       if (origenVago || destinoVago) {
         // Construir mensaje pidiendo referencias
