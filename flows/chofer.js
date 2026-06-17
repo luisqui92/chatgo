@@ -92,22 +92,34 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
       const labelV = tipoVeh === "moto" ? "Moto" : "Auto";
       const colorVStr = chofer.colorVehiculo ? ` ${chofer.colorVehiculo}` : "";
 
-      // Enviar foto del vehículo si existe
-      if (chofer.fotoVehiculo) {
+      // Foto combinada para demo: si está configurada FOTO_DEMO_COMBINADA,
+      // manda UNA sola imagen (auto grande + chofer en recuadro) en vez de dos.
+      // Para producción normal, manda las dos fotos por separado como siempre.
+      const fotoDemo = process.env.FOTO_DEMO_COMBINADA;
+      if (fotoDemo) {
         await enviarImagen(
           userPhone,
-          chofer.fotoVehiculo,
-          `${emojiV} ${labelV}${colorVStr} · Placa: ${chofer.placa}`
+          fotoDemo,
+          `${emojiV} ${labelV}${colorVStr} · Placa: ${chofer.placa}\n👤 Tu chofer: ${chofer.nombre}`
         ).catch(() => {});
-      }
+      } else {
+        // Enviar foto del vehículo si existe
+        if (chofer.fotoVehiculo) {
+          await enviarImagen(
+            userPhone,
+            chofer.fotoVehiculo,
+            `${emojiV} ${labelV}${colorVStr} · Placa: ${chofer.placa}`
+          ).catch(() => {});
+        }
 
-      // Enviar foto del chofer si existe
-      if (chofer.fotoChofer) {
-        await enviarImagen(
-          userPhone,
-          chofer.fotoChofer,
-          `👤 Tu chofer: ${chofer.nombre}`
-        ).catch(() => {});
+        // Enviar foto del chofer si existe
+        if (chofer.fotoChofer) {
+          await enviarImagen(
+            userPhone,
+            chofer.fotoChofer,
+            `👤 Tu chofer: ${chofer.nombre}`
+          ).catch(() => {});
+        }
       }
 
       await enviarMensaje(
