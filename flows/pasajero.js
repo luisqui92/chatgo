@@ -137,22 +137,26 @@ async function flujoRapidoVoz(phone, session) {
   try {
     if (!session.origen?.lat || !session.destino?.lat) return false;
 
-    const { km, duracion } = await calcularDistancia(session.origen, session.destino);
+    // Hacer en PARALELO lo que no depende entre sí (acelera mucho el flujo):
+    // distancia, surge y búsqueda de chofer al mismo tiempo, en vez de uno tras otro.
+    const [distRes, surgeRes, choferRes] = await Promise.allSettled([
+      calcularDistancia(session.origen, session.destino),
+      calcularMultiplierSurge(session.origen?.lat, session.origen?.lng),
+      buscarChoferDisponibleTraccar(session.origen, [], "auto"),
+    ]);
+
+    const { km, duracion } = distRes.status === "fulfilled" ? distRes.value : { km: 0, duracion: null };
     const auto = calcularPrecio(km, "auto");
-    const { multiplier } = await calcularMultiplierSurge(session.origen?.lat, session.origen?.lng);
+    const multiplier = surgeRes.status === "fulfilled" ? surgeRes.value.multiplier : 1;
     const precioAuto = aplicarSurge(auto.total, multiplier);
 
-    // Ver si hay un chofer cerca
+    // Info del chofer cercano (del resultado en paralelo)
     let infoChofer;
-    try {
-      const chofer = await buscarChoferDisponibleTraccar(session.origen, [], "auto");
-      if (chofer?.ubicacion?.minutos != null) {
-        const min = Math.max(chofer.ubicacion.minutos, 2);
-        infoChofer = `Tengo un móvil cerca, a unos ${min} minutos. `;
-      } else {
-        infoChofer = "Voy a buscar un móvil para usted. ";
-      }
-    } catch {
+    const chofer = choferRes.status === "fulfilled" ? choferRes.value : null;
+    if (chofer?.ubicacion?.minutos != null) {
+      const min = Math.max(chofer.ubicacion.minutos, 2);
+      infoChofer = `Tengo un móvil cerca, a unos ${min} minutos. `;
+    } else {
       infoChofer = "Voy a buscar un móvil para usted. ";
     }
 
