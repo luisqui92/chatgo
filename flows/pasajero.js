@@ -330,6 +330,22 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
   // Términos y condiciones
   // Bloque de onboarding (términos + nombre): entrar si NO terminó el setup
   const sesionPrevia = await getSession(phone);
+
+  // Expirar sesiones de confirmación viejas: si quedó un viaje a medio confirmar
+  // (el pasajero no respondió "sí/no" y se fue), no debe mezclarse con un pedido
+  // nuevo. Si pasaron más de 5 minutos en un step de confirmación, se descarta.
+  if (sesionPrevia?.updatedAt && sesionPrevia.step) {
+    const stepsConfirmacion = ["confirmando_viaje_voz", "confirmando_ubicaciones_voz", "preguntando_opciones", "eligiendo_tipo_vehiculo", "ofreciendo_codigo"];
+    if (stepsConfirmacion.includes(sesionPrevia.step)) {
+      const edadMin = (Date.now() - new Date(sesionPrevia.updatedAt).getTime()) / 60000;
+      if (edadMin > 5) {
+        log.info(`[SESSION] Confirmación vieja (${Math.round(edadMin)}min) en ${sesionPrevia.step} — descartada`);
+        await deleteSession(phone);
+        sesionPrevia.step = null; // tratar como sesión fresca de acá en adelante
+      }
+    }
+  }
+
   const enFlujoNombre = sesionPrevia && sesionPrevia.step === "esperando_nombre_usuario";
   if (!usuario || !usuario.aceptoTerminos || enFlujoNombre) {
     let session = sesionPrevia || { step: "usuario_terminos" };
@@ -788,21 +804,45 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
         const audioUrl = await obtenerUrlMedia(mensaje.audio?.id || mensaje.voice?.id);
         const transcripcion = await transcribirAudio(audioUrl);
         const decision = interpretarSiNo(transcripcion);
-        if (decision === "si") {
-          const sessionViaje = { ...session, tipoVehiculo: session.tipoVehiculo || "auto", precioFinal: session.precioAuto };
-          await asignarChofer(phone, sessionViaje);
-        } else if (decision === "no") {
+
+        // Distinguir: ¿es una confirmación corta ("sí"/"no") o un PEDIDO NUEVO?
+        // Si el audio es largo (varias palabras) y menciona ir/llevar/calles, es un
+        // viaje nuevo, NO una confirmación del viaje anterior. Evita asignar al chofer
+        // un viaje viejo cuando el pasajero en realidad pidió otro.
+        const palabras = (transcripcion || "").trim().split(/\s+/).length;
+        const pareceePedidoNuevo = palabras > 5 && /\b(ir|vamos|ll[eé]vame|llevar|desde|hasta|hacia|quiero|necesito|av\.|avenida|calle|plaza)\b/i.test(transcripcion || "");
+
+        if (decision && !pareceePedidoNuevo) {
+          // Es una confirmación clara (sí/no) y NO parece un pedido nuevo
+          if (decision === "si") {
+            const sessionViaje = { ...session, tipoVehiculo: session.tipoVehiculo || "auto", precioFinal: session.precioAuto };
+            await asignarChofer(phone, sessionViaje);
+          } else {
+            await deleteSession(phone);
+            await setSession(phone, { step: "inicio" });
+            await enviarMensaje(phone, "Está bien, cancelé el viaje. Cuando quiera otro, solo dígame a dónde quiere ir. 🚖");
+          }
+          return;
+        }
+
+        if (pareceePedidoNuevo) {
+          // El pasajero pidió un viaje NUEVO mientras había uno sin confirmar.
+          // Descartamos el anterior y procesamos este como pedido fresco.
+          log.info(`[VOZ] Pedido nuevo durante confirmación pendiente — reiniciando viaje`);
           await deleteSession(phone);
-          await setSession(phone, { step: "inicio" });
-          await enviarMensaje(phone, "Está bien, cancelé el viaje. Cuando quiera otro, solo dígame a dónde quiere ir. 🚖");
+          session = { step: null, ultimaInteraccionVoz: true };
+          await setSession(phone, session);
+          // (cae al procesamiento normal de audio más abajo)
         } else {
+          // No se entendió y no parece pedido nuevo — volver a preguntar
           await enviarMensaje(phone, "No le entendí bien. ¿Confirmo el viaje? Por favor dígame *sí* o *no*.");
+          return;
         }
       } catch (e) {
         log.error("[VOZ_CONFIRM]", e.message);
         await enviarMensaje(phone, "Tuve un problema escuchando. ¿Confirmo el viaje? Dígame *sí* o *no*.");
+        return;
       }
-      return;
     }
 
     // Onboarding de audio: explicar UNA SOLA VEZ cómo funciona y que ayudan a construir el mapa
