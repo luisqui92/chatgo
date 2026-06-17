@@ -929,6 +929,10 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
       const evalOrigenVoz = detOrigen ? evaluarReferencia(detOrigen) : { vaga: false };
       const evalDestinoVoz = detDestino ? evaluarReferencia(detDestino) : { vaga: false };
 
+      // Ciudad del usuario para geocoding correcto (definida acá porque la usamos abajo)
+      const usuarioParaGeocode = await Usuario.findOne({ phone }).lean();
+      const ciudadParaAudio = session.ciudadUsuario || usuarioParaGeocode?.ciudad || "Cochabamba";
+
       // Si el lugar YA está en la memoria (pre-cargado o aprendido antes), tiene
       // coordenadas exactas → NO es vago, no hay que pedir más referencias.
       const memOrigen = ubicaciones.origen ? await buscarReferenciaEnMemoria(ubicaciones.origen, ciudadParaAudio) : null;
@@ -1024,10 +1028,6 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
       if (esquinaOrigen) session._esquinaOrigen = esquinaOrigen;
       if (esquinaDestino) session._esquinaDestino = esquinaDestino;
       // (El flujo viejo seguirá usando ubicaciones.origen/destino como texto, geocodificará si no las teníamos)
-      
-      // Ciudad del usuario para geocoding correcto
-      const usuarioParaGeocode = await Usuario.findOne({ phone }).lean();
-      const ciudadParaAudio = session.ciudadUsuario || usuarioParaGeocode?.ciudad || "Cochabamba";
 
       // Evaluar precisión de las referencias extraídas
       // Si son imprecisas advertimos pero NO bloqueamos — el viaje puede continuar
