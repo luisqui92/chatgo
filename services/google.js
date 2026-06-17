@@ -272,11 +272,10 @@ async function buscarReferenciaEnMemoria(referencia, ciudadUsuario = "Cochabamba
   if (!referencia || referencia.length < 4) return null;
   const norm = normalizarReferencia(referencia);
 
-  // 1. Búsqueda exacta filtrada por ciudad
-  const exacto = await LocationReference.findOne({ referencia: norm, ciudad: ciudadUsuario });
-  // Fallback sin filtro de ciudad para referencias antiguas
-  const exactoAny = exacto || await LocationReference.findOne({ referencia: norm });
-  const docExacto = exacto || exactoAny;
+  // 1. Búsqueda exacta filtrada por ciudad (SOLO esa ciudad, sin fallback a otras
+  // para no agarrar un lugar homónimo de otra ciudad, ej Ventura Mall que existe
+  // tanto en Santa Cruz como en datos viejos de Cochabamba)
+  const docExacto = await LocationReference.findOne({ referencia: norm, ciudad: ciudadUsuario });
   if (docExacto) {
     log.info(`[VOICE_MEM] Hit exacto: "${referencia}" en ${ciudadUsuario} → (${docExacto.lat}, ${docExacto.lng})`);
     await LocationReference.findByIdAndUpdate(docExacto._id, { $inc: { contador: 1 } });
