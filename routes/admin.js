@@ -1138,6 +1138,157 @@ cargar();
 </script></body></html>`);
 });
 
+// ═══════════════════════════════════════════════════════════════════════════
+// PANEL DE FLOTA (para dueños de radiotaxi) — página independiente
+// Acceso por link con token: /admin/flota?token=XXXX
+// Tokens definidos en variable FLOTA_TOKENS con formato: token1:Clasico,token2:OtraFlota
+// El dueño ve SOLO los choferes y viajes de su flota.
+// ═══════════════════════════════════════════════════════════════════════════
+function getFlotaPorToken(token) {
+  if (!token) return null;
+  const raw = process.env.FLOTA_TOKENS || "";
+  for (const par of raw.split(",")) {
+    const [tk, flota] = par.split(":");
+    if (tk && tk.trim() === token.trim()) return (flota || "").trim();
+  }
+  return null;
+}
+
+app.get("/admin/flota", async (req, res) => {
+  try {
+    const flota = getFlotaPorToken(req.query.token);
+    if (!flota) {
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      return res.status(403).send(`<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Acceso · ChatGo</title><style>body{font-family:-apple-system,sans-serif;background:#0f1419;color:#e6e6e6;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;}.box{text-align:center;padding:30px;background:#161b22;border:1px solid #30363d;border-radius:12px;}h1{color:#f85149;font-size:18px;}p{color:#8b949e;font-size:14px;margin-top:8px;}</style></head><body><div class="box"><h1>🔒 Acceso no válido</h1><p>El enlace no es correcto o expiró.<br>Contactá al administrador de ChatGo.</p></div></body></html>`);
+    }
+
+    const hoyStr = fechaStrBolivia();
+    const inicioHoy = new Date(); inicioHoy.setHours(0, 0, 0, 0);
+
+    // Choferes de esta flota
+    const choferes = await Chofer.find({ flota }).lean();
+    const phones = choferes.map(c => c.phone);
+
+    // Viajes completados hoy de la flota
+    const viajesHoy = await Viaje.find({
+      choferPhone: { $in: phones },
+      estado: "completado",
+      fechaFin: { $gte: inicioHoy },
+    }).sort({ fechaFin: -1 }).lean();
+
+    // Posición GPS de cada chofer
+    const choferesData = await Promise.all(choferes.map(async c => {
+      let pos = null;
+      if (c.traccarId) { try { const p = await obtenerUbicacionChofer(c.traccarId); pos = { lat: p.lat, lng: p.lng, hace_min: p.minutos }; } catch {} }
+      const vCh = viajesHoy.filter(v => v.choferPhone === c.phone);
+      const cobrado = vCh.reduce((s, v) => s + (v.precioTotal || 0), 0);
+      return {
+        phone: c.phone, nombre: c.nombre || "Sin nombre", placa: c.placa || "—",
+        tipoVehiculo: c.tipoVehiculo || "auto", estado: c.estado || "offline",
+        carrerasHoy: vCh.length, cobradoHoy: cobrado,
+        gps: pos ? `hace ${pos.hace_min} min` : "sin GPS",
+        rating: c.ratingPromedio || 0,
+      };
+    }));
+
+    // Totales de la flota
+    const totalCarreras = viajesHoy.length;
+    const totalCobrado = viajesHoy.reduce((s, v) => s + (v.precioTotal || 0), 0);
+    const libres = choferesData.filter(c => c.estado === "libre").length;
+    const ocupados = choferesData.filter(c => c.estado === "ocupado").length;
+
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.send(`<!DOCTYPE html>
+<html lang="es"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Flota ${flota} · ChatGo</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#0f1419;color:#e6e6e6;padding-bottom:30px;}
+.header{background:#161b22;padding:16px;border-bottom:1px solid #30363d;position:sticky;top:0;z-index:10;}
+.header h1{font-size:18px;color:#00d97e;}
+.header p{font-size:12px;color:#8b949e;margin-top:2px;}
+.stats{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;padding:16px;}
+.card{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:14px;text-align:center;}
+.card .num{font-size:26px;font-weight:700;color:#58a6ff;}
+.card .lbl{font-size:12px;color:#8b949e;margin-top:4px;}
+.card.verde .num{color:#3fb950;}
+.card.dinero .num{color:#d29922;}
+.section{padding:0 16px;margin-top:10px;}
+.section h2{font-size:15px;color:#e6e6e6;margin-bottom:10px;}
+.chofer{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:14px;margin-bottom:10px;}
+.chofer .top{display:flex;justify-content:space-between;align-items:center;}
+.chofer .nombre{font-size:15px;font-weight:600;}
+.chofer .estado{font-size:11px;padding:3px 8px;border-radius:12px;}
+.estado-libre{background:rgba(63,185,80,.15);color:#3fb950;}
+.estado-ocupado{background:rgba(210,153,34,.15);color:#d29922;}
+.estado-offline{background:rgba(248,81,73,.15);color:#f85149;}
+.chofer .info{font-size:12px;color:#8b949e;margin-top:6px;display:flex;gap:14px;flex-wrap:wrap;}
+.chofer .stats-row{display:flex;gap:20px;margin-top:8px;padding-top:8px;border-top:1px solid #21262d;}
+.chofer .stat .n{font-size:18px;font-weight:600;color:#58a6ff;}
+.chofer .stat .l{font-size:11px;color:#8b949e;}
+.ver-mas{color:#58a6ff;font-size:12px;text-decoration:none;margin-top:8px;display:inline-block;}
+.empty{color:#8b949e;text-align:center;padding:20px;font-size:13px;}
+table{width:100%;border-collapse:collapse;font-size:12px;}
+th,td{padding:8px 6px;text-align:left;border-bottom:1px solid #21262d;}
+th{color:#8b949e;font-weight:500;}
+.truncate{max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.refresh{font-size:11px;color:#8b949e;text-align:center;margin-top:16px;}
+</style></head>
+<body>
+<div class="header">
+  <h1>🚖 Flota ${flota}</h1>
+  <p>Actividad de hoy · ${hoyStr}</p>
+</div>
+
+<div class="stats">
+  <div class="card"><div class="num">${choferes.length}</div><div class="lbl">Choferes</div></div>
+  <div class="card verde"><div class="num">${libres}</div><div class="lbl">Libres ahora</div></div>
+  <div class="card"><div class="num">${totalCarreras}</div><div class="lbl">Carreras hoy</div></div>
+  <div class="card dinero"><div class="num">Bs ${totalCobrado}</div><div class="lbl">Cobrado hoy</div></div>
+</div>
+
+<div class="section">
+  <h2>👥 Choferes (${choferes.length})</h2>
+  ${choferesData.length === 0 ? '<div class="empty">No hay choferes en esta flota todavía.</div>' :
+    choferesData.map(c => `
+    <div class="chofer">
+      <div class="top">
+        <span class="nombre">${c.tipoVehiculo === "moto" ? "🏍️" : "🚗"} ${c.nombre}</span>
+        <span class="estado estado-${c.estado}">${c.estado.toUpperCase()}</span>
+      </div>
+      <div class="info">
+        <span>Placa: ${c.placa}</span>
+        <span>📍 ${c.gps}</span>
+        ${c.rating ? `<span>⭐ ${c.rating.toFixed(1)}</span>` : ""}
+      </div>
+      <div class="stats-row">
+        <div class="stat"><div class="n">${c.carrerasHoy}</div><div class="l">carreras hoy</div></div>
+        <div class="stat"><div class="n">Bs ${c.cobradoHoy}</div><div class="l">cobrado hoy</div></div>
+      </div>
+    </div>`).join("")}
+</div>
+
+<div class="section">
+  <h2>📜 Carreras de hoy (${viajesHoy.length})</h2>
+  ${viajesHoy.length === 0 ? '<div class="empty">Sin carreras completadas hoy.</div>' :
+    `<div style="overflow-x:auto"><table>
+      <thead><tr><th>Hora</th><th>Chofer</th><th>Origen</th><th>Destino</th><th>Km</th><th>Cobro</th></tr></thead>
+      <tbody>${viajesHoy.map(v => {
+        const hora = v.fechaFin ? new Date(v.fechaFin).toLocaleTimeString("es-BO", { hour: "2-digit", minute: "2-digit", timeZone: "America/La_Paz" }) : "—";
+        return `<tr><td>${hora}</td><td>${v.choferNombre || "—"}</td><td class="truncate">${v.origen?.nombre || "📍"}</td><td class="truncate">${v.destino?.nombre || "🏁"}</td><td>${v.distanciaKm || "—"}</td><td>Bs ${v.precioTotal || "—"}</td></tr>`;
+      }).join("")}</tbody>
+    </table></div>`}
+</div>
+
+<div class="refresh">🔄 Se actualiza solo cada 60 segundos</div>
+<script>setTimeout(()=>location.reload(),60000);</script>
+</body></html>`);
+  } catch (e) {
+    log.error("[ADMIN_FLOTA]", e.message, e.stack);
+    res.status(500).send("Error: " + e.message);
+  }
+});
+
 app.get("/", (_req, res) => { res.send("ChatGo v5.30 - RastreoPlus - Operativo ✅"); });
 
 // ═══════════════════════════════════════════════════════════════════════════
