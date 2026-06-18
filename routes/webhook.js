@@ -92,12 +92,14 @@ app.post("/webhook", limitWebhook, async (req, res) => {
         // (ej: chofer_esperando_pasajero, chofer_en_camino = "el chofer va en camino al pasajero").
         // Esos NO son registro de chofer. El registro real solo se dispara por palabra clave
         // o por steps que de verdad pertenecen al flujo del conductor.
-        const stepsRegistroChofer = ["chofer_esperando_comprobante", "chofer_registro", "chofer_credenciales"];
+        const stepsRegistroChofer = ["chofer_esperando_comprobante", "chofer_registro", "chofer_credenciales", "chofer_esperando_codigo_flota"];
         const esRegistroChofer =
           !esChofer && (
             textoUpper === "CHOFER" ||
             textoUpper === "SOY CHOFER" ||
             textoUpper === "CONDUCTOR" ||
+            buttonId === "chofer_tiene_codigo" ||
+            buttonId === "chofer_sin_codigo" ||
             (session && stepsRegistroChofer.includes(session.step))
           );
 

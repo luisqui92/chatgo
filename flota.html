@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Mi Flota · ChatGo</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#0f1419;color:#e6e6e6;padding-bottom:30px;}
+.header{background:#161b22;padding:16px;border-bottom:1px solid #30363d;position:sticky;top:0;z-index:10;}
+.header h1{font-size:18px;color:#00d97e;}
+.header p{font-size:12px;color:#8b949e;margin-top:2px;}
+.stats{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;padding:16px;}
+.card{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:14px;text-align:center;}
+.card .num{font-size:26px;font-weight:700;color:#58a6ff;}
+.card .lbl{font-size:12px;color:#8b949e;margin-top:4px;}
+.card.verde .num{color:#3fb950;}
+.card.dinero .num{color:#d29922;}
+.section{padding:0 16px;margin-top:10px;}
+.section h2{font-size:15px;color:#e6e6e6;margin-bottom:10px;}
+.chofer{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:14px;margin-bottom:10px;}
+.chofer .top{display:flex;justify-content:space-between;align-items:center;}
+.chofer .nombre{font-size:15px;font-weight:600;}
+.chofer .estado{font-size:11px;padding:3px 8px;border-radius:12px;white-space:nowrap;}
+.estado-libre{background:rgba(63,185,80,.15);color:#3fb950;}
+.estado-ocupado{background:rgba(210,153,34,.15);color:#d29922;}
+.estado-offline{background:rgba(248,81,73,.15);color:#f85149;}
+.chofer .info{font-size:12px;color:#8b949e;margin-top:6px;display:flex;gap:14px;flex-wrap:wrap;}
+.chofer .stats-row{display:flex;gap:24px;margin-top:8px;padding-top:8px;border-top:1px solid #21262d;}
+.chofer .stat .n{font-size:18px;font-weight:600;color:#58a6ff;}
+.chofer .stat .l{font-size:11px;color:#8b949e;}
+.empty{color:#8b949e;text-align:center;padding:20px;font-size:13px;}
+table{width:100%;border-collapse:collapse;font-size:12px;}
+th,td{padding:8px 6px;text-align:left;border-bottom:1px solid #21262d;}
+th{color:#8b949e;font-weight:500;}
+.truncate{max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.refresh{font-size:11px;color:#8b949e;text-align:center;margin-top:16px;}
+.loading,.error-box{text-align:center;padding:60px 20px;color:#8b949e;}
+.error-box h2{color:#f85149;font-size:18px;margin-bottom:8px;}
+</style>
+</head>
+<body>
+
+<div id="app">
+  <div class="loading">⏳ Cargando tu flota...</div>
+</div>
+
+<script>
+// URL del backend en Railway
+const API = "https://chatgo-production.up.railway.app";
+
+// Tomar el token de la URL (?token=XXXX)
+const params = new URLSearchParams(window.location.search);
+const token = params.get("token");
+
+function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+async function cargar() {
+  if (!token) {
+    document.getElementById("app").innerHTML =
+      '<div class="error-box"><h2>🔒 Acceso no válido</h2><p>El enlace no es correcto.<br>Contactá al administrador de ChatGo.</p></div>';
+    return;
+  }
+  try {
+    const res = await fetch(API + "/admin/flota-data?token=" + encodeURIComponent(token));
+    if (res.status === 403) {
+      document.getElementById("app").innerHTML =
+        '<div class="error-box"><h2>🔒 Acceso no válido</h2><p>El enlace no es correcto o expiró.<br>Contactá al administrador de ChatGo.</p></div>';
+      return;
+    }
+    if (!res.ok) throw new Error("Error " + res.status);
+    const d = await res.json();
+    render(d);
+  } catch (e) {
+    document.getElementById("app").innerHTML =
+      '<div class="error-box"><h2>⚠️ No se pudo cargar</h2><p>Intentá de nuevo en un momento.<br><small>' + esc(e.message) + '</small></p></div>';
+  }
+}
+
+function render(d) {
+  const s = d.stats;
+  let html = '';
+
+  // Header
+  html += '<div class="header"><h1>🚖 Flota ' + esc(d.flota) + '</h1><p>Actividad de hoy · ' + esc(d.hoy) + '</p></div>';
+
+  // Tarjetas de resumen
+  html += '<div class="stats">';
+  html += '<div class="card"><div class="num">' + s.choferes + '</div><div class="lbl">Choferes</div></div>';
+  html += '<div class="card verde"><div class="num">' + s.libres + '</div><div class="lbl">Libres ahora</div></div>';
+  html += '<div class="card"><div class="num">' + s.totalCarreras + '</div><div class="lbl">Carreras hoy</div></div>';
+  html += '<div class="card dinero"><div class="num">Bs ' + s.totalCobrado + '</div><div class="lbl">Cobrado hoy</div></div>';
+  html += '</div>';
+
+  // Choferes
+  html += '<div class="section"><h2>👥 Choferes (' + s.choferes + ')</h2>';
+  if (!d.choferes.length) {
+    html += '<div class="empty">No hay choferes en esta flota todavía.</div>';
+  } else {
+    d.choferes.forEach(c => {
+      const emoji = c.tipoVehiculo === "moto" ? "🏍️" : "🚗";
+      html += '<div class="chofer">';
+      html += '<div class="top"><span class="nombre">' + emoji + ' ' + esc(c.nombre) + '</span>';
+      html += '<span class="estado estado-' + esc(c.estado) + '">' + esc(c.estado.toUpperCase()) + '</span></div>';
+      html += '<div class="info"><span>Placa: ' + esc(c.placa) + '</span><span>📍 ' + esc(c.gps) + '</span>';
+      if (c.rating) html += '<span>⭐ ' + c.rating.toFixed(1) + '</span>';
+      html += '</div>';
+      html += '<div class="stats-row">';
+      html += '<div class="stat"><div class="n">' + c.carrerasHoy + '</div><div class="l">carreras hoy</div></div>';
+      html += '<div class="stat"><div class="n">Bs ' + c.cobradoHoy + '</div><div class="l">cobrado hoy</div></div>';
+      html += '</div></div>';
+    });
+  }
+  html += '</div>';
+
+  // Carreras del día
+  html += '<div class="section"><h2>📜 Carreras de hoy (' + d.carreras.length + ')</h2>';
+  if (!d.carreras.length) {
+    html += '<div class="empty">Sin carreras completadas hoy.</div>';
+  } else {
+    html += '<div style="overflow-x:auto"><table><thead><tr><th>Hora</th><th>Chofer</th><th>Origen</th><th>Destino</th><th>Km</th><th>Cobro</th></tr></thead><tbody>';
+    d.carreras.forEach(v => {
+      html += '<tr><td>' + esc(v.hora) + '</td><td>' + esc(v.chofer) + '</td>';
+      html += '<td class="truncate">' + esc(v.origen) + '</td><td class="truncate">' + esc(v.destino) + '</td>';
+      html += '<td>' + esc(v.km) + '</td><td>Bs ' + v.cobro + '</td></tr>';
+    });
+    html += '</tbody></table></div>';
+  }
+  html += '</div>';
+
+  html += '<div class="refresh">🔄 Se actualiza solo cada 60 segundos</div>';
+
+  document.getElementById("app").innerHTML = html;
+}
+
+cargar();
+setInterval(cargar, 60000); // refrescar cada 60s
+</script>
+
+</body>
+</html>

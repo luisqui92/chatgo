@@ -11,7 +11,7 @@ const os = require("os");
 const { getUsuarios, hashPassword, generarToken, verificarToken, requireAuth, tienePermiso } =  require("../services/auth");
 
 const { CONFIG, log } = require("../config");
-const { Chofer, CodigoPromo, ListaEspera, LocationReference, Usuario, Viaje, ViajeDemo } = require("../db/models");
+const { Chofer, CodigoPromo, ListaEspera, LocationReference, Usuario, Viaje, ViajeDemo, PreRegistroFlota } = require("../db/models");
 const { obtenerUbicacionChofer } = require("../services/traccar");
 const { geocodificarDireccion } = require("../services/google");
 
@@ -736,6 +736,17 @@ app.get("/admin/aprobar-chofer/:phone", requireAuth(["superadmin","admin"]), asy
         reservadoHasta: null,
       }
     );
+
+    // Si el chofer puso un código de radiotaxi antes de registrarse, aplicarle la flota
+    if (!chofer.flota) {
+      try {
+        const pre = await PreRegistroFlota.findOne({ phone });
+        if (pre?.flota) {
+          await Chofer.updateOne({ phone }, { $set: { flota: pre.flota } });
+          log.info(`[FLOTA] Chofer ${phone} vinculado a flota "${pre.flota}" desde pre-registro`);
+        }
+      } catch (e) { log.error("[FLOTA_PREREG]", e.message); }
+    }
 
     // Notificar al chofer por WhatsApp
     await enviarBotones(

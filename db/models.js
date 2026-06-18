@@ -334,5 +334,14 @@ const esquinaMapeadaSchema = new mongoose.Schema({
 }, { timestamps: true });
 const EsquinaMapeada = mongoose.model("EsquinaMapeada", esquinaMapeadaSchema);
 
+// Pre-registro de flota: cuando un chofer pone su código de radiotaxi ANTES de
+// registrarse, lo guardamos acá (teléfono → flota). Al aprobarse el chofer, se le
+// aplica la flota automáticamente. Así el código no se pierde entre los dos momentos.
+const preRegistroFlotaSchema = new mongoose.Schema({
+  phone: { type: String, unique: true, index: true, required: true },
+  flota: { type: String, required: true },
+}, { timestamps: true });
+const PreRegistroFlota = mongoose.model("PreRegistroFlota", preRegistroFlotaSchema);
 
-module.exports = { Usuario, Chofer, Viaje, SessionState, ListaEspera, RateLimit, CodigoPromo, LocationReference, Demanda, EventoChofer, AlertaSeg, Surge, ViajeDemo, EsquinaMapeada };
+
+module.exports = { Usuario, Chofer, Viaje, SessionState, ListaEspera, RateLimit, CodigoPromo, LocationReference, Demanda, EventoChofer, AlertaSeg, Surge, ViajeDemo, EsquinaMapeada, PreRegistroFlota };

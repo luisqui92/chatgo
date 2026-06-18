@@ -16,7 +16,7 @@ const https = require("https");
 const http = require("http");
 const os = require("os");
 const { CONFIG, log } = require("../config");
-const { Usuario, Chofer, Viaje, LocationReference } = require("../db/models");
+const { Usuario, Chofer, Viaje, LocationReference, PreRegistroFlota } = require("../db/models");
 const { getSession, setSession, updateSession, deleteSession } = require("../services/session");
 const { enviarMensaje, enviarBotones, enviarImagen, reenviarImagenPorId, relayMensajeChat, descargarImagenMeta } = require("../services/whatsapp");
 const { obtenerUbicacionChofer, liberarReservaChoferTraccar, generarLinkRastreoPropio } = require("../services/traccar");
@@ -32,14 +32,66 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
 
   if (!chofer) {
     const NUMERO_REGISTRO = process.env.NUMERO_REGISTRO || "59164637067";
-    await enviarMensaje(
-      phone,
-      `👋 Hola! Para ser conductor de ChatGo primero tienes que registrarte con nosotros.\n\n` +
+
+    // PASO 1: preguntar si tiene código de radiotaxi (para vincularlo a su flota)
+    // Códigos válidos en variable CODIGOS_RADIOTAXI: "clasico,radiomovil,..." (sin tildes)
+    const codigosValidos = (process.env.CODIGOS_RADIOTAXI || "")
+      .split(",").map(c => c.trim().toLowerCase()).filter(Boolean);
+
+    // Si el chofer responde con botones a la pregunta del código
+    if (buttonId === "chofer_tiene_codigo") {
+      await setSession(phone, { step: "chofer_esperando_codigo_flota" });
+      await enviarMensaje(phone, `🚕 Escribe el *código de tu radiotaxi*.\n\n_(Te lo dio el dueño o administrador de tu radiotaxi.)_`);
+      return;
+    }
+    if (buttonId === "chofer_sin_codigo") {
+      await enviarMensaje(phone,
+        `👋 Para ser conductor de ChatGo tienes que registrarte con nosotros.\n\n` +
         `El registro es rápido (unos 5 minutos) y lo haces con otro número:\n\n` +
         `📱 https://wa.me/${NUMERO_REGISTRO}?text=Vengo+a+registrarme\n\n` +
         `Te vamos a pedir:\n` +
         `1️⃣ Foto de licencia de conducir\n2️⃣ Selfie tuya\n3️⃣ Foto del vehículo con placa visible\n4️⃣ RUAT\n5️⃣ SOAT\n\n` +
-        `Una vez aprobado tu registro, te enviaremos las credenciales y podrás volver aquí para iniciar tu jornada 🚖`
+        `Una vez aprobado, te enviaremos las credenciales y podrás volver aquí 🚖`
+      );
+      await deleteSession(phone);
+      return;
+    }
+
+    // Si está escribiendo el código de la flota
+    const sesionChofer = await getSession(phone);
+    if (sesionChofer?.step === "chofer_esperando_codigo_flota" && mensajeTexto) {
+      const codigoIngresado = mensajeTexto.trim().toLowerCase().replace(/\s+/g, "");
+      // Buscar coincidencia (acepta "clasico" o "radiomovilclasico" según config)
+      const match = codigosValidos.find(c => c.replace(/\s+/g, "") === codigoIngresado);
+      if (match) {
+        // Guardar el pre-registro: este teléfono pertenece a esta flota
+        await PreRegistroFlota.findOneAndUpdate(
+          { phone },
+          { $set: { flota: match } },
+          { upsert: true }
+        );
+        await deleteSession(phone);
+        await enviarMensaje(phone,
+          `✅ ¡Código correcto! Quedas registrado para el radiotaxi *${match}*.\n\n` +
+          `Ahora completá tu registro en este número:\n📱 https://wa.me/${NUMERO_REGISTRO}?text=Vengo+a+registrarme+de+${match}\n\n` +
+          `Te pediremos: licencia, selfie, foto del vehículo, RUAT y SOAT.\n\n` +
+          `Cuando te aprobemos, ya quedarás vinculado a tu radiotaxi 🚖`
+        );
+      } else {
+        await enviarMensaje(phone, `❌ Ese código no es válido. Verificá con el administrador de tu radiotaxi y volvé a escribirlo, o escribí *NO* si no tenés código.`);
+        if (codigoIngresado === "no") { await deleteSession(phone); }
+      }
+      return;
+    }
+
+    // Primera vez: preguntar si tiene código
+    await enviarBotones(
+      phone,
+      `👋 ¡Hola! Para ser conductor de ChatGo.\n\n¿Perteneces a un *radiotaxi* y tienes un código?`,
+      [
+        { id: "chofer_tiene_codigo", title: "✅ Sí, tengo código" },
+        { id: "chofer_sin_codigo", title: "No tengo código" },
+      ]
     );
     return;
   }
