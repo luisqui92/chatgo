@@ -486,29 +486,44 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
     return;
   }
 
-  // ─── COMANDO ADMIN: asignar chofer a una flota ──────────────────────────
-  // "flota Radio Movil 59171234567" → vincula ese chofer a la flota "Radio Movil".
-  // "flota Radio Movil" (sin número) → lista los choferes de esa flota.
+  // ─── COMANDO ADMIN: asignar chofer(es) a una flota ──────────────────────
+  // "flota Radio Movil 59171234567 59177654321 ..." → vincula TODOS esos choferes
+  //    a la flota "Radio Movil" (asignación masiva, varios números de una vez).
+  // "flota Radio Movil" (sin números) → lista los choferes de esa flota.
   if (texto && /^flota\s+/i.test(texto) && phone === CONFIG.ADMIN_PHONE) {
     const resto = texto.replace(/^flota\s+/i, "").trim();
-    // ¿Termina en un número de teléfono? (8+ dígitos al final)
-    const matchTel = resto.match(/(\d{8,})\s*$/);
-    if (matchTel) {
-      const telChofer = matchTel[1];
-      const nombreFlota = resto.slice(0, resto.length - matchTel[0].length).trim();
+    // Buscar TODOS los números de teléfono (8+ dígitos) en el mensaje
+    const telefonos = resto.match(/\d{8,}/g) || [];
+
+    if (telefonos.length > 0) {
+      // El nombre de la flota es lo que queda al quitar los números
+      let nombreFlota = resto;
+      for (const t of telefonos) nombreFlota = nombreFlota.replace(t, "");
+      nombreFlota = nombreFlota.replace(/[,\s]+/g, " ").trim();
+
       if (!nombreFlota) {
-        await enviarMensajeRaw(phone, `❌ Falta el nombre de la flota.\nEjemplo: *flota Radio Movil ${telChofer}*`);
+        await enviarMensajeRaw(phone, `❌ Falta el nombre de la flota.\nEjemplo: *flota Radio Movil ${telefonos[0]}*`);
         return;
       }
-      const ch = await Chofer.findOne({ phone: telChofer });
-      if (!ch) {
-        await enviarMensajeRaw(phone, `❌ No encontré un chofer con el número ${telChofer}.`);
-        return;
+
+      const asignados = [];
+      const noEncontrados = [];
+      for (const tel of telefonos) {
+        const ch = await Chofer.findOne({ phone: tel });
+        if (ch) {
+          await Chofer.updateOne({ phone: tel }, { $set: { flota: nombreFlota } });
+          asignados.push(ch.nombre || tel);
+        } else {
+          noEncontrados.push(tel);
+        }
       }
-      await Chofer.updateOne({ phone: telChofer }, { $set: { flota: nombreFlota } });
-      await enviarMensajeRaw(phone, `✅ ${ch.nombre || telChofer} asignado a la flota *${nombreFlota}*.`);
+
+      let msg = `✅ *Flota ${nombreFlota}:* ${asignados.length} chofer(es) asignado(s).`;
+      if (asignados.length) msg += `\n\n${asignados.map(a => `• ${a}`).join("\n")}`;
+      if (noEncontrados.length) msg += `\n\n⚠️ No encontrados (no registrados aún):\n${noEncontrados.map(t => `• ${t}`).join("\n")}`;
+      await enviarMensajeRaw(phone, msg);
     } else {
-      // Sin número → listar choferes de esa flota
+      // Sin números → listar choferes de esa flota
       const nombreFlota = resto;
       const choferes = await Chofer.find({ flota: nombreFlota }).lean();
       if (!choferes.length) {
