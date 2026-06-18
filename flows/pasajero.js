@@ -486,6 +486,95 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
     return;
   }
 
+  // ─── COMANDO ADMIN: reporte de una flota ────────────────────────────────
+  // "reporte Clasico" → resumen de hoy: global de la flota + detalle por chofer.
+  // "reporte Clasico semana" → últimos 7 días.
+  if (texto && /^reporte\s+/i.test(texto) && phone === CONFIG.ADMIN_PHONE) {
+    const resto = texto.replace(/^reporte\s+/i, "").trim();
+    const esSemana = /\bsemana\b/i.test(resto);
+    const nombreFlota = resto.replace(/\bsemana\b/i, "").trim();
+
+    if (!nombreFlota) {
+      await enviarMensajeRaw(phone, `❌ Falta el nombre de la flota.\nEjemplo: *reporte Clasico*`);
+      return;
+    }
+
+    const choferesFlota = await Chofer.find({ flota: nombreFlota }).lean();
+    if (!choferesFlota.length) {
+      await enviarMensajeRaw(phone, `📋 La flota *${nombreFlota}* no tiene choferes asignados.`);
+      return;
+    }
+
+    // Rango de fechas
+    const desde = new Date();
+    if (esSemana) desde.setDate(desde.getDate() - 7);
+    else desde.setHours(0, 0, 0, 0); // hoy desde las 00:00
+
+    const phonesFlota = choferesFlota.map(c => c.phone);
+    const viajes = await Viaje.find({
+      choferPhone: { $in: phonesFlota },
+      estado: "completado",
+      fechaFin: { $gte: desde },
+    }).lean();
+
+    // Global
+    const totalCarreras = viajes.length;
+    const totalCobrado = viajes.reduce((s, v) => s + (v.precioTotal || 0), 0);
+    const periodo = esSemana ? "últimos 7 días" : "hoy";
+
+    let msg = `📊 *Flota ${nombreFlota}* — ${periodo}\n`;
+    msg += `━━━━━━━━━━━━━━━\n`;
+    msg += `🚗 Carreras: *${totalCarreras}*\n`;
+    msg += `💰 Total cobrado: *Bs ${totalCobrado}*\n`;
+    msg += `👥 Choferes: ${choferesFlota.length}\n\n`;
+
+    // Detalle por chofer
+    msg += `*Por chofer:*\n`;
+    for (const ch of choferesFlota) {
+      const vCh = viajes.filter(v => v.choferPhone === ch.phone);
+      const cobr = vCh.reduce((s, v) => s + (v.precioTotal || 0), 0);
+      msg += `\n• *${ch.nombre || ch.phone}* (${ch.estado || "?"})\n  ${vCh.length} carreras · Bs ${cobr}\n`;
+    }
+
+    msg += `\n_Para ver el detalle de un chofer:_\n_*chofer ${choferesFlota[0]?.phone || "59171234567"}*_`;
+    await enviarMensajeRaw(phone, msg);
+    return;
+  }
+
+  // ─── COMANDO ADMIN: detalle de carreras de un chofer ────────────────────
+  // "chofer 59171234567" → lista las carreras de hoy de ese chofer (con detalle).
+  if (texto && /^chofer\s+\d{8,}/i.test(texto) && phone === CONFIG.ADMIN_PHONE) {
+    const telChofer = texto.match(/\d{8,}/)[0];
+    const ch = await Chofer.findOne({ phone: telChofer }).lean();
+    if (!ch) {
+      await enviarMensajeRaw(phone, `❌ No encontré un chofer con el número ${telChofer}.`);
+      return;
+    }
+    const desde = new Date();
+    desde.setHours(0, 0, 0, 0);
+    const viajes = await Viaje.find({
+      choferPhone: telChofer,
+      estado: "completado",
+      fechaFin: { $gte: desde },
+    }).sort({ fechaFin: 1 }).lean();
+
+    let msg = `🧑‍✈️ *${ch.nombre || telChofer}*${ch.flota ? ` — flota ${ch.flota}` : ""}\n`;
+    msg += `Placa: ${ch.placa || "?"} · Estado: ${ch.estado || "?"}\n`;
+    msg += `━━━━━━━━━━━━━━━\n`;
+    if (!viajes.length) {
+      msg += `Sin carreras completadas hoy.`;
+    } else {
+      const totalCobr = viajes.reduce((s, v) => s + (v.precioTotal || 0), 0);
+      msg += `Carreras hoy: *${viajes.length}* · Total: *Bs ${totalCobr}*\n`;
+      viajes.forEach((v, i) => {
+        const hora = v.fechaFin ? new Date(v.fechaFin).toLocaleTimeString("es-BO", { hour: "2-digit", minute: "2-digit", timeZone: "America/La_Paz" }) : "?";
+        msg += `\n${i + 1}. ${hora} · Bs ${v.precioTotal || 0}\n   ${v.origen?.nombre || "?"} → ${v.destino?.nombre || "?"}\n`;
+      });
+    }
+    await enviarMensajeRaw(phone, msg);
+    return;
+  }
+
   // ─── COMANDO ADMIN: asignar chofer(es) a una flota ──────────────────────
   // "flota Radio Movil 59171234567 59177654321 ..." → vincula TODOS esos choferes
   //    a la flota "Radio Movil" (asignación masiva, varios números de una vez).
