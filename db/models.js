@@ -343,5 +343,16 @@ const preRegistroFlotaSchema = new mongoose.Schema({
 }, { timestamps: true });
 const PreRegistroFlota = mongoose.model("PreRegistroFlota", preRegistroFlotaSchema);
 
+// Flotas de radiotaxi aliadas. Cada empresa tiene un código (para el link de registro),
+// un nombre visible, y un token secreto (para que su dueño vea su panel /admin/flota-data).
+// Agregar una flota nueva = insertar un documento acá (sin tocar código ni variables).
+const flotaSchema = new mongoose.Schema({
+  codigo: { type: String, unique: true, index: true, required: true, lowercase: true, trim: true }, // ej: "clasico"
+  nombre: { type: String, required: true },     // ej: "Radio Taxi Clásico"
+  token: { type: String, unique: true, required: true },  // secreto para el panel del dueño
+  activa: { type: Boolean, default: true },
+}, { timestamps: true });
+const Flota = mongoose.model("Flota", flotaSchema, "flotas");
 
-module.exports = { Usuario, Chofer, Viaje, SessionState, ListaEspera, RateLimit, CodigoPromo, LocationReference, Demanda, EventoChofer, AlertaSeg, Surge, ViajeDemo, EsquinaMapeada, PreRegistroFlota };
+
+module.exports = { Usuario, Chofer, Viaje, SessionState, ListaEspera, RateLimit, CodigoPromo, LocationReference, Demanda, EventoChofer, AlertaSeg, Surge, ViajeDemo, EsquinaMapeada, PreRegistroFlota, Flota };
