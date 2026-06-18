@@ -486,6 +486,41 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
     return;
   }
 
+  // ─── COMANDO ADMIN: asignar chofer a una flota ──────────────────────────
+  // "flota Radio Movil 59171234567" → vincula ese chofer a la flota "Radio Movil".
+  // "flota Radio Movil" (sin número) → lista los choferes de esa flota.
+  if (texto && /^flota\s+/i.test(texto) && phone === CONFIG.ADMIN_PHONE) {
+    const resto = texto.replace(/^flota\s+/i, "").trim();
+    // ¿Termina en un número de teléfono? (8+ dígitos al final)
+    const matchTel = resto.match(/(\d{8,})\s*$/);
+    if (matchTel) {
+      const telChofer = matchTel[1];
+      const nombreFlota = resto.slice(0, resto.length - matchTel[0].length).trim();
+      if (!nombreFlota) {
+        await enviarMensajeRaw(phone, `❌ Falta el nombre de la flota.\nEjemplo: *flota Radio Movil ${telChofer}*`);
+        return;
+      }
+      const ch = await Chofer.findOne({ phone: telChofer });
+      if (!ch) {
+        await enviarMensajeRaw(phone, `❌ No encontré un chofer con el número ${telChofer}.`);
+        return;
+      }
+      await Chofer.updateOne({ phone: telChofer }, { $set: { flota: nombreFlota } });
+      await enviarMensajeRaw(phone, `✅ ${ch.nombre || telChofer} asignado a la flota *${nombreFlota}*.`);
+    } else {
+      // Sin número → listar choferes de esa flota
+      const nombreFlota = resto;
+      const choferes = await Chofer.find({ flota: nombreFlota }).lean();
+      if (!choferes.length) {
+        await enviarMensajeRaw(phone, `📋 La flota *${nombreFlota}* no tiene choferes asignados todavía.`);
+      } else {
+        const lista = choferes.map((c, i) => `${i + 1}. ${c.nombre || "?"} — ${c.estado || "?"} — placa ${c.placa || "?"}`).join("\n");
+        await enviarMensajeRaw(phone, `📋 *Flota ${nombreFlota}* (${choferes.length} choferes):\n\n${lista}`);
+      }
+    }
+    return;
+  }
+
   // ─── COMANDO ADMIN: cargar lugares de una ciudad desde WhatsApp ──────────
   // "cargar santa cruz" → pre-carga cientos de lugares con Google Places.
   // Solo el admin puede usarlo. Evita tener que correr scripts en terminal.

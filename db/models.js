@@ -91,6 +91,7 @@ const choferSchema = new mongoose.Schema(
     reservadoHasta: Date,
     ratingPromedio: { type: Number, default: 0 },
     ratingCantidad: { type: Number, default: 0 },
+    flota: { type: String, default: null, index: true }, // radiotaxi/empresa a la que pertenece (null = independiente)
   },
   { timestamps: true }
 );
