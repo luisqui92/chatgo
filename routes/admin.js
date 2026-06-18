@@ -11,7 +11,7 @@ const os = require("os");
 const { getUsuarios, hashPassword, generarToken, verificarToken, requireAuth, tienePermiso } =  require("../services/auth");
 
 const { CONFIG, log } = require("../config");
-const { Chofer, CodigoPromo, ListaEspera, LocationReference, Usuario, Viaje, ViajeDemo, PreRegistroFlota } = require("../db/models");
+const { Chofer, CodigoPromo, ListaEspera, LocationReference, Usuario, Viaje, ViajeDemo, PreRegistroFlota, Flota } = require("../db/models");
 const { obtenerUbicacionChofer } = require("../services/traccar");
 const { geocodificarDireccion } = require("../services/google");
 
@@ -1155,21 +1155,18 @@ cargar();
 // Acceso por token: /admin/flota-data?token=XXXX
 // Tokens en variable FLOTA_TOKENS: token1:Clasico,token2:OtraFlota
 // ═══════════════════════════════════════════════════════════════════════════
-function getFlotaPorToken(token) {
+async function getFlotaPorToken(token) {
   if (!token) return null;
-  const raw = process.env.FLOTA_TOKENS || "";
-  for (const par of raw.split(",")) {
-    const [tk, flota] = par.split(":");
-    if (tk && tk.trim() === token.trim()) return (flota || "").trim();
-  }
-  return null;
+  // Buscar la flota por su token en la base de datos (colección flotas)
+  const flota = await Flota.findOne({ token: token.trim(), activa: true }).lean();
+  return flota ? flota.codigo : null;
 }
 
 app.get("/admin/flota-data", async (req, res) => {
   // Permitir que Netlify (otro dominio) consuma este endpoint
   res.setHeader("Access-Control-Allow-Origin", "*");
   try {
-    const flota = getFlotaPorToken(req.query.token);
+    const flota = await getFlotaPorToken(req.query.token);
     if (!flota) return res.status(403).json({ error: "Token no válido" });
 
     const hoyStr = fechaStrBolivia();
