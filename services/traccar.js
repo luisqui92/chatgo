@@ -110,17 +110,23 @@ async function buscarChoferDisponibleTraccar(origenUsuario, excludeTraccarIds = 
     traccarId: { $exists: true, $ne: null, $nin: excludeTraccarIds },
     $or: [{ viajeReservado: null }, { viajeReservado: { $exists: false } }],
   };
-  if (!enPromoGratis()) {
-    filtro["pagoDiario.aprobado"] = true;
-    filtro["pagoDiario.fechaStr"] = hoyStr;
-  }
-  // Choferes de PRUEBA (comodín): reciben TODOS los tipos de viaje sin importar
-  // qué vehículo tengan registrado. Útil para testing. Quitar de esta lista para
-  // que el chofer vuelva a comportarse normal.
+  // Choferes de PRUEBA (comodín): exentos del pago diario y reciben todos los tipos.
   const CHOFERES_PRUEBA = ["59176496075"]; // ffjj (prueba)
 
+  if (!enPromoGratis()) {
+    // Exigir pago al día, EXCEPTO a los choferes de prueba
+    filtro.$or = filtro.$or || [];
+    filtro.$and = filtro.$and || [];
+    filtro.$and.push({
+      $or: [
+        { phone: { $in: CHOFERES_PRUEBA } },
+        { $and: [{ "pagoDiario.aprobado": true }, { "pagoDiario.fechaStr": hoyStr }] },
+      ],
+    });
+  }
+  filtro.$and = filtro.$and || [];
   if (tipoVehiculo === "auto") {
-    filtro.$and = [{
+    filtro.$and.push({
       $or: [
         { tipoVehiculo: "auto" },
         { tipoVehiculo: { $exists: false } },
@@ -128,15 +134,15 @@ async function buscarChoferDisponibleTraccar(origenUsuario, excludeTraccarIds = 
         { tipoVehiculo: "" },
         { phone: { $in: CHOFERES_PRUEBA } }, // comodín de prueba
       ],
-    }];
+    });
   } else if (tipoVehiculo) {
     // Para un tipo específico (van/moto): el tipo exacto O un chofer de prueba
-    filtro.$and = [{
+    filtro.$and.push({
       $or: [
         { tipoVehiculo: tipoVehiculo },
         { phone: { $in: CHOFERES_PRUEBA } }, // comodín de prueba recibe todo
       ],
-    }];
+    });
   }
 
   const choferes = await Chofer.find(filtro);
