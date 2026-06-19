@@ -272,7 +272,7 @@ async function procesarCalculoViaje(phone, session) {
         `\n*Elige tu tipo de viaje:*\n\n` +
         `🚗 *Auto* — Bs ${precioAutoFinal}\n` +
         `🏍️ *Moto* — Bs ${precioMotoFinal}\n` +
-        `🚐 *Van* (8-14 personas) — Bs ${precioVanFinal}\n\n` +
+        `🚐 *Van* (8 a 14 personas) — Bs ${precioVanFinal}\n\n` +
         `_(Moto: llega una motocicleta, lleva casco. Van: ideal para grupos de 8 a 14 personas.)_`,
       [
         { id: "elegir_auto", title: "🚗 Pedir Auto" },
@@ -1950,7 +1950,7 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
       if (!tipoElegido) {
         await enviarBotones(
           phone,
-          `¿Qué tipo de viaje prefieres?\n\n🚗 *Auto* — Bs ${session.precioAuto}\n🏍️ *Moto* — Bs ${session.precioMoto}\n🚐 *Van* (8-14 pers.) — Bs ${session.precioVan}`,
+          `¿Qué tipo de viaje prefieres?\n\n🚗 *Auto* — Bs ${session.precioAuto}\n🏍️ *Moto* — Bs ${session.precioMoto}\n🚐 *Van* (8 a 14 personas) — Bs ${session.precioVan}`,
           [
             { id: "elegir_auto", title: "🚗 Pedir Auto" },
             { id: "elegir_moto", title: "🏍️ Pedir Moto" },
