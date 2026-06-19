@@ -36,7 +36,7 @@ async function asignarChofer(userPhone, session, excludeTraccarIds = [], intento
     await updateSession(userPhone, { ...session, step: "sin_chofer" });
     await addListaEspera(userPhone, { ...session, step: "sin_chofer" });
     if (intento === CONFIG.MAX_REINTENTOS_ASIGNAR) {
-      const tipoTexto = session.tipoVehiculoSolicitado === "moto" ? "moto" : session.tipoVehiculoSolicitado === "auto" ? "auto" : "móvil";
+      const tipoTexto = session.tipoVehiculoSolicitado === "moto" ? "moto" : session.tipoVehiculoSolicitado === "van" ? "van" : session.tipoVehiculoSolicitado === "auto" ? "auto" : "móvil";
       await enviarMensaje(userPhone, `⏳ Seguimos buscando tu ${tipoTexto}...\n\n_Escribe CANCELAR si quieres dejar de buscar._`);
     }
     return;
