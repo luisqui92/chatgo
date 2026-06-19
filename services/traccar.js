@@ -105,17 +105,20 @@ async function buscarChoferDisponibleTraccar(origenUsuario, excludeTraccarIds = 
   );
 
   const hoyStr = fechaStrBolivia();
-  const modoDemoPago = String(process.env.MODO_DEMO || "").toLowerCase() === "true";
   const filtro = {
     estado: "libre",
     traccarId: { $exists: true, $ne: null, $nin: excludeTraccarIds },
     $or: [{ viajeReservado: null }, { viajeReservado: { $exists: false } }],
   };
-  // En modo demo no exigimos pago diario (para presentaciones)
-  if (!enPromoGratis() && !modoDemoPago) {
+  if (!enPromoGratis()) {
     filtro["pagoDiario.aprobado"] = true;
     filtro["pagoDiario.fechaStr"] = hoyStr;
   }
+  // Choferes de PRUEBA (comodín): reciben TODOS los tipos de viaje sin importar
+  // qué vehículo tengan registrado. Útil para testing. Quitar de esta lista para
+  // que el chofer vuelva a comportarse normal.
+  const CHOFERES_PRUEBA = ["59176496075"]; // ffjj (prueba)
+
   if (tipoVehiculo === "auto") {
     filtro.$and = [{
       $or: [
@@ -123,10 +126,17 @@ async function buscarChoferDisponibleTraccar(origenUsuario, excludeTraccarIds = 
         { tipoVehiculo: { $exists: false } },
         { tipoVehiculo: null },
         { tipoVehiculo: "" },
+        { phone: { $in: CHOFERES_PRUEBA } }, // comodín de prueba
       ],
     }];
   } else if (tipoVehiculo) {
-    filtro.tipoVehiculo = tipoVehiculo;
+    // Para un tipo específico (van/moto): el tipo exacto O un chofer de prueba
+    filtro.$and = [{
+      $or: [
+        { tipoVehiculo: tipoVehiculo },
+        { phone: { $in: CHOFERES_PRUEBA } }, // comodín de prueba recibe todo
+      ],
+    }];
   }
 
   const choferes = await Chofer.find(filtro);
@@ -142,25 +152,19 @@ async function buscarChoferDisponibleTraccar(origenUsuario, excludeTraccarIds = 
   const ahoraMs = Date.now();
   const candidatos = [];
 
-  // MODO DEMO: para presentaciones, ignora los filtros de distancia/tiempo
-  // para que el chofer reciba el viaje aunque esté lejos (ej: pasajero en Santa
-  // Cruz, chofer en Cochabamba). Se activa con la variable de entorno MODO_DEMO=true.
-  const modoDemo = String(process.env.MODO_DEMO || "").toLowerCase() === "true";
-
   for (const chofer of choferes) {
     const dev = snapshotDispositivos[String(chofer.traccarId)];
     if (!dev || !dev.positionId) continue;
     const pos = snapshotPosiciones[String(chofer.traccarId)];
     if (!pos) continue;
     const minutos = Math.round((ahoraMs - new Date(pos.fixTime).getTime()) / 60000);
-    if (!modoDemo && minutos > 10) continue;
+    if (minutos > 10) continue;
     const dist = distanciaEntrePuntos(origenUsuario.lat, origenUsuario.lng, pos.latitude, pos.longitude);
-    if (!modoDemo && dist > 10) continue;
+    if (dist > 10) continue;
     candidatos.push({
       ...chofer.toObject(),
-      // En modo demo, mostrar una distancia/tiempo "creíble" para la demo
-      ubicacion: { lat: pos.latitude, lng: pos.longitude, minutos: modoDemo ? 3 : minutos },
-      distanciaAlUsuario: modoDemo ? 1.5 : dist,
+      ubicacion: { lat: pos.latitude, lng: pos.longitude, minutos },
+      distanciaAlUsuario: dist,
     });
   }
 
@@ -214,7 +218,7 @@ if (isConfigured()) {
 }
 
 function getAppUrl() {
-  return CONFIG.APP_URL || process.env.APP_URL || "";
+  return process.env.APP_URL || "https://chatgo-production.up.railway.app";
 }
 
 function generarLinkRastreoPropio(viajeId) {
