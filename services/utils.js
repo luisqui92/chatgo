@@ -565,6 +565,12 @@ function calcularPrecio(km, tipoVehiculo) {
       { hasta: 10,       porKm: 2.0, minimo: 5 },
       { hasta: Infinity, porKm: 1.5, minimo: 5 },
     ],
+    // VAN (8 a 14 pasajeros). Tarifa de ARRANQUE — ajustar cuando la Federación pase su lista.
+    van: [
+      { hasta: 4,        porKm: 5.0, minimo: 15 },
+      { hasta: 10,       porKm: 4.5, minimo: 15 },
+      { hasta: Infinity, porKm: 4.0, minimo: 15 },
+    ],
   };
 
   const escalones = tarifas[tipoVehiculo] || tarifas.auto;
