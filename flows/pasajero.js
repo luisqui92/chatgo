@@ -231,11 +231,13 @@ async function procesarCalculoViaje(phone, session) {
 
     const auto = calcularPrecio(km, "auto");
     const moto = calcularPrecio(km, "moto");
+    const van = calcularPrecio(km, "van");
 
     // IA PRICING: calcular surge según demanda y hora
     const { multiplier, motivos } = await calcularMultiplierSurge(session.origen?.lat, session.origen?.lng);
     const precioAutoFinal = aplicarSurge(auto.total, multiplier);
     const precioMotoFinal = aplicarSurge(moto.total, multiplier);
+    const precioVanFinal = aplicarSurge(van.total, multiplier);
     const textoSurgeMsg = textoSurge(multiplier, motivos);
 
     const nuevaSession = {
@@ -243,8 +245,10 @@ async function procesarCalculoViaje(phone, session) {
       distancia: km,
       precioAuto: precioAutoFinal,
       precioMoto: precioMotoFinal,
+      precioVan: precioVanFinal,
       precioPorKmAuto: auto.precioPorKm,
       precioPorKmMoto: moto.precioPorKm,
+      precioPorKmVan: van.precioPorKm,
       surgeMultiplier: multiplier,
       step: "eligiendo_tipo_vehiculo",
     };
@@ -267,11 +271,13 @@ async function procesarCalculoViaje(phone, session) {
         avisoSurge +
         `\n*Elige tu tipo de viaje:*\n\n` +
         `🚗 *Auto* — Bs ${precioAutoFinal}\n` +
-        `🏍️ *Moto* — Bs ${precioMotoFinal}\n\n` +
-        `_(Si eliges Moto te llegará una motocicleta. Recuerda llevar casco si tienes uno.)_`,
+        `🏍️ *Moto* — Bs ${precioMotoFinal}\n` +
+        `🚐 *Van* (8-14 personas) — Bs ${precioVanFinal}\n\n` +
+        `_(Moto: llega una motocicleta, lleva casco. Van: ideal para grupos de 8 a 14 personas.)_`,
       [
         { id: "elegir_auto", title: "🚗 Pedir Auto" },
         { id: "elegir_moto", title: "🏍️ Pedir Moto" },
+        { id: "elegir_van", title: "🚐 Pedir Van" },
         { id: "cancelar_viaje", title: "❌ Cancelar" },
       ]
     );
@@ -1933,6 +1939,7 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
       let tipoElegido = null;
       if (buttonId === "elegir_auto" || /\b(AUTO|CARRO|COCHE|TAXI)\b/i.test(textoUpper)) tipoElegido = "auto";
       else if (buttonId === "elegir_moto" || /\b(MOTO|MOTOCICLETA)\b/i.test(textoUpper)) tipoElegido = "moto";
+      else if (buttonId === "elegir_van" || /\b(VAN|MINIVAN|MINIBUS|MICRO)\b/i.test(textoUpper)) tipoElegido = "van";
 
       if (buttonId === "cancelar_viaje" || textoUpper === "NO" || textoUpper === "CANCELAR") {
         await deleteSession(phone);
@@ -1943,10 +1950,11 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
       if (!tipoElegido) {
         await enviarBotones(
           phone,
-          `¿Qué tipo de viaje prefieres?\n\n🚗 *Auto* — Bs ${session.precioAuto}\n🏍️ *Moto* — Bs ${session.precioMoto}`,
+          `¿Qué tipo de viaje prefieres?\n\n🚗 *Auto* — Bs ${session.precioAuto}\n🏍️ *Moto* — Bs ${session.precioMoto}\n🚐 *Van* (8-14 pers.) — Bs ${session.precioVan}`,
           [
             { id: "elegir_auto", title: "🚗 Pedir Auto" },
             { id: "elegir_moto", title: "🏍️ Pedir Moto" },
+            { id: "elegir_van", title: "🚐 Pedir Van" },
             { id: "cancelar_viaje", title: "❌ Cancelar" },
           ]
         );
@@ -1970,12 +1978,12 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
         }
       }
 
-      const precioFinal = tipoElegido === "moto" ? session.precioMoto : session.precioAuto;
-      const precioPorKmFinal = tipoElegido === "moto" ? session.precioPorKmMoto : session.precioPorKmAuto;
+      const precioFinal = tipoElegido === "van" ? session.precioVan : (tipoElegido === "moto" ? session.precioMoto : session.precioAuto);
+      const precioPorKmFinal = tipoElegido === "van" ? session.precioPorKmVan : (tipoElegido === "moto" ? session.precioPorKmMoto : session.precioPorKmAuto);
       const sessionConTipo = { ...session, tipoVehiculoSolicitado: tipoElegido, precioBase: precioFinal, precio: precioFinal, precioPorKm: precioPorKmFinal, step: "ofreciendo_codigo" };
       await setSession(phone, sessionConTipo);
 
-      const emojiT = tipoElegido === "moto" ? "🏍️" : "🚗";
+      const emojiT = tipoElegido === "van" ? "🚐" : (tipoElegido === "moto" ? "🏍️" : "🚗");
       await enviarBotones(
         phone,
         `${emojiT} Elegiste *${tipoElegido.toUpperCase()}*\n💰 Precio: Bs ${precioFinal}\n\n¿Tienes un código de descuento?`,
