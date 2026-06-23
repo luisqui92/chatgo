@@ -41,6 +41,10 @@ const CONFIG = {
   MAX_REINTENTOS_ASIGNAR: 5,
   // TTL para deduplicación de mensajes WA (ms)
   MSG_DEDUP_TTL: 5 * 60 * 1000,
+  // Chofer de pruebas: siempre se le asigna el viaje sin filtros de
+  // estado/pago/ciudad/distancia (mientras tenga GPS en vivo y no haya
+  // sido excluido en este mismo intento de asignación).
+  CHOFER_PRUEBA_PHONE: process.env.CHOFER_PRUEBA_PHONE || "59176496075",
 };
 
 // ═══════════════════════════════════════════════════════════════════════════

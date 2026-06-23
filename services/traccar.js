@@ -104,6 +104,27 @@ async function buscarChoferDisponibleTraccar(origenUsuario, excludeTraccarIds = 
     { $set: { viajeReservado: null, reservadoHasta: null } }
   );
 
+  // CHOFER DE PRUEBA: se le asigna el viaje sin importar estado/pago/ciudad/
+  // distancia, mientras tenga GPS en vivo y no haya sido excluido en este
+  // mismo intento (para no reintentar infinito si no responde).
+  if (CONFIG.CHOFER_PRUEBA_PHONE) {
+    const choferPrueba = await Chofer.findOne({ phone: CONFIG.CHOFER_PRUEBA_PHONE });
+    if (choferPrueba?.traccarId && !excludeTraccarIds.includes(choferPrueba.traccarId)) {
+      await asegurarSnapshot();
+      const dev = snapshotDispositivos[String(choferPrueba.traccarId)];
+      const pos = snapshotPosiciones[String(choferPrueba.traccarId)];
+      if (dev?.positionId && pos) {
+        log.info(`[TRACCAR_PRUEBA] Forzando asignación al chofer de prueba ${CONFIG.CHOFER_PRUEBA_PHONE}`);
+        return {
+          ...choferPrueba.toObject(),
+          ubicacion: { lat: pos.latitude, lng: pos.longitude, minutos: 0 },
+          distanciaAlUsuario: distanciaEntrePuntos(origenUsuario.lat, origenUsuario.lng, pos.latitude, pos.longitude),
+        };
+      }
+      log.warn(`[TRACCAR_PRUEBA] Chofer de prueba sin posición GPS en vivo, sigue flujo normal`);
+    }
+  }
+
   const hoyStr = fechaStrBolivia();
   const modoDemoPago = String(process.env.MODO_DEMO || "").toLowerCase() === "true";
   const filtro = {
