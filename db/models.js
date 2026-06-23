@@ -3,10 +3,19 @@ const mongoose = require("mongoose");
 const os = require("os");
 const { CONFIG, log } = require("../config");
 
-mongoose.connect(CONFIG.MONGODB_URI).then(
+mongoose.connect(CONFIG.MONGODB_URI, {
+  serverSelectionTimeoutMS: 5000, // fallar rápido en vez de esperar el default de 30s
+  connectTimeoutMS: 5000,
+  socketTimeoutMS: 20000,
+  maxPoolSize: 20,
+  minPoolSize: 5,
+}).then(
   () => log.info("✅ MongoDB conectado"),
   (e) => log.error("❌ MongoDB:", e.message)
 );
+
+mongoose.connection.on("disconnected", () => log.warn("⚠️ MongoDB desconectado, reintentando..."));
+mongoose.connection.on("reconnected", () => log.info("✅ MongoDB reconectado"));
 
 const usuarioSchema = new mongoose.Schema(
   {
