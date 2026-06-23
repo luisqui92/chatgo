@@ -1,6 +1,6 @@
 // ChatGo — Traccar GPS (optimizado)
 const axios = require("axios");
-const { CONFIG, log } = require("../config");
+const { CONFIG, log, detectarCiudadPorCoords } = require("../config");
 const { Chofer } = require("../db/models");
 const { enPromoGratis, fechaStrBolivia } = require("../services/utils");
 
@@ -145,13 +145,20 @@ async function buscarChoferDisponibleTraccar(origenUsuario, excludeTraccarIds = 
   // MODO DEMO: para presentaciones, ignora los filtros de distancia/tiempo
   // para que el chofer reciba el viaje aunque esté lejos (ej: pasajero en Santa
   // Cruz, chofer en Cochabamba). Se activa con la variable de entorno MODO_DEMO=true.
+  // OJO: el filtro de ciudad real (no demo) NUNCA se ignora, ni siquiera en demo,
+  // porque cruzar ciudades en pedidos reales rompe el match pasajero-chofer.
   const modoDemo = String(process.env.MODO_DEMO || "").toLowerCase() === "true";
+  const ciudadOrigen = detectarCiudadPorCoords(origenUsuario.lat, origenUsuario.lng);
 
   for (const chofer of choferes) {
     const dev = snapshotDispositivos[String(chofer.traccarId)];
     if (!dev || !dev.positionId) continue;
     const pos = snapshotPosiciones[String(chofer.traccarId)];
     if (!pos) continue;
+    if (!modoDemo && ciudadOrigen) {
+      const ciudadChofer = detectarCiudadPorCoords(pos.latitude, pos.longitude);
+      if (ciudadChofer && ciudadChofer !== ciudadOrigen) continue;
+    }
     const minutos = Math.round((ahoraMs - new Date(pos.fixTime).getTime()) / 60000);
     if (!modoDemo && minutos > 10) continue;
     const dist = distanciaEntrePuntos(origenUsuario.lat, origenUsuario.lng, pos.latitude, pos.longitude);

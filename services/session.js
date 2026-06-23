@@ -1,5 +1,5 @@
 // ChatGo — Sesiones, Rate Limit, Lista de Espera
-const { CONFIG, log } = require("../config");
+const { CONFIG, log, detectarCiudadPorCoords } = require("../config");
 const { horaStrBolivia, fechaStrBolivia } = require("../services/utils");
 const { SessionState, ListaEspera, RateLimit } = require("../db/models");
 
@@ -54,8 +54,10 @@ async function ensureSession(phone, defaults = { step: "inicio" }) {
 
 async function addListaEspera(userPhone, session) {
   const tipoSolicitado = session.tipoVehiculoSolicitado || null;
+  const ciudad = detectarCiudadPorCoords(session.origen?.lat, session.origen?.lng) || session.ciudadUsuario || null;
   const existente = await ListaEspera.findOne({ userPhone });
   if (existente) {
+    existente.ciudad = ciudad;
     existente.origen = session.origen;
     existente.destino = session.destino;
     existente.distancia = session.distancia;
@@ -69,6 +71,7 @@ async function addListaEspera(userPhone, session) {
   }
   return await ListaEspera.create({
     userPhone,
+    ciudad,
     origen: session.origen,
     destino: session.destino,
     distancia: session.distancia,

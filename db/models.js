@@ -112,6 +112,7 @@ const viajeSchema = new mongoose.Schema(
     choferTraccarId: { type: String, index: true },
     choferNombre: String,
     choferPlaca: String,
+    ciudad: { type: String, default: null, index: true }, // calculada del origen al crear el viaje
     origen: { lat: Number, lng: Number, nombre: String },
     destino: { lat: Number, lng: Number, nombre: String },
     paradas: [{ lat: Number, lng: Number, nombre: String }],
@@ -187,6 +188,7 @@ const sessionSchema = new mongoose.Schema(
 const listaEsperaSchema = new mongoose.Schema(
   {
     userPhone: { type: String, unique: true, index: true },
+    ciudad: { type: String, default: null, index: true }, // calculada del origen al crear/actualizar el pedido
     origen: { lat: Number, lng: Number, nombre: String },
     destino: { lat: Number, lng: Number, nombre: String },
     distancia: Number,

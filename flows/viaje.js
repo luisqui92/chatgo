@@ -1,7 +1,7 @@
 // ChatGo — Flow viaje
 const mongoose = require("mongoose");
 const os = require("os");
-const { CONFIG, log } = require("../config");
+const { CONFIG, log, detectarCiudadPorCoords } = require("../config");
 const { Usuario, Chofer, Viaje, SessionState, ListaEspera, CodigoPromo } = require("../db/models");
 const { getSession, updateSession, deleteSession, addListaEspera, removeListaEspera, sessionCache } = require("../services/session");
 const { enviarMensaje, enviarBotones } = require("../services/whatsapp");
@@ -57,12 +57,14 @@ async function asignarChofer(userPhone, session, excludeTraccarIds = [], intento
     return;
   }
 
+  const ciudadViaje = detectarCiudadPorCoords(session.origen?.lat, session.origen?.lng) || session.ciudadUsuario || null;
   const viaje = await Viaje.create({
     usuarioPhone: userPhone,
     choferPhone: chofer.phone,
     choferTraccarId: chofer.traccarId,
     choferNombre: chofer.nombre,
     choferPlaca: chofer.placa,
+    ciudad: ciudadViaje,
     origen: session.origen,
     destino: session.destino,
     paradas: session.paradas || [],
