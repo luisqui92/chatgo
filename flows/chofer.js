@@ -325,20 +325,22 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
   // CROWDSOURCING SILENCIOSO POST-VIAJE: enriquecer la memoria de voz
   // con los nombres reales de origen y destino del viaje completado
   try {
+    const usuarioViaje = await Usuario.findOne({ phone: viaje.usuarioPhone }).lean();
+    const ciudadViaje = usuarioViaje?.ciudad || "Cochabamba";
     if (viaje.origen?.lat && viaje.origen?.nombre && !esPlusCode(viaje.origen.nombre)) {
       const normO = normalizarReferencia(viaje.origen.nombre);
-      const existeO = await LocationReference.findOne({ referencia: normO });
+      const existeO = await LocationReference.findOne({ referencia: normO, ciudad: ciudadViaje });
       if (!existeO) {
-        await guardarReferenciaVoz(viaje.origen.nombre, viaje.origen.lat, viaje.origen.lng, viaje.origen.nombre);
-        log.info(`[CROWDSOURCE] Post-viaje origen: "${viaje.origen.nombre}"`);
+        await guardarReferenciaVoz(viaje.origen.nombre, viaje.origen.lat, viaje.origen.lng, viaje.origen.nombre, ciudadViaje);
+        log.info(`[CROWDSOURCE] Post-viaje origen: "${viaje.origen.nombre}" (${ciudadViaje})`);
       }
     }
     if (viaje.destino?.lat && viaje.destino?.nombre && !esPlusCode(viaje.destino.nombre)) {
       const normD = normalizarReferencia(viaje.destino.nombre);
-      const existeD = await LocationReference.findOne({ referencia: normD });
+      const existeD = await LocationReference.findOne({ referencia: normD, ciudad: ciudadViaje });
       if (!existeD) {
-        await guardarReferenciaVoz(viaje.destino.nombre, viaje.destino.lat, viaje.destino.lng, viaje.destino.nombre);
-        log.info(`[CROWDSOURCE] Post-viaje destino: "${viaje.destino.nombre}"`);
+        await guardarReferenciaVoz(viaje.destino.nombre, viaje.destino.lat, viaje.destino.lng, viaje.destino.nombre, ciudadViaje);
+        log.info(`[CROWDSOURCE] Post-viaje destino: "${viaje.destino.nombre}" (${ciudadViaje})`);
       }
     }
   } catch (e) { log.error("[CROWDSOURCE_POST_VIAJE]", e.message); }

@@ -157,7 +157,7 @@ function extraerNombreLugarDeUrl(url) {
 
 // Detecta si un texto contiene un link de Google Maps y extrae coords
 
-async function detectarYExtrarCoordsMaps(texto) {
+async function detectarYExtrarCoordsMaps(texto, ciudadUsuario = "Cochabamba") {
   if (!texto) return null;
 
   // URL corta de Google Maps (maps.app.goo.gl)
@@ -179,7 +179,7 @@ async function detectarYExtrarCoordsMaps(texto) {
       const nombreLugar = extraerNombreLugarDeUrl(urlFinal);
       if (nombreLugar) {
         log.info(`[GMAPS] Fallback geocode por nombre: "${nombreLugar}"`);
-        const geocoded = await geocodificarConMemoria(nombreLugar);
+        const geocoded = await geocodificarConMemoria(nombreLugar, ciudadUsuario);
         if (geocoded) return geocoded;
       }
     } catch (e) {
@@ -196,7 +196,7 @@ async function detectarYExtrarCoordsMaps(texto) {
     const nombreLugar = extraerNombreLugarDeUrl(texto);
     if (nombreLugar) {
       log.info(`[GMAPS] Fallback geocode URL largo: "${nombreLugar}"`);
-      return await geocodificarConMemoria(nombreLugar);
+      return await geocodificarConMemoria(nombreLugar, ciudadUsuario);
     }
   }
 
@@ -268,14 +268,18 @@ function esMismaUbicacion(textoNormA, textoNormB) {
   return comunes.length / Math.max(callesA.length, callesB.length) >= 0.99;
 }
 
-async function buscarReferenciaEnMemoria(referencia, ciudadUsuario = "Cochabamba") {
+async function buscarReferenciaEnMemoria(referencia, ciudadUsuario) {
   if (!referencia || referencia.length < 4) return null;
+  if (!ciudadUsuario) {
+    log.warn(`[VOICE_MEM] buscarReferenciaEnMemoria llamado sin ciudad para "${referencia}" — usando Cochabamba por defecto. Revisar call site.`);
+    ciudadUsuario = "Cochabamba";
+  }
   const norm = normalizarReferencia(referencia);
 
   // 1. Búsqueda exacta filtrada por ciudad
   const exacto = await LocationReference.findOne({ referencia: norm, ciudad: ciudadUsuario });
-  // Fallback sin filtro de ciudad para referencias antiguas
-  const exactoAny = exacto || await LocationReference.findOne({ referencia: norm });
+  // Fallback sin filtro de ciudad para referencias antiguas (guardadas antes de existir multi-ciudad)
+  const exactoAny = exacto || await LocationReference.findOne({ referencia: norm, ciudad: { $exists: false } });
   const docExacto = exacto || exactoAny;
   if (docExacto) {
     log.info(`[VOICE_MEM] Hit exacto: "${referencia}" en ${ciudadUsuario} → (${docExacto.lat}, ${docExacto.lng})`);
@@ -283,11 +287,13 @@ async function buscarReferenciaEnMemoria(referencia, ciudadUsuario = "Cochabamba
     return { lat: docExacto.lat, lng: docExacto.lng, nombre: docExacto.nombreResuelto };
   }
 
-  // 2. Búsqueda difusa — comparar similitud con todas las referencias
+  // 2. Búsqueda difusa — comparar similitud con todas las referencias DE LA MISMA CIUDAD
   // Solo si la referencia tiene más de 6 caracteres (evitar falsos positivos)
   if (norm.length < 6) return null;
 
-  const todas = await LocationReference.find({}).lean();
+  const todas = await LocationReference.find({
+    $or: [{ ciudad: ciudadUsuario }, { ciudad: { $exists: false } }],
+  }).lean();
 
   // NUEVO: match por intersección/palabras clave en vez de similitud global estricta.
   // Reconoce el mismo lugar aunque el usuario diga las calles distinto, sin confundir
@@ -303,15 +309,19 @@ async function buscarReferenciaEnMemoria(referencia, ciudadUsuario = "Cochabamba
   if (mejorMatch) {
     log.info(`[VOICE_MEM] Hit por calles: "${referencia}" ~ "${mejorMatch.referenciaOriginal}" → (${mejorMatch.lat}, ${mejorMatch.lng})`);
     // Guardar también la variante nueva para futuros usos
-    await guardarReferenciaVoz(referencia, mejorMatch.lat, mejorMatch.lng, mejorMatch.nombreResuelto);
+    await guardarReferenciaVoz(referencia, mejorMatch.lat, mejorMatch.lng, mejorMatch.nombreResuelto, ciudadUsuario);
     return { lat: mejorMatch.lat, lng: mejorMatch.lng, nombre: mejorMatch.nombreResuelto };
   }
 
   return null;
 }
 
-async function guardarReferenciaVoz(referenciaOriginal, lat, lng, nombre, ciudadUsuario = "Cochabamba") {
+async function guardarReferenciaVoz(referenciaOriginal, lat, lng, nombre, ciudadUsuario) {
   if (!referenciaOriginal || referenciaOriginal.length < 4) return;
+  if (!ciudadUsuario) {
+    log.warn(`[VOICE_MEM] guardarReferenciaVoz llamado sin ciudad para "${referenciaOriginal}" — usando Cochabamba por defecto. Revisar call site.`);
+    ciudadUsuario = "Cochabamba";
+  }
   try {
     const norm = normalizarReferencia(referenciaOriginal);
     await LocationReference.findOneAndUpdate(
@@ -338,14 +348,30 @@ function dentroDeCocha(lat, lng) {
 
 // Wrapper: busca en memoria primero, si no geocodifica con validación geográfica
 
-async function geocodificarConMemoria(referencia, ciudadUsuario = "Cochabamba") {
+function dentroDeZonaCiudad(lat, lng, ciudadUsuario) {
+  const boundsU = getBoundsUsuario(ciudadUsuario);
+  return lat >= boundsU.latMin && lat <= boundsU.latMax &&
+    lng >= boundsU.lngMin && lng <= boundsU.lngMax;
+}
+
+async function geocodificarConMemoria(referencia, ciudadUsuario) {
   if (!referencia) return null;
+  if (!ciudadUsuario) {
+    log.warn(`[VOICE_MEM] geocodificarConMemoria llamado sin ciudad para "${referencia}" — usando Cochabamba por defecto. Revisar call site.`);
+    ciudadUsuario = "Cochabamba";
+  }
 
   // 1. Buscar en memoria local filtrada por ciudad
   const enMemoria = await buscarReferenciaEnMemoria(referencia, ciudadUsuario);
   if (enMemoria) {
-    log.info(`[VOICE_MEM] Cache hit: "${referencia}" (${ciudadUsuario})`);
-    return enMemoria;
+    // Validar bounds también en hits de memoria: una referencia vieja sin ciudad
+    // o un match difuso entre ciudades no debe devolver coords fuera de zona.
+    if (!dentroDeZonaCiudad(enMemoria.lat, enMemoria.lng, ciudadUsuario)) {
+      log.warn(`[VOICE_MEM] "${referencia}" → hit en memoria fuera de ${ciudadUsuario} — descartado`);
+    } else {
+      log.info(`[VOICE_MEM] Cache hit: "${referencia}" (${ciudadUsuario})`);
+      return enMemoria;
+    }
   }
 
   // 2. Geocodificar con Google Maps usando contexto de ciudad
@@ -353,10 +379,7 @@ async function geocodificarConMemoria(referencia, ciudadUsuario = "Cochabamba") 
   if (!coords) return null;
 
   // 3. Validar que el resultado esté dentro de la ciudad del usuario
-  const boundsU = getBoundsUsuario(ciudadUsuario);
-  const dentroDeZona = coords.lat >= boundsU.latMin && coords.lat <= boundsU.latMax &&
-    coords.lng >= boundsU.lngMin && coords.lng <= boundsU.lngMax;
-  if (!dentroDeZona) {
+  if (!dentroDeZonaCiudad(coords.lat, coords.lng, ciudadUsuario)) {
     log.warn(`[GEOCOD] "${referencia}" → fuera de ${ciudadUsuario} — descartado`);
     return null;
   }
@@ -399,7 +422,7 @@ async function geocodificarConMemoria(referencia, ciudadUsuario = "Cochabamba") 
   }
 
   // 5. Guardar en memoria para futuros usos
-  await guardarReferenciaVoz(referencia, coords.lat, coords.lng, coords.nombre);
+  await guardarReferenciaVoz(referencia, coords.lat, coords.lng, coords.nombre, ciudadUsuario);
   return coords;
 }
 
