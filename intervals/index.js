@@ -13,11 +13,12 @@ const { asignarChofer } = require("../flows/viaje");
 
 function iniciarIntervals(deps) {
   const {
-    enviarMensaje, enviarBotones, getSession, updateSession, deleteSession,
+    enviarMensaje, enviarBotones, enviarImagen, getSession, updateSession, deleteSession,
     sessionCache, distanciaEntrePuntos,
     monitorearSeguridad, asignarChofer,
     registrarViajeEnDemanda, actualizarUltimoViaje, registrarEventoChofer,
-    Chofer, Viaje, ListaEspera, SessionState, Usuario, CONFIG, log
+    Chofer, Viaje, ListaEspera, SessionState, Usuario, CONFIG, log,
+    fechaStrBolivia, enPromoGratis,
   } = deps;
 
 const alertasTraficoEnviadas = new Set(); // viajeId_tipo → evitar spam de alertas
@@ -493,6 +494,59 @@ setInterval(async () => {
     log.error("[TRAFICO_INTERVAL]", e.message);
   }
 }, 2 * 60 * 1000); // cada 2 minutos
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CORTE DIARIO DE PAGO — a las 4am hora Bolivia, choferes que no pagaron
+// el día anterior pasan a "offline" y se les avisa proactivamente con el QR,
+// en vez de esperar a que ellos intenten ponerse libres o terminen un viaje.
+// ═══════════════════════════════════════════════════════════════════════════
+let ultimoCorteFechaStr = null;
+
+setInterval(async () => {
+  try {
+    const horaBolivia = new Date(Date.now() + CONFIG.OFFSET_HORAS * 60 * 60 * 1000).getUTCHours();
+    if (horaBolivia !== 4) return;
+
+    const hoyStr = fechaStrBolivia();
+    if (ultimoCorteFechaStr === hoyStr) return; // ya se ejecutó hoy
+    ultimoCorteFechaStr = hoyStr;
+
+    if (enPromoGratis()) {
+      log.info("[CORTE_PAGO] Promo gratis activa, no se exige pago diario");
+      return;
+    }
+
+    const choferesSinPagar = await Chofer.find({
+      estado: { $ne: "offline" },
+      $or: [
+        { "pagoDiario.fechaStr": { $ne: hoyStr } },
+        { "pagoDiario.aprobado": { $ne: true } },
+      ],
+    });
+
+    for (const chofer of choferesSinPagar) {
+      try {
+        await Chofer.findByIdAndUpdate(chofer._id, {
+          estado: "offline",
+          "pagoDiario.pagado": false,
+          "pagoDiario.aprobado": false,
+          "pagoDiario.comprobanteValidado": false,
+        });
+        await updateSession(chofer.phone, { step: "chofer_esperando_comprobante" });
+        await enviarMensaje(chofer.phone, `🌅 ¡Buen día! Para empezar a recibir viajes hoy necesitas pagar tu cuota diaria de *Bs 10*.`);
+        if (CONFIG.QR_IMAGE_URL) {
+          await enviarImagen(chofer.phone, CONFIG.QR_IMAGE_URL, `📲 Escanea el QR y envíame la *foto del comprobante* para activarte.`);
+        }
+      } catch (e) {
+        log.warn("[CORTE_PAGO_CHOFER]", chofer.phone, e.message);
+      }
+    }
+
+    log.info(`[CORTE_PAGO] Corte diario aplicado a ${choferesSinPagar.length} choferes`);
+  } catch (e) {
+    log.error("[CORTE_PAGO]", e.message);
+  }
+}, 10 * 60 * 1000); // revisa cada 10 min si ya es la hora del corte
 
   log.info("✅ Todos los intervals iniciados");
 }

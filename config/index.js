@@ -12,7 +12,7 @@ const CONFIG = {
   OPENAI_KEY: process.env.OPENAI_KEY,
   MONGODB_URI: process.env.MONGODB_URI,
   ADMIN_PHONE: process.env.ADMIN_PHONE || "59162741818",
-  QR_IMAGE_URL: process.env.QR_IMAGE_URL,
+  QR_IMAGE_URL: process.env.QR_IMAGE_URL || (process.env.APP_URL ? `${process.env.APP_URL}/qr/pago.jpg` : null),
 
   TIMEOUT_OPENAI: 45000,
   TIMEOUT_GOOGLE: 10000,
@@ -41,6 +41,10 @@ const CONFIG = {
   MAX_REINTENTOS_ASIGNAR: 5,
   // TTL para deduplicación de mensajes WA (ms)
   MSG_DEDUP_TTL: 5 * 60 * 1000,
+  // Chofer de pruebas: siempre se le asigna el viaje sin filtros de
+  // estado/pago/ciudad/distancia (mientras tenga GPS en vivo y no haya
+  // sido excluido en este mismo intento de asignación).
+  CHOFER_PRUEBA_PHONE: process.env.CHOFER_PRUEBA_PHONE || "59176496075",
 };
 
 // ═══════════════════════════════════════════════════════════════════════════

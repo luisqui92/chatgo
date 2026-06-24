@@ -1,8 +1,8 @@
 // ChatGo — Traccar GPS (optimizado)
 const axios = require("axios");
-const { CONFIG, log } = require("../config");
+const { CONFIG, log, detectarCiudadPorCoords } = require("../config");
 const { Chofer } = require("../db/models");
-const { enPromoGratis, fechaStrBolivia } = require("../services/utils");
+const { enPromoGratis, fechaStrBolivia, choferPagoAlDia } = require("../services/utils");
 
 const TRACCAR_URL  = process.env.TRACCAR_URL  || "";
 const TRACCAR_USER = process.env.TRACCAR_USER || "";
@@ -104,25 +104,42 @@ async function buscarChoferDisponibleTraccar(origenUsuario, excludeTraccarIds = 
     { $set: { viajeReservado: null, reservadoHasta: null } }
   );
 
+  // CHOFER DE PRUEBA: se le asigna el viaje sin importar ciudad/distancia/
+  // tiempo, mientras tenga GPS en vivo y no haya sido excluido en este
+  // mismo intento (para no reintentar infinito si no responde). El pago
+  // diario SÍ se exige igual que a cualquier chofer real — el objetivo es
+  // poder probar el flujo de cobro de punta a punta con este número.
+  if (CONFIG.CHOFER_PRUEBA_PHONE) {
+    const choferPrueba = await Chofer.findOne({ phone: CONFIG.CHOFER_PRUEBA_PHONE });
+    const pagoOk = enPromoGratis() || choferPagoAlDia(choferPrueba);
+    if (choferPrueba?.traccarId && pagoOk && !excludeTraccarIds.includes(choferPrueba.traccarId)) {
+      await asegurarSnapshot();
+      const dev = snapshotDispositivos[String(choferPrueba.traccarId)];
+      const pos = snapshotPosiciones[String(choferPrueba.traccarId)];
+      if (dev?.positionId && pos) {
+        log.info(`[TRACCAR_PRUEBA] Forzando asignación al chofer de prueba ${CONFIG.CHOFER_PRUEBA_PHONE}`);
+        return {
+          ...choferPrueba.toObject(),
+          ubicacion: { lat: pos.latitude, lng: pos.longitude, minutos: 0 },
+          distanciaAlUsuario: distanciaEntrePuntos(origenUsuario.lat, origenUsuario.lng, pos.latitude, pos.longitude),
+        };
+      }
+      log.warn(`[TRACCAR_PRUEBA] Chofer de prueba sin posición GPS en vivo, sigue flujo normal`);
+    }
+  }
+
   const hoyStr = fechaStrBolivia();
   const filtro = {
     estado: "libre",
     traccarId: { $exists: true, $ne: null, $nin: excludeTraccarIds },
     $or: [{ viajeReservado: null }, { viajeReservado: { $exists: false } }],
   };
-  // Choferes de PRUEBA (comodín): exentos del pago diario y reciben todos los tipos.
-  const CHOFERES_PRUEBA = ["59176496075"]; // ffjj (prueba)
 
   if (!enPromoGratis()) {
-    // Exigir pago al día, EXCEPTO a los choferes de prueba
-    filtro.$or = filtro.$or || [];
+    // Exigir pago al día a TODOS los choferes, incluyendo el de prueba —
+    // el objetivo del chofer de prueba es validar el flujo de cobro de punta a punta.
     filtro.$and = filtro.$and || [];
-    filtro.$and.push({
-      $or: [
-        { phone: { $in: CHOFERES_PRUEBA } },
-        { $and: [{ "pagoDiario.aprobado": true }, { "pagoDiario.fechaStr": hoyStr }] },
-      ],
-    });
+    filtro.$and.push({ "pagoDiario.aprobado": true, "pagoDiario.fechaStr": hoyStr });
   }
   filtro.$and = filtro.$and || [];
   if (tipoVehiculo === "auto") {
@@ -132,17 +149,10 @@ async function buscarChoferDisponibleTraccar(origenUsuario, excludeTraccarIds = 
         { tipoVehiculo: { $exists: false } },
         { tipoVehiculo: null },
         { tipoVehiculo: "" },
-        { phone: { $in: CHOFERES_PRUEBA } }, // comodín de prueba
       ],
     });
   } else if (tipoVehiculo) {
-    // Para un tipo específico (van/moto): el tipo exacto O un chofer de prueba
-    filtro.$and.push({
-      $or: [
-        { tipoVehiculo: tipoVehiculo },
-        { phone: { $in: CHOFERES_PRUEBA } }, // comodín de prueba recibe todo
-      ],
-    });
+    filtro.$and.push({ tipoVehiculo: tipoVehiculo });
   }
 
   const choferes = await Chofer.find(filtro);
@@ -158,11 +168,23 @@ async function buscarChoferDisponibleTraccar(origenUsuario, excludeTraccarIds = 
   const ahoraMs = Date.now();
   const candidatos = [];
 
+  // MODO DEMO: para presentaciones, ignora los filtros de distancia/tiempo
+  // para que el chofer reciba el viaje aunque esté lejos (ej: pasajero en Santa
+  // Cruz, chofer en Cochabamba). Se activa con la variable de entorno MODO_DEMO=true.
+  // OJO: el filtro de ciudad real (no demo) NUNCA se ignora, ni siquiera en demo,
+  // porque cruzar ciudades en pedidos reales rompe el match pasajero-chofer.
+  const modoDemo = String(process.env.MODO_DEMO || "").toLowerCase() === "true";
+  const ciudadOrigen = detectarCiudadPorCoords(origenUsuario.lat, origenUsuario.lng);
+
   for (const chofer of choferes) {
     const dev = snapshotDispositivos[String(chofer.traccarId)];
     if (!dev || !dev.positionId) continue;
     const pos = snapshotPosiciones[String(chofer.traccarId)];
     if (!pos) continue;
+    if (!modoDemo && ciudadOrigen) {
+      const ciudadChofer = detectarCiudadPorCoords(pos.latitude, pos.longitude);
+      if (ciudadChofer && ciudadChofer !== ciudadOrigen) continue;
+    }
     const minutos = Math.round((ahoraMs - new Date(pos.fixTime).getTime()) / 60000);
     if (minutos > 10) continue;
     const dist = distanciaEntrePuntos(origenUsuario.lat, origenUsuario.lng, pos.latitude, pos.longitude);

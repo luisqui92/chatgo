@@ -927,7 +927,8 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
   // FEATURE: Detectar link de Google Maps en texto ──────────────────────────
   if (!coords && texto && (texto.includes("google.com/maps") || texto.includes("maps.app.goo.gl") || texto.includes("maps.google.com"))) {
     try {
-      const coordsMaps = await detectarYExtrarCoordsMaps(texto);
+      const ciudadParaMaps = session.ciudadUsuario || usuario?.ciudad || "Cochabamba";
+      const coordsMaps = await detectarYExtrarCoordsMaps(texto, ciudadParaMaps);
       if (coordsMaps) {
         coords = coordsMaps;
         log.info(`[GMAPS_URL] Coordenadas extraídas de URL: (${coords.lat}, ${coords.lng})`);
@@ -1087,14 +1088,15 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
         session._personalDestino = personalDestino.coords;
       }
       
+      // Ciudad del usuario para geocoding correcto — se calcula acá arriba porque
+      // el CASO 2 (referencia vaga) también geocodifica y necesita el dato.
+      const usuarioParaGeocode = await Usuario.findOne({ phone }).lean();
+      const ciudadParaAudio = session.ciudadUsuario || usuarioParaGeocode?.ciudad || "Cochabamba";
+
       // ─── CASO 2: Referencia vaga (zona amplia o lugar grande) ────────────
       // Si la IA detecta algo vago, pedir referencia adicional antes de seguir
       const evalOrigenVoz = detOrigen ? evaluarReferencia(detOrigen) : { vaga: false };
       const evalDestinoVoz = detDestino ? evaluarReferencia(detDestino) : { vaga: false };
-
-      // Ciudad del usuario para geocoding correcto (definida acá porque la usamos abajo)
-      const usuarioParaGeocode = await Usuario.findOne({ phone }).lean();
-      const ciudadParaAudio = session.ciudadUsuario || usuarioParaGeocode?.ciudad || "Cochabamba";
 
       // Si el lugar YA está en la memoria (pre-cargado o aprendido antes), tiene
       // coordenadas exactas → NO es vago, no hay que pedir más referencias.
@@ -1134,7 +1136,7 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
           const sessActualizada = { ...session, step: "aprendiendo_destino_voz", referenciaVozDestino: detDestino.texto };
           // Si el origen del audio se puede resolver, guardarlo
           if (detOrigen) {
-            const origenCoords = await geocodificarConMemoria(detOrigen.texto);
+            const origenCoords = await geocodificarConMemoria(detOrigen.texto, ciudadParaAudio);
             if (origenCoords && !origenCoords._incierto) {
               sessActualizada.origen = { ...origenCoords, nombre: origenCoords.nombre || detOrigen.texto };
             }
@@ -1144,7 +1146,7 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
           // Solo el origen es vago: esperar pin del origen, guardar destino si se puede
           const sessActualizada = { ...session, step: "aprendiendo_origen_voz", referenciaVozOrigen: detOrigen.texto };
           if (detDestino) {
-            const destinoCoords = await geocodificarConMemoria(detDestino.texto);
+            const destinoCoords = await geocodificarConMemoria(detDestino.texto, ciudadParaAudio);
             if (destinoCoords && !destinoCoords._incierto) {
               sessActualizada.destino = { ...destinoCoords, nombre: destinoCoords.nombre || detDestino.texto };
             }
@@ -1191,7 +1193,6 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
       if (esquinaOrigen) session._esquinaOrigen = esquinaOrigen;
       if (esquinaDestino) session._esquinaDestino = esquinaDestino;
       // (El flujo viejo seguirá usando ubicaciones.origen/destino como texto, geocodificará si no las teníamos)
-
       // Evaluar precisión de las referencias extraídas
       // Si son imprecisas advertimos pero NO bloqueamos — el viaje puede continuar
       // Las advertencias de precisión son largas: útiles en TEXTO, pero en VOZ
