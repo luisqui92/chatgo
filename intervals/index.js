@@ -518,7 +518,6 @@ setInterval(async () => {
 
     const choferesSinPagar = await Chofer.find({
       estado: { $ne: "offline" },
-      phone: { $ne: CONFIG.CHOFER_PRUEBA_PHONE },
       $or: [
         { "pagoDiario.fechaStr": { $ne: hoyStr } },
         { "pagoDiario.aprobado": { $ne: true } },

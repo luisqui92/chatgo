@@ -2,7 +2,7 @@
 const axios = require("axios");
 const { CONFIG, log, detectarCiudadPorCoords } = require("../config");
 const { Chofer } = require("../db/models");
-const { enPromoGratis, fechaStrBolivia } = require("../services/utils");
+const { enPromoGratis, fechaStrBolivia, choferPagoAlDia } = require("../services/utils");
 
 const TRACCAR_URL  = process.env.TRACCAR_URL  || "";
 const TRACCAR_USER = process.env.TRACCAR_USER || "";
@@ -104,12 +104,15 @@ async function buscarChoferDisponibleTraccar(origenUsuario, excludeTraccarIds = 
     { $set: { viajeReservado: null, reservadoHasta: null } }
   );
 
-  // CHOFER DE PRUEBA: se le asigna el viaje sin importar estado/pago/ciudad/
-  // distancia, mientras tenga GPS en vivo y no haya sido excluido en este
-  // mismo intento (para no reintentar infinito si no responde).
+  // CHOFER DE PRUEBA: se le asigna el viaje sin importar ciudad/distancia/
+  // tiempo, mientras tenga GPS en vivo y no haya sido excluido en este
+  // mismo intento (para no reintentar infinito si no responde). El pago
+  // diario SÍ se exige igual que a cualquier chofer real — el objetivo es
+  // poder probar el flujo de cobro de punta a punta con este número.
   if (CONFIG.CHOFER_PRUEBA_PHONE) {
     const choferPrueba = await Chofer.findOne({ phone: CONFIG.CHOFER_PRUEBA_PHONE });
-    if (choferPrueba?.traccarId && !excludeTraccarIds.includes(choferPrueba.traccarId)) {
+    const pagoOk = enPromoGratis() || choferPagoAlDia(choferPrueba);
+    if (choferPrueba?.traccarId && pagoOk && !excludeTraccarIds.includes(choferPrueba.traccarId)) {
       await asegurarSnapshot();
       const dev = snapshotDispositivos[String(choferPrueba.traccarId)];
       const pos = snapshotPosiciones[String(choferPrueba.traccarId)];

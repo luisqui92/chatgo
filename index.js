@@ -110,6 +110,16 @@ app.get("/fotos/:filename", (req, res) => {
   res.sendFile(file);
 });
 
+// Servir el QR de cobro (cuota diaria de choferes)
+app.get("/qr/:filename", (req, res) => {
+  const path = require("path");
+  const fs = require("fs");
+  const file = path.join(__dirname, "public", "qr", req.params.filename);
+  if (!fs.existsSync(file)) return res.status(404).send("Not found");
+  res.setHeader("Cache-Control", "public, max-age=86400");
+  res.sendFile(file);
+});
+
 // ─── SERVER ───────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => log.info(`🚀 ChatGo v6.0 corriendo en puerto ${PORT}`));
