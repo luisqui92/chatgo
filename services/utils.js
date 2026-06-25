@@ -313,7 +313,7 @@ function enPromoGratis() {
 
 function choferPagoAlDia(chofer) {
   if (!chofer || !chofer.pagoDiario) return false;
-  return chofer.pagoDiario.pagado && chofer.pagoDiario.fechaStr === fechaStrBolivia().split("T")[0];
+  return chofer.pagoDiario.pagado && chofer.pagoDiario.aprobado && chofer.pagoDiario.fechaStr === fechaStrBolivia().split("T")[0];
 }
 
 
