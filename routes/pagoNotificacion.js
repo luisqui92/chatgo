@@ -14,7 +14,31 @@ function extraerMonto(texto) {
   return parseFloat(m[1].replace(",", "."));
 }
 
-module.exports = function (app, { Chofer, enviarMensaje, enviarBotones }) {
+module.exports = function (app, { Chofer, enviarMensaje, enviarBotones, deleteSession }) {
+  // Resetea el pago diario del chofer de prueba para repetir el flujo desde cero.
+  app.get("/admin/resetear-chofer-prueba", async (req, res) => {
+    if (!CONFIG.PAGO_WEBHOOK_SECRET || req.headers["x-pago-secret"] !== CONFIG.PAGO_WEBHOOK_SECRET) {
+      return res.sendStatus(401);
+    }
+    try {
+      const phone = CONFIG.CHOFER_PRUEBA_PHONE;
+      await Chofer.findOneAndUpdate({ phone }, {
+        estado: "offline",
+        "pagoDiario.fecha": null,
+        "pagoDiario.fechaStr": null,
+        "pagoDiario.pagado": false,
+        "pagoDiario.aprobado": false,
+        "pagoDiario.comprobanteValidado": false,
+      });
+      await deleteSession(phone);
+      log.info(`[PAGO_YAPE] Chofer de prueba (+${phone}) reseteado`);
+      res.json({ ok: true, phone });
+    } catch (e) {
+      log.error("[PAGO_YAPE] Error reseteando chofer de prueba", e.message);
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
   app.post("/webhook/pago-yape", async (req, res) => {
     if (!CONFIG.PAGO_WEBHOOK_SECRET || req.headers["x-pago-secret"] !== CONFIG.PAGO_WEBHOOK_SECRET) {
       log.warn("[PAGO_YAPE] Secret inválido o no configurado, rechazado");
