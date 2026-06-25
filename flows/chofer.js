@@ -16,7 +16,7 @@ const https = require("https");
 const http = require("http");
 const os = require("os");
 const { CONFIG, log } = require("../config");
-const { Usuario, Chofer, Viaje, LocationReference, PreRegistroFlota } = require("../db/models");
+const { Usuario, Chofer, Viaje, LocationReference, PreRegistroFlota, NotificacionPago } = require("../db/models");
 const { getSession, setSession, updateSession, deleteSession } = require("../services/session");
 const { enviarMensaje, enviarBotones, enviarImagen, reenviarImagenPorId, relayMensajeChat, descargarImagenMeta } = require("../services/whatsapp");
 const { obtenerUbicacionChofer, liberarReservaChoferTraccar, generarLinkRastreoPropio } = require("../services/traccar");
@@ -566,6 +566,29 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
       "pagoDiario.comprobanteValidado": true,
     });
     await deleteSession(phone);
+
+    // El banco suele avisar (vía MacroDroid) ANTES de que el chofer mande la foto del
+    // comprobante. Si ya llegó una notificación sin matchear, la usamos para aprobar
+    // de una vez en lugar de esperar al admin.
+    const notisRecientes = await NotificacionPago.find({ usado: false });
+    let notiUsada = null;
+    if (notisRecientes.length === 1) notiUsada = notisRecientes[0];
+
+    if (notiUsada) {
+      await NotificacionPago.findByIdAndUpdate(notiUsada._id, { usado: true });
+      await Chofer.findByIdAndUpdate(chofer._id, {
+        "pagoDiario.aprobado": true,
+        estado: "libre",
+      });
+      await enviarBotones(phone, `✅ *Pago confirmado automáticamente!*\n🚖 Ya estás LIBRE para recibir viajes.`, [
+        { id: "chofer_ocupado", title: "🔴 Ocupado" },
+        { id: "chofer_ayuda", title: "❓ Ayuda" },
+      ]);
+      await enviarMensaje(CONFIG.ADMIN_PHONE, `🤖 Pago auto-aprobado: ${chofer.nombre} (+${phone}) — coincide con notificación bancaria recibida antes del comprobante.`);
+      log.info(`[PAGO_YAPE] Auto-aprobado al validar comprobante: ${chofer.nombre} (+${phone})`);
+      return;
+    }
+
     await reenviarImagenPorId(`${CONFIG.ADMIN_PHONE}`, mediaId, `💰 Comprobante recibido de ${chofer.nombre}\n📞 +${phone}\n🚗 ${chofer.placa}`);
     await enviarBotones(CONFIG.ADMIN_PHONE, `¿Apruebas el pago de ${chofer.nombre}?`, [
       { id: `aprobar_pago_${phone}`, title: "✅ Aprobar" },

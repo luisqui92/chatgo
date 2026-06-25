@@ -14,7 +14,7 @@ function extraerMonto(texto) {
   return parseFloat(m[1].replace(",", "."));
 }
 
-module.exports = function (app, { Chofer, enviarMensaje, enviarBotones, deleteSession }) {
+module.exports = function (app, { Chofer, NotificacionPago, enviarMensaje, enviarBotones, deleteSession }) {
   // Resetea el pago diario del chofer de prueba para repetir el flujo desde cero.
   app.get("/admin/resetear-chofer-prueba", async (req, res) => {
     if (!CONFIG.PAGO_WEBHOOK_SECRET || req.headers["x-pago-secret"] !== CONFIG.PAGO_WEBHOOK_SECRET) {
@@ -62,7 +62,11 @@ module.exports = function (app, { Chofer, enviarMensaje, enviarBotones, deleteSe
       }).sort({ "pagoDiario.fecha": 1 });
 
       if (!pendientes.length) {
-        log.info("[PAGO_YAPE] Sin choferes esperando aprobación, se ignora la notificación");
+        // La notificación llegó antes que la foto del comprobante (es lo normal: el banco
+        // avisa al instante, el chofer recién manda la foto después). La guardamos un rato
+        // para que el flujo de validación del comprobante la matchee cuando llegue.
+        await NotificacionPago.create({ texto, monto });
+        log.info("[PAGO_YAPE] Sin choferes esperando aprobación todavía, notificación guardada para matchear después");
         return;
       }
 

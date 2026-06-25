@@ -9,7 +9,7 @@ const app = express();
 const { CONFIG, log, validateConfig } = require("./config");
 validateConfig();
 const models = require("./db/models");
-const { Usuario, Chofer, Viaje, SessionState, ListaEspera, RateLimit, CodigoPromo, LocationReference } = models;
+const { Usuario, Chofer, Viaje, SessionState, ListaEspera, RateLimit, CodigoPromo, LocationReference, NotificacionPago } = models;
 
 // Services
 const { getSession, setSession, updateSession, deleteSession, ensureSession, addListaEspera, removeListaEspera, checkRateLimit, sessionCache, processedMsgIds, yaProcesoMensaje } = require("./services/session");
@@ -64,7 +64,7 @@ app.use(express.json({
 const allDeps = {
   CONFIG, log,
   // Models
-  Usuario, Chofer, Viaje, SessionState, ListaEspera, RateLimit, CodigoPromo, LocationReference,
+  Usuario, Chofer, Viaje, SessionState, ListaEspera, RateLimit, CodigoPromo, LocationReference, NotificacionPago,
   // Services
   getSession, setSession, updateSession, deleteSession, ensureSession,
   addListaEspera, removeListaEspera, checkRateLimit, sessionCache, processedMsgIds, yaProcesoMensaje,

@@ -365,5 +365,17 @@ const flotaSchema = new mongoose.Schema({
 }, { timestamps: true });
 const Flota = mongoose.model("Flota", flotaSchema, "flotas");
 
+// Notificaciones bancarias (Yape vía MacroDroid) que llegaron sin ningún chofer
+// pendiente de aprobación todavía — pasa cuando la notificación llega antes de que
+// el chofer mande la foto del comprobante. Se guardan un rato para poder matchearlas
+// apenas se valide el comprobante correspondiente. TTL: se autoborran a los 20 min.
+const notificacionPagoSchema = new mongoose.Schema({
+  texto: String,
+  monto: Number,
+  usado: { type: Boolean, default: false, index: true },
+}, { timestamps: true });
+notificacionPagoSchema.index({ createdAt: 1 }, { expireAfterSeconds: 1200 });
+const NotificacionPago = mongoose.model("NotificacionPago", notificacionPagoSchema, "notificacionespago");
 
-module.exports = { Usuario, Chofer, Viaje, SessionState, ListaEspera, RateLimit, CodigoPromo, LocationReference, Demanda, EventoChofer, AlertaSeg, Surge, ViajeDemo, EsquinaMapeada, PreRegistroFlota, Flota };
+
+module.exports = { Usuario, Chofer, Viaje, SessionState, ListaEspera, RateLimit, CodigoPromo, LocationReference, Demanda, EventoChofer, AlertaSeg, Surge, ViajeDemo, EsquinaMapeada, PreRegistroFlota, Flota, NotificacionPago };
