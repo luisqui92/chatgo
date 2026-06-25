@@ -92,6 +92,7 @@ const allDeps = {
 
 require("./routes/webhook")(app, allDeps);
 require("./routes/admin")(app, allDeps);
+require("./routes/pagoNotificacion")(app, allDeps);
 
 // ─── INTERVALS ────────────────────────────────────────────────────────────────
 const { iniciarIntervals } = require("./intervals");

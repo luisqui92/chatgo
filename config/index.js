@@ -45,6 +45,11 @@ const CONFIG = {
   // estado/pago/ciudad/distancia (mientras tenga GPS en vivo y no haya
   // sido excluido en este mismo intento de asignación).
   CHOFER_PRUEBA_PHONE: process.env.CHOFER_PRUEBA_PHONE || "59176496075",
+  // Cuota diaria que debe pagar cada chofer (en Bs)
+  CUOTA_DIARIA_BS: Number(process.env.CUOTA_DIARIA_BS || 10),
+  // Secreto compartido para validar notificaciones de pago bancario (MacroDroid → webhook).
+  // Si no está configurado, el endpoint rechaza todas las llamadas.
+  PAGO_WEBHOOK_SECRET: process.env.PAGO_WEBHOOK_SECRET || null,
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
