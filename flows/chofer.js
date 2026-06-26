@@ -23,7 +23,7 @@ const { normalizarReferencia, guardarReferenciaVoz, calcularDistancia, calcularD
 const { validarComprobantePago } = require("../services/openai");
 const { registrarEventoChofer, calcularMultiplierSurge, aplicarSurge, textoSurge, registrarViajeEnDemanda, actualizarUltimoViaje } = require("../ai");
 const { asignarChofer, procesarPedidoAyuda, solicitarRating } = require("../flows/viaje");
-const { choferPagoAlDia, crearCodigoPromo, enPromoGratis, enviarCodigoDescuento, esPedidoAyuda, esPlusCode, fechaStrBolivia, formatearFechaPromo, guardarRutaFrecuente, promoCodigosActiva } = require("../services/utils");
+const { calcularPrecio, choferPagoAlDia, crearCodigoPromo, enPromoGratis, enviarCodigoDescuento, esPedidoAyuda, esPlusCode, fechaStrBolivia, formatearFechaPromo, guardarRutaFrecuente, promoCodigosActiva } = require("../services/utils");
 
 
 async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, mensaje) {
