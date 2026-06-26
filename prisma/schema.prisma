@@ -1,0 +1,368 @@
+// ChatGo — Schema Prisma (MySQL)
+// Migrado desde db/models.js (Mongoose/MongoDB).
+// Convenciones:
+//  - id: String @id @default(uuid()) en todos los modelos, para mantener el mismo
+//    patrón de "id opaco" que ya usa el código (chofer._id, candidato._id, etc.)
+//  - Objetos embebidos que se filtran/ordenan en queries (pagoDiario, origen/destino,
+//    posicion) se aplanan en columnas reales para que sean indexables en SQL.
+//  - Arrays/objetos que solo se leen/escriben como blob (familiaresVinculados,
+//    recargas, rutasFrecuentes, lugaresFrecuentes, paradas, eventosSeguridad,
+//    rutaPuntos, ofertasRechazadas) se guardan como columnas Json.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model Usuario {
+  id                  String    @id @default(uuid())
+  phone               String    @unique
+  nombre              String?
+  aceptoTerminos      Boolean   @default(false)
+  fechaRegistro       DateTime  @default(now())
+  audioOnboardingHecho Boolean  @default(false)
+  modoAdultoMayor     Boolean   @default(false)
+  respuestasPorVoz    Boolean   @default(false)
+  saldo               Float     @default(0)
+  familiaresVinculados Json?    // [{ phone, nombre, fechaVinculo }]
+  recargas            Json?     // [{ monto, familiarPhone, fecha, comprobante }]
+  ciudad              String?
+  ciudadDetectada     Boolean   @default(false)
+  viajesTotal         Int       @default(0)
+  rutasFrecuentes     Json?     // [{ origen, destino, contador, horas:[Int], tipoVehiculo, ultimoViaje }]
+  lugaresFrecuentes   Json?     // { casa, trabajo, otros:[{alias,lat,lng,nombre}] }
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  @@map("usuarios")
+}
+
+model Chofer {
+  id                          String    @id @default(uuid())
+  phone                       String    @unique
+  wialonId                    String?   @unique
+  traccarId                   String?   @unique
+  fotoChofer                  String?
+  fotoVehiculo                String?
+  placa                       String?
+  nombre                      String?
+  tipoVehiculo                String    @default("auto") // auto | moto
+  colorVehiculo               String    @default("")
+  estado                      String    @default("offline")
+  pagoDiarioFecha             DateTime?
+  pagoDiarioFechaStr          String?
+  pagoDiarioPagado            Boolean   @default(false)
+  pagoDiarioAprobado          Boolean   @default(false)
+  pagoDiarioComprobanteValidado Boolean @default(false)
+  viajesTotal                 Int       @default(0)
+  aceptoTerminos               Boolean  @default(false)
+  fechaRegistro                DateTime @default(now())
+  viajeReservado                String?
+  reservadoHasta                DateTime?
+  ratingPromedio                Float    @default(0)
+  ratingCantidad                Int      @default(0)
+  flota                         String?
+  createdAt                     DateTime @default(now())
+  updatedAt                     DateTime @updatedAt
+
+  @@index([estado])
+  @@index([flota])
+  @@index([pagoDiarioFechaStr, pagoDiarioAprobado, pagoDiarioPagado, pagoDiarioComprobanteValidado])
+  @@map("choferes")
+}
+
+model Viaje {
+  id                      String    @id @default(uuid())
+  usuarioPhone            String?
+  choferPhone             String?
+  choferWialonId          String?
+  choferTraccarId         String?
+  choferNombre            String?
+  choferPlaca             String?
+  ciudad                  String?
+  origenLat               Float?
+  origenLng               Float?
+  origenNombre            String?
+  destinoLat              Float?
+  destinoLng              Float?
+  destinoNombre           String?
+  paradas                 Json?     // [{lat,lng,nombre}]
+  observaciones           String?
+  distanciaKm             Float?
+  precioBase              Float?
+  descuentoBs             Float     @default(0)
+  codigoPromoUsado        String?
+  precioTotal             Float?
+  precioPorKm             Float?
+  tipoVehiculo            String    @default("auto") // auto | moto
+  estado                  String    @default("pendiente")
+  fechaInicio             DateTime  @default(now())
+  fechaAsignacion         DateTime?
+  fechaAceptacion         DateTime?
+  fechaInicioViaje        DateTime?
+  tiempoEstimadoMin       Float?
+  fechaFin                DateTime?
+  llegadaNotificada       Boolean   @default(false)
+  llegadaOrigenNotificada Boolean   @default(false)
+  cancelacionMotivo       String?
+  ratingPasajero          Float?
+  comentarioPasajero      String?
+  ratingSolicitado        Boolean   @default(false)
+  codigoPromoGenerado     String?
+  rutaPolilinea           String?
+  rutaPuntos              Json?     // [{lat,lng}]
+  nivelAlerta             String    @default("verde") // verde|amarillo|naranja|rojo
+  eventosSeguridad        Json?     // [{tipo,nivel,detalle,lat,lng,timestamp}]
+  detenidoDesde           DateTime?
+  ultimaPosicionLat       Float?
+  ultimaPosicionLng       Float?
+  ultimaPosicionAt        DateTime?
+  panicoActivado          Boolean   @default(false)
+  panicoAt                DateTime?
+  extendidoPorTrafico     Boolean   @default(false)
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
+
+  @@index([estado, fechaAsignacion])
+  @@index([usuarioPhone, estado])
+  @@index([choferPhone, estado])
+  @@index([ciudad])
+  @@index([nivelAlerta])
+  @@map("viajes")
+}
+
+model CodigoPromo {
+  id                  String    @id @default(uuid())
+  codigo              String    @unique
+  descuentoPorcentaje Int       @default(40)
+  generadoPor         String?
+  tipoOrigen          String    @default("post_viaje")
+  fechaCreacion       DateTime  @default(now())
+  fechaVencimiento    DateTime?
+  usado               Boolean   @default(false)
+  usadoPor            String?
+  fechaUso            DateTime?
+  viajeIdAsociado     String?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  @@index([generadoPor])
+  @@index([fechaVencimiento])
+  @@index([usado])
+  @@map("codigospromo")
+}
+
+model SessionState {
+  id        String   @id @default(uuid())
+  phone     String   @unique
+  data      Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("sessionstates")
+}
+
+model ListaEspera {
+  id                    String    @id @default(uuid())
+  userPhone             String    @unique
+  ciudad                String?
+  origenLat             Float?
+  origenLng             Float?
+  origenNombre          String?
+  destinoLat            Float?
+  destinoLng            Float?
+  destinoNombre         String?
+  distancia             Float?
+  precio                Float?
+  precioPorKm           Float?
+  tipoVehiculoSolicitado String?  // auto | moto | null
+  timestamp             DateTime  @default(now())
+  notificado            Boolean   @default(false)
+  ofertaActivaWialonId  String?
+  ofertaActivaHasta     DateTime?
+  ofertasRechazadas     Json?     // [String]
+  ultimoMensajeAt       DateTime?
+  cancelando            Boolean   @default(false)
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([ciudad])
+  @@index([timestamp])
+  @@index([ofertaActivaWialonId, timestamp])
+  @@map("listaesperas")
+}
+
+model RateLimit {
+  id        String   @id @default(uuid())
+  phone     String   @unique
+  horaStr   String?
+  count     Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("ratelimits")
+}
+
+model LocationReference {
+  id                String   @id @default(uuid())
+  referencia        String
+  referenciaOriginal String?
+  lat               Float?
+  lng               Float?
+  nombreResuelto    String?
+  contador          Int      @default(1)
+  ciudad            String   @default("Cochabamba")
+  precargado        Boolean  @default(false)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@unique([referencia, ciudad])
+  @@map("locationreferences")
+}
+
+model Demanda {
+  id                   String   @id @default(uuid())
+  zona                 String
+  hora                 Int
+  diaSemana            Int
+  cantidad             Int      @default(1)
+  ultimaActualizacion  DateTime @default(now())
+
+  @@index([zona, hora, diaSemana])
+  @@map("demandas")
+}
+
+model EventoChofer {
+  id              String   @id @default(uuid())
+  choferPhone     String
+  tipo            String?  // aceptado|rechazado|cancelado|completado|timeout
+  viajeId         String?
+  zona            String?
+  tiempoRespuesta Float?
+  timestamp       DateTime @default(now())
+
+  @@index([choferPhone])
+  @@index([timestamp])
+  @@map("eventochofers")
+}
+
+model AlertaSeg {
+  id                 String   @id @default(uuid())
+  viajeId            String?
+  tipo               String?  // desvio|tiempo_excesivo|parada_sospechosa|trafico|gps_perdido|velocidad_anormal
+  descripcion        String?
+  posicionLat        Float?
+  posicionLng        Float?
+  notificadoPasajero Boolean  @default(false)
+  notificadoAdmin    Boolean  @default(false)
+  timestamp          DateTime @default(now())
+
+  @@index([viajeId])
+  @@map("alertasegs")
+}
+
+model Surge {
+  id               String    @id @default(uuid())
+  zona             String    @default("general")
+  multiplier       Float     @default(1.0)
+  motivo           String?
+  viajesAfectados  Int       @default(0)
+  vigenteHasta     DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@index([zona, vigenteHasta])
+  @@map("surges")
+}
+
+model ViajeDemo {
+  id            String   @id @default(uuid())
+  diaId         Int
+  choferIdx     Int?
+  choferNombre  String?
+  choferPlaca   String?
+  choferTipo    String?
+  usuarioNombre String?
+  usuarioPhone  String?
+  origenNombre  String?
+  origenLat     Float?
+  origenLng     Float?
+  destinoNombre String?
+  destinoLat    Float?
+  destinoLng    Float?
+  distanciaKm   Float?
+  precioTotal   Float?
+  estado        String?
+  rating        Float?
+  tInicio       Float?
+  tAceptado     Float?
+  tLlegoOrigen  Float?
+  tSubioPasajero Float?
+  tCompletado   Float?
+  choferPosLat  Float?
+  choferPosLng  Float?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([diaId, estado])
+  @@map("viajedemos")
+}
+
+model EsquinaMapeada {
+  id            String   @id @default(uuid())
+  llave         String   @unique
+  calle1        String?
+  calle2        String?
+  zona          String?
+  ciudad        String   @default("Cochabamba")
+  lat           Float?
+  lng           Float?
+  usos          Int      @default(1)
+  primerUsuario String?
+  ultimoUso     DateTime @default(now())
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@map("esquinamapeadas")
+}
+
+model PreRegistroFlota {
+  id        String   @id @default(uuid())
+  phone     String   @unique
+  flota     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("preregistroflotas")
+}
+
+model Flota {
+  id        String   @id @default(uuid())
+  codigo    String   @unique
+  nombre    String
+  token     String   @unique
+  activa    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("flotas")
+}
+
+// Notificaciones bancarias (Yape vía MacroDroid) sin chofer pendiente todavía.
+// MySQL no tiene TTL nativo como Mongo: la limpieza de filas viejas (>20 min)
+// se hace en services/session.js con un interval, igual que el resto de la app.
+model NotificacionPago {
+  id        String   @id @default(uuid())
+  texto     String?  @db.Text
+  monto     Float?
+  usado     Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([usado, createdAt])
+  @@map("notificacionespago")
+}
