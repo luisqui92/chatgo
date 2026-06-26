@@ -1,5 +1,4 @@
 // ChatGo — index.js
-const mongoose = require("mongoose");
 const os = require("os");
 const { CONFIG, log } = require("../config");
 const { Usuario, Chofer, Viaje, SessionState, ListaEspera } = require("../db/models");
@@ -35,13 +34,15 @@ setInterval(async () => {
       "esperando_nombre_usuario","esperando_rating"
     ];
     const limite = new Date(Date.now() - CONFIG.SESSION_PEDIDO_TIMEOUT_MS);
-    const sesiones = await SessionState.find({
-      "data.step": { $in: stepsPedido },
-      "data.updatedAt": { $lt: limite.toISOString() },
-    });
+    // SessionState.data es un blob Json — no se puede filtrar eficientemente por
+    // sub-campos en MySQL/Prisma, así que se trae todo y se filtra en JS.
+    const todasSesiones = await SessionState.findMany({});
+    const sesiones = todasSesiones.filter((s) =>
+      s.data && stepsPedido.includes(s.data.step) && s.data.updatedAt && new Date(s.data.updatedAt) < limite
+    );
     for (const s of sesiones) {
       log.info(`[SESSION_CLEANUP] Limpiando sesión abandonada: ${s.phone} step=${s.data.step} updatedAt=${s.data.updatedAt}`);
-      await SessionState.deleteOne({ phone: s.phone });
+      await SessionState.deleteMany({ where: { phone: s.phone } });
       sessionCache.delete(s.phone);
     }
     if (sesiones.length > 0) log.info(`[SESSION_CLEANUP] ${sesiones.length} sesiones abandonadas limpiadas`);
@@ -57,9 +58,10 @@ setInterval(async () => {
 setInterval(async () => {
   try {
     const ahora = new Date();
-    const pendientes = await ListaEspera.find({
-      timestamp: { $gt: new Date(Date.now() - 30 * 60 * 1000) }
-    }).limit(50);
+    const pendientes = await ListaEspera.findMany({
+      where: { timestamp: { gt: new Date(Date.now() - 30 * 60 * 1000) } },
+      take: 50,
+    });
 
     for (const espera of pendientes) {
       try {
@@ -68,14 +70,18 @@ setInterval(async () => {
 
         const segundos = (ahora.getTime() - new Date(espera.timestamp).getTime()) / 1000;
 
-        if (espera.ofertaActivaTraccarId && espera.ofertaActivaHasta) {
+        if (espera.ofertaActivaWialonId && espera.ofertaActivaHasta) {
           const expirada = new Date(espera.ofertaActivaHasta) < ahora;
           if (!expirada) continue;
           log.info(`[ESPERA] Oferta expirada para ${espera.userPhone}`);
-          espera.ofertasRechazadas = [...(espera.ofertasRechazadas || []), espera.ofertaActivaTraccarId];
-          espera.ofertaActivaTraccarId = null;
-          espera.ofertaActivaHasta = null;
-          await espera.save();
+          await ListaEspera.update({
+            where: { userPhone: espera.userPhone },
+            data: {
+              ofertasRechazadas: [...(espera.ofertasRechazadas || []), espera.ofertaActivaWialonId],
+              ofertaActivaWialonId: null,
+              ofertaActivaHasta: null,
+            },
+          });
         }
 
         if (segundos > CONFIG.ESPERA_TIMEOUT_TOTAL) {
@@ -90,7 +96,7 @@ setInterval(async () => {
         }
 
         const chofer = await getTraccar().buscarChoferDisponibleTraccar(
-          { lat: espera.origen.lat, lng: espera.origen.lng },
+          { lat: espera.origenLat, lng: espera.origenLng },
           espera.ofertasRechazadas || [],
           espera.tipoVehiculoSolicitado || null
         );
@@ -103,12 +109,17 @@ setInterval(async () => {
         const puedeMandarMensaje = msSinMensaje > 90000;
 
         if (chofer) {
-          espera.ofertaActivaTraccarId = chofer.traccarId;
-          espera.ofertaActivaHasta = new Date(ahoraMs + CONFIG.ESPERA_OFERTA_VIGENCIA * 1000);
+          const ofertaActivaHasta = new Date(ahoraMs + CONFIG.ESPERA_OFERTA_VIGENCIA * 1000);
 
           if (puedeMandarMensaje) {
-            espera.ultimoMensajeAt = new Date();
-            await espera.save();
+            await ListaEspera.update({
+              where: { userPhone: espera.userPhone },
+              data: {
+                ofertaActivaWialonId: chofer.traccarId,
+                ofertaActivaHasta,
+                ultimoMensajeAt: new Date(),
+              },
+            });
             const sesionActual1 = await getSession(espera.userPhone) || {};
             await updateSession(espera.userPhone, { ...sesionActual1, step: "sin_chofer" });
             await enviarBotones(
@@ -125,14 +136,18 @@ setInterval(async () => {
               ]
             );
           } else {
-            await espera.save();
+            await ListaEspera.update({
+              where: { userPhone: espera.userPhone },
+              data: { ofertaActivaWialonId: chofer.traccarId, ofertaActivaHasta },
+            });
             log.info(`[ESPERA] Anti-spam: chofer encontrado para ${espera.userPhone} pero mensaje reciente (${Math.round(msSinMensaje/1000)}s ago) — silencioso`);
           }
         } else {
           if (segundos > CONFIG.ESPERA_NOTIFICAR_SIN_CHOFER && !espera.notificado) {
-            espera.notificado = true;
-            espera.ultimoMensajeAt = new Date();
-            await espera.save();
+            await ListaEspera.update({
+              where: { userPhone: espera.userPhone },
+              data: { notificado: true, ultimoMensajeAt: new Date() },
+            });
             const sesionActual2 = await getSession(espera.userPhone) || {};
             await updateSession(espera.userPhone, { ...sesionActual2, step: "sin_chofer" });
             await enviarMensaje(
@@ -157,13 +172,13 @@ setInterval(async () => {
 setInterval(async () => {
   try {
     const limite = new Date(Date.now() - CONFIG.TIMEOUT_ACEPTACION_CHOFER * 1000);
-    const pendientes = await Viaje.find({ estado: "pendiente", fechaAsignacion: { $lt: limite } });
+    const pendientes = await Viaje.findMany({ where: { estado: "pendiente", fechaAsignacion: { lt: limite } } });
 
     for (const viaje of pendientes) {
       try {
-        log.warn(`[TIMEOUT] Viaje ${viaje._id} sin respuesta del chofer ${viaje.choferPhone}`);
+        log.warn(`[TIMEOUT] Viaje ${viaje.id} sin respuesta del chofer ${viaje.choferPhone}`);
         await getTraccar().liberarReservaChoferTraccar(viaje.choferTraccarId);
-        await Viaje.findByIdAndUpdate(viaje._id, { estado: "buscando_otro_chofer", cancelacionMotivo: "timeout_chofer" });
+        await Viaje.update({ where: { id: viaje.id }, data: { estado: "buscando_otro_chofer", cancelacionMotivo: "timeout_chofer" } });
         await enviarMensaje(viaje.choferPhone, "⏰ Se te pasó el tiempo para aceptar el viaje. Pasamos al siguiente chofer.");
         const session = await getSession(viaje.usuarioPhone);
         if (session && session.step === "esperando_chofer") {
@@ -185,18 +200,18 @@ setInterval(async () => {
 
     // FIX BUG#4 — limpiar viajes zombie en estado buscando_otro_chofer más de 10 min
     const limiteZombie = new Date(Date.now() - 10 * 60 * 1000);
-    await Viaje.updateMany(
-      { estado: "buscando_otro_chofer", updatedAt: { $lt: limiteZombie } },
-      { estado: "cancelado_timeout", cancelacionMotivo: "zombie_cleanup", fechaFin: new Date() }
-    );
+    await Viaje.updateMany({
+      where: { estado: "buscando_otro_chofer", updatedAt: { lt: limiteZombie } },
+      data: { estado: "cancelado_timeout", cancelacionMotivo: "zombie_cleanup", fechaFin: new Date() },
+    });
 
     // ZOMBIE CLEANUP INTELIGENTE — límite dinámico según tiempo estimado del viaje
     // en_camino: 30 min máx (el chofer aceptó estando a <5 min del origen)
     // esperando_pasajero: 20 min máx esperando que suba
     // en_curso: tiempoEstimadoMin x2.5 (mín 40) — verificando tráfico real con Google antes de cerrar
-    const viajesActivos = await Viaje.find({
-      estado: { $in: ["en_camino", "esperando_pasajero", "en_curso"] },
-    }).lean();
+    const viajesActivos = await Viaje.findMany({
+      where: { estado: { in: ["en_camino", "esperando_pasajero", "en_curso"] } },
+    });
 
     for (const viaje of viajesActivos) {
       try {
@@ -210,24 +225,24 @@ setInterval(async () => {
         if (minutosTranscurridos < limiteMin) continue;
 
         // Para en_curso: antes de cerrar, verificar con GPS + Google si sigue avanzando legítimamente
-        if (viaje.estado === "en_curso" && viaje.choferTraccarId && viaje.destino?.lat) {
+        if (viaje.estado === "en_curso" && viaje.choferTraccarId && viaje.destinoLat) {
           try {
             const pos = await getTraccar().obtenerUbicacionChofer(viaje.choferTraccarId);
             if (pos && pos.minutos <= 5) {
-              const distKm = distPuntos(pos.lat, pos.lng, viaje.destino.lat, viaje.destino.lng);
-              const trafico = await calcularTiempoConTrafico(pos.lat, pos.lng, viaje.destino.lat, viaje.destino.lng);
+              const distKm = distPuntos(pos.lat, pos.lng, viaje.destinoLat, viaje.destinoLng);
+              const trafico = await calcularTiempoConTrafico(pos.lat, pos.lng, viaje.destinoLat, viaje.destinoLng);
               const minRestantes = trafico?.minutosConTrafico ?? null;
 
               // Si está a <1km del destino o Google dice que le faltan ≤15 min, extender (no cerrar)
               if (distKm < 1 || (minRestantes !== null && minRestantes <= 15)) {
                 // tocar updatedAt para resetear el contador y avisar al admin solo una vez
-                await Viaje.findByIdAndUpdate(viaje._id, { $set: { extendidoPorTrafico: true } });
-                const keyExt = `${viaje._id}_extendido`;
+                await Viaje.update({ where: { id: viaje.id }, data: { extendidoPorTrafico: true } });
+                const keyExt = `${viaje.id}_extendido`;
                 if (!alertasTraficoEnviadas.has(keyExt)) {
                   alertasTraficoEnviadas.add(keyExt);
                   await enviarMensaje(
                     CONFIG.ADMIN_PHONE,
-                    `⏱️ *Viaje extendido por tráfico*\n\n🆔 ${viaje._id}\n👤 ${viaje.choferNombre || "—"} (+${viaje.choferPhone || "—"})\n⏳ Lleva ${minutosTranscurridos} min (estimado: ${viaje.tiempoEstimadoMin || "?"} min)\n📍 A ${Math.round(distKm * 1000)}m del destino\n🚦 Google estima ${minRestantes ?? "?"} min restantes\n\nSigue en curso, no se cerró.`
+                    `⏱️ *Viaje extendido por tráfico*\n\n🆔 ${viaje.id}\n👤 ${viaje.choferNombre || "—"} (+${viaje.choferPhone || "—"})\n⏳ Lleva ${minutosTranscurridos} min (estimado: ${viaje.tiempoEstimadoMin || "?"} min)\n📍 A ${Math.round(distKm * 1000)}m del destino\n🚦 Google estima ${minRestantes ?? "?"} min restantes\n\nSigue en curso, no se cerró.`
                   );
                 }
                 continue;
@@ -239,16 +254,19 @@ setInterval(async () => {
         }
 
         // Cerrar el viaje zombie
-        await Viaje.findByIdAndUpdate(viaje._id, {
-          estado: "cancelado_timeout",
-          cancelacionMotivo: `zombie_${viaje.estado}_${minutosTranscurridos}min`,
-          fechaFin: new Date(),
+        await Viaje.update({
+          where: { id: viaje.id },
+          data: {
+            estado: "cancelado_timeout",
+            cancelacionMotivo: `zombie_${viaje.estado}_${minutosTranscurridos}min`,
+            fechaFin: new Date(),
+          },
         });
         if (viaje.choferPhone) {
-          await Chofer.findOneAndUpdate(
-            { phone: viaje.choferPhone },
-            { estado: "libre", viajeReservado: null, reservadoHasta: null }
-          );
+          await Chofer.update({
+            where: { phone: viaje.choferPhone },
+            data: { estado: "libre", viajeReservado: null, reservadoHasta: null },
+          });
           await deleteSession(viaje.choferPhone); // limpiar sesión del chofer
           await enviarMensaje(
             viaje.choferPhone,
@@ -264,9 +282,9 @@ setInterval(async () => {
         }
         await enviarMensaje(
           CONFIG.ADMIN_PHONE,
-          `⚠️ *Viaje zombie cerrado*\n\n🆔 ${viaje._id}\n👤 Chofer: ${viaje.choferNombre || "—"} (+${viaje.choferPhone || "—"})\n🚗 Placa: ${viaje.choferPlaca || "—"}\n📍 Estado: ${viaje.estado}\n⏱️ ${minutosTranscurridos} min (límite: ${limiteMin} min)`
+          `⚠️ *Viaje zombie cerrado*\n\n🆔 ${viaje.id}\n👤 Chofer: ${viaje.choferNombre || "—"} (+${viaje.choferPhone || "—"})\n🚗 Placa: ${viaje.choferPlaca || "—"}\n📍 Estado: ${viaje.estado}\n⏱️ ${minutosTranscurridos} min (límite: ${limiteMin} min)`
         );
-        log.warn(`[ZOMBIE] Viaje ${viaje._id} cerrado — ${viaje.estado}, ${minutosTranscurridos}min/${limiteMin}min, chofer: ${viaje.choferPhone}`);
+        log.warn(`[ZOMBIE] Viaje ${viaje.id} cerrado — ${viaje.estado}, ${minutosTranscurridos}min/${limiteMin}min, chofer: ${viaje.choferPhone}`);
       } catch (eZombie) {
         log.error("[ZOMBIE_ITEM]", eZombie.message);
       }
@@ -307,19 +325,19 @@ setInterval(async () => {
 setInterval(async () => {
   try {
     // A) LLEGADA AL ORIGEN DEL PASAJERO (≤50m)
-    const enCamino = await Viaje.find({ estado: "en_camino", llegadaOrigenNotificada: false });
+    const enCamino = await Viaje.findMany({ where: { estado: "en_camino", llegadaOrigenNotificada: false } });
     for (const viaje of enCamino) {
       try {
         const posChofer = await getTraccar().obtenerUbicacionChofer(viaje.choferTraccarId);
         if (posChofer.minutos > 5) continue;
-        const distOrigen = distanciaEntrePuntos(posChofer.lat, posChofer.lng, viaje.origen.lat, viaje.origen.lng);
+        const distOrigen = distanciaEntrePuntos(posChofer.lat, posChofer.lng, viaje.origenLat, viaje.origenLng);
         if (distOrigen <= 0.05) {
-          const updated = await Viaje.findOneAndUpdate(
-            { _id: viaje._id, llegadaOrigenNotificada: false },
-            { $set: { llegadaOrigenNotificada: true, estado: "esperando_pasajero" } },
-            { new: true }
-          );
-          if (!updated) continue;
+          const { count } = await Viaje.updateMany({
+            where: { id: viaje.id, llegadaOrigenNotificada: false },
+            data: { llegadaOrigenNotificada: true, estado: "esperando_pasajero" },
+          });
+          if (count === 0) continue;
+          const updated = await Viaje.findUnique({ where: { id: viaje.id } });
 
           const session = await getSession(viaje.usuarioPhone);
           if (session) await updateSession(viaje.usuarioPhone, { ...session, step: "chofer_esperando_pasajero" });
@@ -328,7 +346,7 @@ setInterval(async () => {
           const emoji = tipoVeh === "moto" ? "🏍️" : "🚗";
           const label = tipoVeh === "moto" ? "moto" : "auto";
 
-          const choferColorGPS = await Chofer.findOne({ traccarId: viaje.choferTraccarId }).lean();
+          const choferColorGPS = await Chofer.findUnique({ where: { traccarId: viaje.choferTraccarId } });
           const colorGPS = choferColorGPS?.colorVehiculo ? ` ${choferColorGPS.colorVehiculo}` : "";
           await enviarMensaje(
             viaje.usuarioPhone,
@@ -337,7 +355,7 @@ setInterval(async () => {
 
           // FIX BUG#3 — el GPS detectó llegada, le enviamos botones nuevos al chofer
           // y NO esperamos que presione el botón "Llegué" que ya está obsoleto
-          const usuarioLlegada = await Usuario.findOne({ phone: viaje.usuarioPhone }).lean();
+          const usuarioLlegada = await Usuario.findUnique({ where: { phone: viaje.usuarioPhone } });
           const nombrePasajeroLlegada = usuarioLlegada?.nombre ? `\n🙋 Pregunta por: *ChatGo para ${usuarioLlegada.nombre}*` : "";
           await enviarBotones(
             viaje.choferPhone,
@@ -347,20 +365,20 @@ setInterval(async () => {
               { id: "cancelar_viaje_chofer", title: "❌ Cancelar" },
             ]
           );
-          log.info(`[LLEGADA_ORIGEN] Notificado viaje ${viaje._id}`);
+          log.info(`[LLEGADA_ORIGEN] Notificado viaje ${viaje.id}`);
         }
       } catch { /* ignorar fallo individual */ }
     }
 
     // B) LLEGADA AL DESTINO (≤150m) + MONITOREO DE SEGURIDAD
-    const enCurso = await Viaje.find({ estado: "en_curso", llegadaNotificada: false });
+    const enCurso = await Viaje.findMany({ where: { estado: "en_curso", llegadaNotificada: false } });
     for (const viaje of enCurso) {
       try {
         const posChofer = await getTraccar().obtenerUbicacionChofer(viaje.choferTraccarId);
 
-        const distDestino = distanciaEntrePuntos(posChofer.lat, posChofer.lng, viaje.destino.lat, viaje.destino.lng);
+        const distDestino = distanciaEntrePuntos(posChofer.lat, posChofer.lng, viaje.destinoLat, viaje.destinoLng);
         if (distDestino < 0.15) {
-          await Viaje.findByIdAndUpdate(viaje._id, { llegadaNotificada: true });
+          await Viaje.update({ where: { id: viaje.id }, data: { llegadaNotificada: true } });
           await enviarBotones(viaje.choferPhone, "📍 Parece que llegaste al destino. ¿Finalizas el viaje?",
             [{ id: "terminar_viaje", title: "🏁 Terminar viaje" }]);
           await enviarMensaje(viaje.usuarioPhone, "📍 ¡Tu chofer llegó al destino!");
@@ -382,7 +400,7 @@ const { evaluarViaje } = require("../ai/copiloto");
 setInterval(async () => {
   try {
     // Solo viajes en curso (el pasajero está a bordo = donde importa la seguridad)
-    const enCurso = await Viaje.find({ estado: "en_curso" }).limit(50);
+    const enCurso = await Viaje.findMany({ where: { estado: "en_curso" }, take: 50 });
     for (const viaje of enCurso) {
       try {
         if (!viaje.choferTraccarId) continue;
@@ -405,11 +423,14 @@ setInterval(async () => {
 
 setInterval(async () => {
   try {
-    const enCurso = await Viaje.find({
-      estado: "en_curso",
-      "destino.lat": { $exists: true },
-      tiempoEstimadoMin: { $exists: true, $ne: null },
-    }).limit(20).lean();
+    const enCurso = await Viaje.findMany({
+      where: {
+        estado: "en_curso",
+        destinoLat: { not: null },
+        tiempoEstimadoMin: { not: null },
+      },
+      take: 20,
+    });
 
     for (const viaje of enCurso) {
       try {
@@ -426,21 +447,21 @@ setInterval(async () => {
         const limiteMinutos = viaje.tiempoEstimadoMin * 2;
 
         if (minutosEnViaje && minutosEnViaje > limiteMinutos) {
-          const keyTimeout = `${viaje._id}_timeout`;
+          const keyTimeout = `${viaje.id}_timeout`;
           if (!alertasTraficoEnviadas.has(keyTimeout)) {
             alertasTraficoEnviadas.add(keyTimeout);
 
             // Consultar tráfico actual desde posición del chofer al destino
             const traficoActual = await calcularTiempoConTrafico(
               posChofer.lat, posChofer.lng,
-              viaje.destino.lat, viaje.destino.lng
+              viaje.destinoLat, viaje.destinoLng
             );
 
-            const linkMonitoreo = "https://chatgo.ia.bo/rastreo.html?id=" + viaje._id + "&api=" + encodeURIComponent(CONFIG.APP_URL + "/track/" + viaje._id + "/pos");
+            const linkMonitoreo = "https://chatgo.ia.bo/rastreo.html?id=" + viaje.id + "&api=" + encodeURIComponent(CONFIG.APP_URL + "/track/" + viaje.id + "/pos");
 
             if (traficoActual?.hayTrafico) {
               // Hay tráfico real — avisar al chofer
-              const linkAlternativo = "https://www.google.com/maps/dir/?api=1&origin=" + posChofer.lat + "," + posChofer.lng + "&destination=" + viaje.destino.lat + "," + viaje.destino.lng + "&travelmode=driving";
+              const linkAlternativo = "https://www.google.com/maps/dir/?api=1&origin=" + posChofer.lat + "," + posChofer.lng + "&destination=" + viaje.destinoLat + "," + viaje.destinoLng + "&travelmode=driving";
               await enviarMensaje(
                 viaje.choferPhone,
                 `🚦 *Aviso de tráfico*\n\nHay tráfico significativo en tu zona (factor x\${traficoActual.factorTrafico}).\n\nTiempo estimado restante: ~\${traficoActual.minutosConTrafico} min\n\n🗺️ Considera ruta alternativa:\n\${linkAlternativo}`
@@ -448,7 +469,7 @@ setInterval(async () => {
               log.info(`[TRAFICO] Viaje \${viaje._id} — tráfico x\${traficoActual.factorTrafico}, avisando a chofer`);
             } else {
               // No hay tráfico pero igual se está tardando — posible desvío
-              const distDestino = distPuntos(posChofer.lat, posChofer.lng, viaje.destino.lat, viaje.destino.lng);
+              const distDestino = distPuntos(posChofer.lat, posChofer.lng, viaje.destinoLat, viaje.destinoLng);
               await enviarMensaje(
                 CONFIG.ADMIN_PHONE,
                 `🚨 *Posible desvío de ruta*\n\n👤 Chofer: \${viaje.choferNombre} (+\${viaje.choferPhone})\n🚗 Placa: \${viaje.choferPlaca}\n⏱️ Lleva \${minutosEnViaje} min (estimado: \${viaje.tiempoEstimadoMin} min)\n📍 A \${Math.round(distDestino * 1000)}m del destino\n\n🔍 Monitoreo: \${linkMonitoreo}`
@@ -460,18 +481,18 @@ setInterval(async () => {
 
         // ─── B) DESVÍO GEOGRÁFICO: ¿está muy lejos de la línea origen-destino? ──
         // Calcular si el chofer se alejó más de 1km de la línea recta origen→destino
-        if (viaje.origen?.lat && viaje.destino?.lat) {
-          const distAlOrigen = distPuntos(posChofer.lat, posChofer.lng, viaje.origen.lat, viaje.origen.lng);
-          const distAlDestino = distPuntos(posChofer.lat, posChofer.lng, viaje.destino.lat, viaje.destino.lng);
-          const distOrigenDestino = distPuntos(viaje.origen.lat, viaje.origen.lng, viaje.destino.lat, viaje.destino.lng);
+        if (viaje.origenLat && viaje.destinoLat) {
+          const distAlOrigen = distPuntos(posChofer.lat, posChofer.lng, viaje.origenLat, viaje.origenLng);
+          const distAlDestino = distPuntos(posChofer.lat, posChofer.lng, viaje.destinoLat, viaje.destinoLng);
+          const distOrigenDestino = distPuntos(viaje.origenLat, viaje.origenLng, viaje.destinoLat, viaje.destinoLng);
 
           // Si la suma de distancias es más del doble de la distancia directa → desvío
           const ratioDesvio = (distAlOrigen + distAlDestino) / (distOrigenDestino || 1);
-          const keyDesvio = `\${viaje._id}_desvio_geo`;
+          const keyDesvio = `${viaje.id}_desvio_geo`;
 
           if (ratioDesvio > 2.5 && !alertasTraficoEnviadas.has(keyDesvio)) {
             alertasTraficoEnviadas.add(keyDesvio);
-            const linkMonitoreo = "https://chatgo.ia.bo/rastreo.html?id=" + viaje._id + "&api=" + encodeURIComponent(CONFIG.APP_URL + "/track/" + viaje._id + "/pos");
+            const linkMonitoreo = "https://chatgo.ia.bo/rastreo.html?id=" + viaje.id + "&api=" + encodeURIComponent(CONFIG.APP_URL + "/track/" + viaje.id + "/pos");
             await enviarMensaje(
               CONFIG.ADMIN_PHONE,
               `🚨 *Desvío de ruta detectado*\n\n👤 Chofer: \${viaje.choferNombre} (+\${viaje.choferPhone})\n🚗 Placa: \${viaje.choferPlaca}\n📐 Ratio de desvío: x\${Math.round(ratioDesvio * 10) / 10}\n\n🔍 Monitoreo: \${linkMonitoreo}`
@@ -516,21 +537,26 @@ setInterval(async () => {
       return;
     }
 
-    const choferesSinPagar = await Chofer.find({
-      estado: { $ne: "offline" },
-      $or: [
-        { "pagoDiario.fechaStr": { $ne: hoyStr } },
-        { "pagoDiario.aprobado": { $ne: true } },
-      ],
+    const choferesSinPagar = await Chofer.findMany({
+      where: {
+        estado: { not: "offline" },
+        OR: [
+          { pagoDiarioFechaStr: { not: hoyStr } },
+          { pagoDiarioAprobado: { not: true } },
+        ],
+      },
     });
 
     for (const chofer of choferesSinPagar) {
       try {
-        await Chofer.findByIdAndUpdate(chofer._id, {
-          estado: "offline",
-          "pagoDiario.pagado": false,
-          "pagoDiario.aprobado": false,
-          "pagoDiario.comprobanteValidado": false,
+        await Chofer.update({
+          where: { id: chofer.id },
+          data: {
+            estado: "offline",
+            pagoDiarioPagado: false,
+            pagoDiarioAprobado: false,
+            pagoDiarioComprobanteValidado: false,
+          },
         });
         await updateSession(chofer.phone, { step: "chofer_esperando_comprobante" });
         await enviarMensaje(chofer.phone, `🌅 ¡Buen día! Para empezar a recibir viajes hoy necesitas pagar tu cuota diaria de *Bs 10*.`);

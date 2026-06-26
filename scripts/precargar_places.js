@@ -8,10 +8,9 @@
 // Cada búsqueda devuelve hasta 20 lugares y se paginan hasta 3 páginas (60 max).
 
 require("dotenv").config();
-const mongoose = require("mongoose");
 const axios = require("axios");
 const { CONFIG, CIUDADES, getBoundsUsuario } = require("../config");
-const { LocationReference } = require("../db/models");
+const { LocationReference, prisma } = require("../db/models");
 const { normalizarReferencia } = require("../services/google");
 
 // Categorías a barrer (en español, como las dice la gente). Por cada una,
@@ -93,18 +92,9 @@ async function main() {
   const centro = cfg.centro || { lat: (cfg.bounds.latMin + cfg.bounds.latMax) / 2, lng: (cfg.bounds.lngMin + cfg.bounds.lngMax) / 2 };
   const b = getBoundsUsuario(ciudad);
 
-  await mongoose.connect(CONFIG.MONGODB_URI);
-  console.log(`✅ Conectado a MongoDB`);
-
-  // Migrar índice viejo si existe
-  try {
-    const idx = await LocationReference.collection.indexes();
-    if (idx.find(i => i.name === "referencia_1" && i.unique)) {
-      await LocationReference.collection.dropIndex("referencia_1");
-      console.log("🔧 Índice viejo eliminado.");
-    }
-    await LocationReference.collection.createIndex({ referencia: 1, ciudad: 1 }, { unique: true });
-  } catch (e) { console.log("ℹ️ ", e.message); }
+  // El índice único compuesto (referencia+ciudad) ya está declarado en
+  // prisma/schema.prisma (@@unique([referencia, ciudad])) y se aplica vía
+  // migraciones de Prisma — no hace falta gestionarlo a mano como con Mongo.
 
   console.log(`📍 Barriendo ${ciudad} por ${CATEGORIAS.length} categorías con Places API...\n`);
 
@@ -133,21 +123,27 @@ async function main() {
       if (vistos.has(clave)) continue; // ya lo guardamos en otra categoría
       vistos.add(clave);
 
-      await LocationReference.findOneAndUpdate(
-        { referencia: norm, ciudad },
-        {
-          $set: {
-            referenciaOriginal: lug.nombre,
-            lat: lug.lat,
-            lng: lug.lng,
-            nombreResuelto: lug.direccion || lug.nombre,
-            ciudad,
-            precargado: true,
-          },
-          $setOnInsert: { contador: 5 },
+      await LocationReference.upsert({
+        where: { referencia_ciudad: { referencia: norm, ciudad } },
+        create: {
+          referencia: norm,
+          referenciaOriginal: lug.nombre,
+          lat: lug.lat,
+          lng: lug.lng,
+          nombreResuelto: lug.direccion || lug.nombre,
+          ciudad,
+          precargado: true,
+          contador: 5,
         },
-        { upsert: true }
-      );
+        update: {
+          referenciaOriginal: lug.nombre,
+          lat: lug.lat,
+          lng: lug.lng,
+          nombreResuelto: lug.direccion || lug.nombre,
+          ciudad,
+          precargado: true,
+        },
+      });
       guardados++;
       nuevosEnCat++;
     }
@@ -159,7 +155,7 @@ async function main() {
   console.log(`✅ Guardados: ${guardados} lugares reales de ${ciudad}`);
   console.log(`⚠️  Descartados (fuera de zona): ${descartados}`);
 
-  await mongoose.disconnect();
+  await prisma.$disconnect();
   console.log(`\n🏁 Listo. ChatGo ahora conoce ${guardados} lugares de ${ciudad}.`);
 }
 

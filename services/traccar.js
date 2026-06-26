@@ -99,10 +99,10 @@ async function buscarChoferDisponibleTraccar(origenUsuario, excludeTraccarIds = 
   if (!isConfigured()) return null;
 
   const ahora = new Date();
-  await Chofer.updateMany(
-    { reservadoHasta: { $lt: ahora } },
-    { $set: { viajeReservado: null, reservadoHasta: null } }
-  );
+  await Chofer.updateMany({
+    where: { reservadoHasta: { lt: ahora } },
+    data: { viajeReservado: null, reservadoHasta: null },
+  });
 
   // CHOFER DE PRUEBA: se le asigna el viaje sin importar ciudad/distancia/
   // tiempo, mientras tenga GPS en vivo y no haya sido excluido en este
@@ -110,7 +110,7 @@ async function buscarChoferDisponibleTraccar(origenUsuario, excludeTraccarIds = 
   // diario SÍ se exige igual que a cualquier chofer real — el objetivo es
   // poder probar el flujo de cobro de punta a punta con este número.
   if (CONFIG.CHOFER_PRUEBA_PHONE) {
-    const choferPrueba = await Chofer.findOne({ phone: CONFIG.CHOFER_PRUEBA_PHONE });
+    const choferPrueba = await Chofer.findUnique({ where: { phone: CONFIG.CHOFER_PRUEBA_PHONE } });
     const pagoOk = enPromoGratis() || choferPagoAlDia(choferPrueba);
     if (choferPrueba?.traccarId && pagoOk && !excludeTraccarIds.includes(choferPrueba.traccarId)) {
       await asegurarSnapshot();
@@ -119,7 +119,7 @@ async function buscarChoferDisponibleTraccar(origenUsuario, excludeTraccarIds = 
       if (dev?.positionId && pos) {
         log.info(`[TRACCAR_PRUEBA] Forzando asignación al chofer de prueba ${CONFIG.CHOFER_PRUEBA_PHONE}`);
         return {
-          ...choferPrueba.toObject(),
+          ...choferPrueba,
           ubicacion: { lat: pos.latitude, lng: pos.longitude, minutos: 0 },
           distanciaAlUsuario: distanciaEntrePuntos(origenUsuario.lat, origenUsuario.lng, pos.latitude, pos.longitude),
         };
@@ -129,33 +129,26 @@ async function buscarChoferDisponibleTraccar(origenUsuario, excludeTraccarIds = 
   }
 
   const hoyStr = fechaStrBolivia();
-  const filtro = {
+  const where = {
     estado: "libre",
-    traccarId: { $exists: true, $ne: null, $nin: excludeTraccarIds },
-    $or: [{ viajeReservado: null }, { viajeReservado: { $exists: false } }],
+    traccarId: { not: null, notIn: excludeTraccarIds },
+    viajeReservado: null,
   };
 
+  const and = [];
   if (!enPromoGratis()) {
     // Exigir pago al día a TODOS los choferes, incluyendo el de prueba —
     // el objetivo del chofer de prueba es validar el flujo de cobro de punta a punta.
-    filtro.$and = filtro.$and || [];
-    filtro.$and.push({ "pagoDiario.aprobado": true, "pagoDiario.fechaStr": hoyStr });
+    and.push({ pagoDiarioAprobado: true, pagoDiarioFechaStr: hoyStr });
   }
-  filtro.$and = filtro.$and || [];
   if (tipoVehiculo === "auto") {
-    filtro.$and.push({
-      $or: [
-        { tipoVehiculo: "auto" },
-        { tipoVehiculo: { $exists: false } },
-        { tipoVehiculo: null },
-        { tipoVehiculo: "" },
-      ],
-    });
+    and.push({ OR: [{ tipoVehiculo: "auto" }, { tipoVehiculo: "" }] });
   } else if (tipoVehiculo) {
-    filtro.$and.push({ tipoVehiculo: tipoVehiculo });
+    and.push({ tipoVehiculo });
   }
+  if (and.length) where.AND = and;
 
-  const choferes = await Chofer.find(filtro);
+  const choferes = await Chofer.findMany({ where });
   if (!choferes.length) return null;
 
   // Lee del snapshot en memoria — sin llamadas extra a Traccar
@@ -190,7 +183,7 @@ async function buscarChoferDisponibleTraccar(origenUsuario, excludeTraccarIds = 
     const dist = distanciaEntrePuntos(origenUsuario.lat, origenUsuario.lng, pos.latitude, pos.longitude);
     if (dist > 10) continue;
     candidatos.push({
-      ...chofer.toObject(),
+      ...chofer,
       ubicacion: { lat: pos.latitude, lng: pos.longitude, minutos },
       distanciaAlUsuario: dist,
     });
@@ -204,19 +197,16 @@ async function buscarChoferDisponibleTraccar(origenUsuario, excludeTraccarIds = 
 // ─── RESERVA ─────────────────────────────────────────────────────────────────
 async function reservarChoferTraccar(traccarId, viajeId) {
   const reservadoHasta = new Date(Date.now() + (CONFIG.TIMEOUT_ACEPTACION_CHOFER + 10) * 1000);
-  return await Chofer.findOneAndUpdate(
-    {
-      traccarId,
-      estado: "libre",
-      $or: [{ viajeReservado: null }, { viajeReservado: { $exists: false } }],
-    },
-    { $set: { viajeReservado: String(viajeId), reservadoHasta } },
-    { new: true }
-  );
+  const { count } = await Chofer.updateMany({
+    where: { traccarId, estado: "libre", viajeReservado: null },
+    data: { viajeReservado: String(viajeId), reservadoHasta },
+  });
+  if (count === 0) return null;
+  return await Chofer.findUnique({ where: { traccarId } });
 }
 
 async function liberarReservaChoferTraccar(traccarId) {
-  await Chofer.updateOne({ traccarId }, { $set: { viajeReservado: null, reservadoHasta: null } });
+  await Chofer.update({ where: { traccarId }, data: { viajeReservado: null, reservadoHasta: null } });
 }
 
 // ─── FRECUENCIA DE REPORTE ───────────────────────────────────────────────────

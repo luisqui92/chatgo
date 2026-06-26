@@ -66,17 +66,6 @@ async function buscarCategoria(categoria, ciudad, centro) {
   return { lugares };
 }
 
-// Asegura el índice compuesto correcto (migra el viejo si existe)
-async function asegurarIndice() {
-  try {
-    const idx = await LocationReference.collection.indexes();
-    if (idx.find(i => i.name === "referencia_1" && i.unique)) {
-      await LocationReference.collection.dropIndex("referencia_1");
-    }
-    await LocationReference.collection.createIndex({ referencia: 1, ciudad: 1 }, { unique: true });
-  } catch (e) { log.warn("[PRECARGA] índice:", e.message); }
-}
-
 // Carga todos los lugares de una ciudad. onProgreso(texto) es opcional (para avisar al admin).
 async function precargarCiudad(ciudad, onProgreso = null) {
   const cfg = CIUDADES[ciudad];
@@ -88,8 +77,6 @@ async function precargarCiudad(ciudad, onProgreso = null) {
     lng: (cfg.bounds.lngMin + cfg.bounds.lngMax) / 2,
   };
   const b = getBoundsUsuario(ciudad);
-
-  await asegurarIndice();
 
   const vistos = new Set();
   let guardados = 0, descartados = 0;
@@ -114,21 +101,27 @@ async function precargarCiudad(ciudad, onProgreso = null) {
       vistos.add(clave);
 
       try {
-        await LocationReference.findOneAndUpdate(
-          { referencia: norm, ciudad },
-          {
-            $set: {
-              referenciaOriginal: lug.nombre,
-              lat: lug.lat,
-              lng: lug.lng,
-              nombreResuelto: lug.direccion || lug.nombre,
-              ciudad,
-              precargado: true,
-            },
-            $setOnInsert: { contador: 5 },
+        await LocationReference.upsert({
+          where: { referencia_ciudad: { referencia: norm, ciudad } },
+          create: {
+            referencia: norm,
+            referenciaOriginal: lug.nombre,
+            lat: lug.lat,
+            lng: lug.lng,
+            nombreResuelto: lug.direccion || lug.nombre,
+            ciudad,
+            precargado: true,
+            contador: 5,
           },
-          { upsert: true }
-        );
+          update: {
+            referenciaOriginal: lug.nombre,
+            lat: lug.lat,
+            lng: lug.lng,
+            nombreResuelto: lug.direccion || lug.nombre,
+            ciudad,
+            precargado: true,
+          },
+        });
         guardados++;
       } catch (e) { /* duplicado u otro — ignorar */ }
     }
@@ -148,7 +141,7 @@ module.exports = { precargarCiudad, CATEGORIAS, limpiarBasura };
 // coordenadas caen FUERA de esa ciudad (datos falsos de pruebas, ej "Ventura Mall
 // Cochabamba" con coords que no son de Cochabamba). Devuelve cuántas borró.
 async function limpiarBasura() {
-  const todas = await LocationReference.find({}).lean();
+  const todas = await LocationReference.findMany();
   let borradas = 0, revisadas = 0;
   const ejemplos = [];
 
@@ -163,7 +156,7 @@ async function limpiarBasura() {
     if (!dentro) {
       // Las coordenadas NO corresponden a la ciudad etiquetada → basura
       if (ejemplos.length < 10) ejemplos.push(`${ref.referenciaOriginal} (${ref.ciudad})`);
-      await LocationReference.deleteOne({ _id: ref._id });
+      await LocationReference.delete({ where: { id: ref.id } });
       borradas++;
     }
   }

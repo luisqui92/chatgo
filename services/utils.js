@@ -31,7 +31,7 @@ async function generarCodigoUnico(maxIntentos = 10) {
   for (let i = 0; i < maxIntentos; i++) {
     const random = crypto.randomBytes(3).toString("hex").toUpperCase();
     const codigo = `CHATGO-${random}`;
-    if (!(await CodigoPromo.findOne({ codigo }))) return codigo;
+    if (!(await CodigoPromo.findUnique({ where: { codigo } }))) return codigo;
   }
   return `CHATGO-${Date.now().toString(36).toUpperCase()}`;
 }
@@ -41,11 +41,13 @@ async function crearCodigoPromo(generadoPorPhone, tipoOrigen = "post_viaje") {
   const codigo = await generarCodigoUnico();
   const fechaVenc = new Date(Date.now() + CONFIG.CODIGO_VIGENCIA_DIAS * 24 * 60 * 60 * 1000);
   const doc = await CodigoPromo.create({
-    codigo,
-    descuentoPorcentaje: CONFIG.CODIGO_DESCUENTO_PORCENTAJE,
-    generadoPor: generadoPorPhone,
-    tipoOrigen,
-    fechaVencimiento: fechaVenc,
+    data: {
+      codigo,
+      descuentoPorcentaje: CONFIG.CODIGO_DESCUENTO_PORCENTAJE,
+      generadoPor: generadoPorPhone,
+      tipoOrigen,
+      fechaVencimiento: fechaVenc,
+    },
   });
   log.info(`[PROMO] Código creado: ${codigo} (${tipoOrigen}) para ${generadoPorPhone}`);
   return doc;
@@ -54,7 +56,7 @@ async function crearCodigoPromo(generadoPorPhone, tipoOrigen = "post_viaje") {
 async function validarCodigoPromo(codigoTexto, precioBase) {
   if (!codigoTexto) return { valido: false, motivo: "Código vacío" };
   const codigo = String(codigoTexto).trim().toUpperCase();
-  const doc = await CodigoPromo.findOne({ codigo });
+  const doc = await CodigoPromo.findUnique({ where: { codigo } });
   if (!doc) return { valido: false, motivo: "Ese código no existe" };
   if (doc.usado) return { valido: false, motivo: "Ese código ya fue usado" };
   if (doc.fechaVencimiento < new Date()) return { valido: false, motivo: "El código está vencido" };
@@ -69,11 +71,14 @@ async function validarCodigoPromo(codigoTexto, precioBase) {
 }
 
 async function consumirCodigoPromo(codigoDocId, usadoPorPhone, viajeId) {
-  await CodigoPromo.findByIdAndUpdate(codigoDocId, {
-    usado: true,
-    usadoPor: usadoPorPhone,
-    fechaUso: new Date(),
-    viajeIdAsociado: String(viajeId || ""),
+  await CodigoPromo.update({
+    where: { id: codigoDocId },
+    data: {
+      usado: true,
+      usadoPor: usadoPorPhone,
+      fechaUso: new Date(),
+      viajeIdAsociado: String(viajeId || ""),
+    },
   });
 }
 
@@ -174,11 +179,14 @@ function detectarIncompatibilidadMoto(observaciones) {
 }
 
 async function obtenerUltimoViaje(phone) {
-  return await Viaje.findOne({ usuarioPhone: phone, estado: "completado" }).sort({ fechaFin: -1 }).lean();
+  return await Viaje.findFirst({
+    where: { usuarioPhone: phone, estado: "completado" },
+    orderBy: { fechaFin: "desc" },
+  });
 }
 
 async function obtenerDestinosFrecuentes(phone, limit = 2) {
-  const usuario = await Usuario.findOne({ phone });
+  const usuario = await Usuario.findUnique({ where: { phone } });
   if (!usuario?.rutasFrecuentes?.length) return [];
   const mapa = new Map();
   for (const ruta of usuario.rutasFrecuentes) {
@@ -198,11 +206,12 @@ async function obtenerDestinosFrecuentes(phone, limit = 2) {
 }
 
 async function guardarRutaFrecuente(phone, origen, destino, tipoVehiculo = "auto") {
-  const usuario = await Usuario.findOne({ phone });
+  const usuario = await Usuario.findUnique({ where: { phone } });
   if (!usuario) return;
   // Hora actual en Bolivia (0-23)
   const horaBolivia = new Date(Date.now() + CONFIG.OFFSET_HORAS * 60 * 60 * 1000).getUTCHours();
-  const existente = usuario.rutasFrecuentes.find(
+  const rutasFrecuentes = usuario.rutasFrecuentes || [];
+  const existente = rutasFrecuentes.find(
     r => Math.abs(r.origen.lat - origen.lat) < 0.001 && Math.abs(r.destino.lat - destino.lat) < 0.001
   );
   if (existente) {
@@ -214,12 +223,12 @@ async function guardarRutaFrecuente(phone, origen, destino, tipoVehiculo = "auto
     existente.tipoVehiculo = tipoVehiculo;
     existente.ultimoViaje = new Date();
   } else {
-    usuario.rutasFrecuentes.push({
+    rutasFrecuentes.push({
       origen, destino, contador: 1,
       horas: [horaBolivia], tipoVehiculo, ultimoViaje: new Date(),
     });
   }
-  await usuario.save();
+  await Usuario.update({ where: { phone }, data: { rutasFrecuentes } });
 }
 
 // ─── COPILOTO DE HÁBITOS: sugerencia inteligente por hora ────────────────────
@@ -227,7 +236,7 @@ async function guardarRutaFrecuente(phone, origen, destino, tipoVehiculo = "auto
 // actual, devuelve una sugerencia lista para ofrecer. Si no hay patrón, null.
 async function sugerenciaPorHora(phone) {
   try {
-    const usuario = await Usuario.findOne({ phone }).lean();
+    const usuario = await Usuario.findUnique({ where: { phone } });
     if (!usuario?.rutasFrecuentes?.length) return null;
 
     const horaActual = new Date(Date.now() + CONFIG.OFFSET_HORAS * 60 * 60 * 1000).getUTCHours();
@@ -275,20 +284,27 @@ async function construirBotonesHistorial(phone) {
   // Máximo 2 destinos del historial + 1 botón nueva ruta = 3 total
   const MAX_HISTORIAL = 2;
 
+  const ultimoDestino = ultimo
+    ? { lat: ultimo.destinoLat, lng: ultimo.destinoLng, nombre: ultimo.destinoNombre }
+    : null;
+  const ultimoOrigen = ultimo
+    ? { lat: ultimo.origenLat, lng: ultimo.origenLng, nombre: ultimo.origenNombre }
+    : null;
+
   if (ultimo && botones.length < MAX_HISTORIAL) {
-    const nombreUltimo = acortarParaBoton(ultimo.destino?.nombre || "", 14);
+    const nombreUltimo = acortarParaBoton(ultimoDestino?.nombre || "", 14);
     const titleUltimo = nombreUltimo ? `🔄 ${nombreUltimo}` : "🔄 Último viaje";
     botones.push({ id: "hist_ultimo", title: titleUltimo });
-    idsParaSession.ultimo = { origen: ultimo.origen, destino: ultimo.destino };
+    idsParaSession.ultimo = { origen: ultimoOrigen, destino: ultimoDestino };
   }
 
   let agregados = 0;
   for (let i = 0; i < frecuentes.length && botones.length < MAX_HISTORIAL; i++) {
     const f = frecuentes[i];
     if (
-      ultimo?.destino &&
-      Math.abs(ultimo.destino.lat - f.destino.lat) < 0.001 &&
-      Math.abs(ultimo.destino.lng - f.destino.lng) < 0.001
+      ultimoDestino &&
+      Math.abs(ultimoDestino.lat - f.destino.lat) < 0.001 &&
+      Math.abs(ultimoDestino.lng - f.destino.lng) < 0.001
     ) continue;
     const nombreFrecuente = acortarParaBoton(f.destino.nombre || "", 14);
     const titleFrecuente = nombreFrecuente ? `⭐ ${nombreFrecuente}` : "⭐ Destino guardado";
@@ -312,8 +328,8 @@ function enPromoGratis() {
 }
 
 function choferPagoAlDia(chofer) {
-  if (!chofer || !chofer.pagoDiario) return false;
-  return chofer.pagoDiario.pagado && chofer.pagoDiario.aprobado && chofer.pagoDiario.fechaStr === fechaStrBolivia().split("T")[0];
+  if (!chofer) return false;
+  return chofer.pagoDiarioPagado && chofer.pagoDiarioAprobado && chofer.pagoDiarioFechaStr === fechaStrBolivia().split("T")[0];
 }
 
 
@@ -367,14 +383,20 @@ async function buscarEsquinaMapeada(calle1, calle2, zona = null) {
     
     // Si el usuario especificó zona, buscar exacta primero
     if (zona) {
-      esquina = await EsquinaMapeada.findOne({ llave: llaveEsquina(calle1, calle2, zona) });
+      esquina = await EsquinaMapeada.findUnique({ where: { llave: llaveEsquina(calle1, calle2, zona) } });
       if (esquina) return { esquina, requiereConfirmacion: false };
     }
-    
+
     // Buscar sin zona (todas las que tengan esa combinación)
-    const candidatas = await EsquinaMapeada.find({ 
-      llave: { $regex: `^${llaveEsquina(calle1, calle2, null)}(\\||$)` }
-    }).sort({ usos: -1 }).limit(5);
+    const llaveBase = llaveEsquina(calle1, calle2, null);
+    const candidatasRaw = await EsquinaMapeada.findMany({
+      where: { llave: { startsWith: llaveBase } },
+      orderBy: { usos: "desc" },
+      take: 20,
+    });
+    const candidatas = candidatasRaw
+      .filter(c => c.llave === llaveBase || c.llave.startsWith(`${llaveBase}|`))
+      .slice(0, 5);
     
     if (candidatas.length === 0) return null;
     
@@ -426,25 +448,27 @@ async function guardarEsquina(calle1, calle2, lat, lng, opciones = {}) {
     const llave = llaveEsquina(calle1, calle2, opciones.zona);
     if (!llave) return null;
     
-    const existente = await EsquinaMapeada.findOne({ llave });
+    const existente = await EsquinaMapeada.findUnique({ where: { llave } });
     if (existente) {
       // Ya existe — solo aumentar contador
-      existente.usos = (existente.usos || 0) + 1;
-      existente.ultimoUso = new Date();
-      await existente.save();
-      return existente;
+      return await EsquinaMapeada.update({
+        where: { llave },
+        data: { usos: (existente.usos || 0) + 1, ultimoUso: new Date() },
+      });
     }
-    
+
     return await EsquinaMapeada.create({
-      llave,
-      calle1: calle1.trim(),
-      calle2: calle2.trim(),
-      zona: opciones.zona || null,
-      ciudad: opciones.ciudad || "Cochabamba",
-      lat, lng,
-      usos: 1,
-      primerUsuario: opciones.phone || null,
-      ultimoUso: new Date(),
+      data: {
+        llave,
+        calle1: calle1.trim(),
+        calle2: calle2.trim(),
+        zona: opciones.zona || null,
+        ciudad: opciones.ciudad || "Cochabamba",
+        lat, lng,
+        usos: 1,
+        primerUsuario: opciones.phone || null,
+        ultimoUso: new Date(),
+      },
     });
   } catch (e) { return null; }
 }
@@ -453,7 +477,7 @@ async function guardarEsquina(calle1, calle2, lat, lng, opciones = {}) {
 async function obtenerLugarPersonal(phone, tipo) {
   try {
     const { Usuario } = require("../db/models");
-    const u = await Usuario.findOne({ phone }).lean();
+    const u = await Usuario.findUnique({ where: { phone } });
     if (!u || !u.lugaresFrecuentes) return null;
     if (tipo === "casa") return u.lugaresFrecuentes.casa || null;
     if (tipo === "trabajo") return u.lugaresFrecuentes.trabajo || null;
@@ -465,12 +489,10 @@ async function obtenerLugarPersonal(phone, tipo) {
 async function guardarLugarPersonal(phone, tipo, lat, lng, nombre) {
   try {
     const { Usuario } = require("../db/models");
-    const campo = `lugaresFrecuentes.${tipo}`;
-    await Usuario.findOneAndUpdate(
-      { phone },
-      { $set: { [campo]: { lat, lng, nombre } } },
-      { upsert: false }
-    );
+    const u = await Usuario.findUnique({ where: { phone } });
+    if (!u) return false;
+    const lugaresFrecuentes = { ...(u.lugaresFrecuentes || {}), [tipo]: { lat, lng, nombre } };
+    await Usuario.update({ where: { phone }, data: { lugaresFrecuentes } });
     return true;
   } catch (e) { return false; }
 }

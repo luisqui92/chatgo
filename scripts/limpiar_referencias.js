@@ -4,9 +4,8 @@
 // Para borrar de verdad: node scripts/limpiar_referencias.js --aplicar
 
 require("dotenv").config();
-const mongoose = require("mongoose");
-const { CONFIG, CIUDADES } = require("../config");
-const { LocationReference } = require("../db/models");
+const { CIUDADES } = require("../config");
+const { LocationReference, prisma } = require("../db/models");
 
 function ciudadPorCoords(lat, lng) {
   for (const [nombre, c] of Object.entries(CIUDADES)) {
@@ -18,10 +17,8 @@ function ciudadPorCoords(lat, lng) {
 
 async function main() {
   const aplicar = process.argv.includes("--aplicar");
-  await mongoose.connect(CONFIG.MONGODB_URI);
-  console.log(`✅ Conectado a MongoDB\n`);
 
-  const todas = await LocationReference.find({}).lean();
+  const todas = await LocationReference.findMany();
   console.log(`Total de referencias: ${todas.length}\n`);
 
   const malEtiquetadas = [];
@@ -54,7 +51,7 @@ async function main() {
     console.log(`La opción más segura es CORREGIR la etiqueta (no borrar).`);
     console.log(`\nPara CORREGIR las mal etiquetadas (cambiar a su ciudad real):`);
     console.log(`   node scripts/limpiar_referencias.js --aplicar`);
-    await mongoose.disconnect();
+    await prisma.$disconnect();
     return;
   }
 
@@ -62,12 +59,12 @@ async function main() {
   let corregidas = 0;
   for (const { ref, ciudadReal } of malEtiquetadas) {
     // Verificar que no exista ya esa referencia en la ciudad correcta (evitar choque de índice)
-    const existe = await LocationReference.findOne({ referencia: ref.referencia, ciudad: ciudadReal });
+    const existe = await LocationReference.findUnique({ where: { referencia_ciudad: { referencia: ref.referencia, ciudad: ciudadReal } } });
     if (existe) {
       // Ya existe en la ciudad correcta — borrar el duplicado mal etiquetado
-      await LocationReference.deleteOne({ _id: ref._id });
+      await LocationReference.delete({ where: { id: ref.id } });
     } else {
-      await LocationReference.updateOne({ _id: ref._id }, { $set: { ciudad: ciudadReal } });
+      await LocationReference.update({ where: { id: ref.id }, data: { ciudad: ciudadReal } });
     }
     corregidas++;
   }
@@ -75,14 +72,14 @@ async function main() {
   // Borrar las que están fuera de toda ciudad (datos basura)
   let borradas = 0;
   for (const ref of fueraDeTodo) {
-    await LocationReference.deleteOne({ _id: ref._id });
+    await LocationReference.delete({ where: { id: ref.id } });
     borradas++;
   }
 
   console.log(`\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
   console.log(`✅ Corregidas (reasignadas a su ciudad real): ${corregidas}`);
   console.log(`🗑️  Borradas (fuera de toda ciudad): ${borradas}`);
-  await mongoose.disconnect();
+  await prisma.$disconnect();
   console.log(`\n🏁 Listo. Base de referencias limpia.`);
 }
 

@@ -1,5 +1,4 @@
 // ChatGo — webhook.js
-const mongoose = require("mongoose");
 const { limitWebhook } = require("../services/ratelimit");
 const fs = require("fs");
 const https = require("https");
@@ -56,17 +55,24 @@ app.post("/webhook", limitWebhook, async (req, res) => {
           const esAprobar = buttonId.startsWith("aprobar_pago_");
           const choferPhone = buttonId.replace(/^(aprobar|rechazar)_pago_/, "");
           if (esAprobar) {
-            await Chofer.findOneAndUpdate(
-              { phone: choferPhone },
-              { "pagoDiario.aprobado": true, "pagoDiario.fecha": new Date(), "pagoDiario.fechaStr": fechaStrBolivia(), estado: "libre" }
-            );
+            try {
+              await Chofer.update({
+                where: { phone: choferPhone },
+                data: { pagoDiarioAprobado: true, pagoDiarioFecha: new Date(), pagoDiarioFechaStr: fechaStrBolivia(), estado: "libre" },
+              });
+            } catch (eUpd) { /* chofer no encontrado — ignorar */ }
             await enviarBotones(choferPhone, `✅ *Pago confirmado!*\n🚖 Ya estás LIBRE para recibir viajes.`, [
               { id: "chofer_ocupado", title: "🔴 Ocupado" },
               { id: "chofer_ayuda", title: "❓ Ayuda" },
             ]);
             await enviarMensaje(phone, `✅ Pago aprobado para +${choferPhone}`);
           } else {
-            await Chofer.findOneAndUpdate({ phone: choferPhone }, { "pagoDiario.pagado": false, "pagoDiario.aprobado": false, estado: "offline" });
+            try {
+              await Chofer.update({
+                where: { phone: choferPhone },
+                data: { pagoDiarioPagado: false, pagoDiarioAprobado: false, estado: "offline" },
+              });
+            } catch (eUpd) { /* chofer no encontrado — ignorar */ }
             await enviarMensaje(choferPhone, `❌ Tu comprobante de pago fue rechazado. Contacta al admin: +591 62741818`);
             await enviarMensaje(phone, `❌ Pago rechazado para +${choferPhone}`);
           }
@@ -74,15 +80,17 @@ app.post("/webhook", limitWebhook, async (req, res) => {
         }
 
         // ROUTING chofer/pasajero
-        const esChofer = await Chofer.exists({ phone });
+        const esChofer = !!(await Chofer.findUnique({ where: { phone } }));
         const session = await getSession(phone);
 
         // Si es chofer registrado, NUNCA lo tratamos como pasajero por sesión residual.
         // Solo va al flujo pasajero si tiene un viaje activo como pasajero en DB.
-        const tieneViajeActivoPasajero = esChofer ? !!(await Viaje.findOne({
-          usuarioPhone: phone,
-          estado: { $in: ["pendiente","en_camino","esperando_pasajero","en_curso"] },
-        }).lean()) : false;
+        const tieneViajeActivoPasajero = esChofer ? !!(await Viaje.findFirst({
+          where: {
+            usuarioPhone: phone,
+            estado: { in: ["pendiente","en_camino","esperando_pasajero","en_curso"] },
+          },
+        })) : false;
 
         // Para no-choferes: sesión activa los mantiene en flujo pasajero
         const sesionEsPasajero = !esChofer && session && session.step &&

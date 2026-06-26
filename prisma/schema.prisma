@@ -35,6 +35,8 @@ model Usuario {
   viajesTotal         Int       @default(0)
   rutasFrecuentes     Json?     // [{ origen, destino, contador, horas:[Int], tipoVehiculo, ultimoViaje }]
   lugaresFrecuentes   Json?     // { casa, trabajo, otros:[{alias,lat,lng,nombre}] }
+  ultimoViajeAt       DateTime?
+  promoReactivacionEnviada Boolean @default(false)
   createdAt           DateTime  @default(now())
   updatedAt           DateTime  @updatedAt
 
@@ -66,6 +68,7 @@ model Chofer {
   ratingPromedio                Float    @default(0)
   ratingCantidad                Int      @default(0)
   flota                         String?
+  ultimaAlertaZona               DateTime?
   createdAt                     DateTime @default(now())
   updatedAt                     DateTime @updatedAt
 

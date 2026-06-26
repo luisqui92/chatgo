@@ -16,7 +16,7 @@ const { enviarVoz, enviarMensaje } = require("../services/whatsapp");
 // Manda la respuesta como audio si el usuario está en modo adulto mayor.
 // Siempre manda también el texto como respaldo (por si el audio falla o no se escucha).
 async function responderPorVoz(phone, texto, opciones = {}) {
-  const usuario = opciones.usuario || await Usuario.findOne({ phone }).lean();
+  const usuario = opciones.usuario || await Usuario.findUnique({ where: { phone } });
   const usaVoz = usuario?.modoAdultoMayor || usuario?.respuestasPorVoz;
 
   if (!usaVoz) {
@@ -68,28 +68,31 @@ function limpiarTextoParaVoz(texto) {
 // Vincula a un familiar con la cuenta del adulto mayor.
 // El familiar ejecuta esto desde su propio WhatsApp.
 async function vincularFamiliar(adultoPhone, familiarPhone, nombreFamiliar = "familiar") {
-  const usuario = await Usuario.findOne({ phone: adultoPhone });
+  const usuario = await Usuario.findUnique({ where: { phone: adultoPhone } });
   if (!usuario) return { ok: false, motivo: "no_existe" };
 
   const yaVinculado = usuario.familiaresVinculados?.some(f => f.phone === familiarPhone);
   if (yaVinculado) return { ok: true, motivo: "ya_vinculado" };
 
-  usuario.familiaresVinculados = usuario.familiaresVinculados || [];
-  usuario.familiaresVinculados.push({ phone: familiarPhone, nombre: nombreFamiliar });
-  usuario.modoAdultoMayor = true; // al vincular familiar, se asume modo adulto mayor
-  await usuario.save();
+  const familiaresVinculados = usuario.familiaresVinculados || [];
+  familiaresVinculados.push({ phone: familiarPhone, nombre: nombreFamiliar });
+  await Usuario.update({
+    where: { phone: adultoPhone },
+    data: { familiaresVinculados, modoAdultoMayor: true }, // al vincular familiar, se asume modo adulto mayor
+  });
   return { ok: true, motivo: "vinculado" };
 }
 
 // Verifica si un teléfono es familiar autorizado de algún adulto mayor.
 // Devuelve la lista de cuentas que ese familiar gestiona.
 async function cuentasQueGestiona(familiarPhone) {
-  return await Usuario.find({ "familiaresVinculados.phone": familiarPhone }).lean();
+  const todos = await Usuario.findMany();
+  return todos.filter(u => u.familiaresVinculados?.some(f => f.phone === familiarPhone));
 }
 
 // Recarga saldo en la cuenta del adulto mayor. Solo un familiar vinculado puede hacerlo.
 async function recargarSaldo(adultoPhone, familiarPhone, monto, comprobante = null) {
-  const usuario = await Usuario.findOne({ phone: adultoPhone });
+  const usuario = await Usuario.findUnique({ where: { phone: adultoPhone } });
   if (!usuario) return { ok: false, motivo: "no_existe" };
 
   const esFamiliar = usuario.familiaresVinculados?.some(f => f.phone === familiarPhone);
@@ -97,17 +100,17 @@ async function recargarSaldo(adultoPhone, familiarPhone, monto, comprobante = nu
 
   if (!monto || monto <= 0) return { ok: false, motivo: "monto_invalido" };
 
-  usuario.saldo = (usuario.saldo || 0) + monto;
-  usuario.recargas = usuario.recargas || [];
-  usuario.recargas.push({ monto, familiarPhone, comprobante, fecha: new Date() });
-  await usuario.save();
+  const saldoNuevo = (usuario.saldo || 0) + monto;
+  const recargas = usuario.recargas || [];
+  recargas.push({ monto, familiarPhone, comprobante, fecha: new Date() });
+  await Usuario.update({ where: { phone: adultoPhone }, data: { saldo: saldoNuevo, recargas } });
 
-  return { ok: true, saldoNuevo: usuario.saldo };
+  return { ok: true, saldoNuevo };
 }
 
 // Descuenta el costo del viaje del saldo. Devuelve si alcanzó y el saldo restante.
 async function descontarViaje(adultoPhone, costo) {
-  const usuario = await Usuario.findOne({ phone: adultoPhone });
+  const usuario = await Usuario.findUnique({ where: { phone: adultoPhone } });
   if (!usuario) return { ok: false, motivo: "no_existe" };
 
   const saldoActual = usuario.saldo || 0;
@@ -115,14 +118,14 @@ async function descontarViaje(adultoPhone, costo) {
     return { ok: false, motivo: "saldo_insuficiente", saldoActual, falta: costo - saldoActual };
   }
 
-  usuario.saldo = saldoActual - costo;
-  await usuario.save();
-  return { ok: true, saldoNuevo: usuario.saldo };
+  const saldoNuevo = saldoActual - costo;
+  await Usuario.update({ where: { phone: adultoPhone }, data: { saldo: saldoNuevo } });
+  return { ok: true, saldoNuevo };
 }
 
 // Avisa a los familiares vinculados cuando el saldo está bajo (para que recarguen)
 async function avisarSaldoBajoAFamiliares(adultoPhone, umbral = 20) {
-  const usuario = await Usuario.findOne({ phone: adultoPhone }).lean();
+  const usuario = await Usuario.findUnique({ where: { phone: adultoPhone } });
   if (!usuario || (usuario.saldo || 0) > umbral) return;
   if (!usuario.familiaresVinculados?.length) return;
 

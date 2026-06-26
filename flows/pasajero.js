@@ -1,5 +1,4 @@
 // ChatGo — Flow pasajero
-const mongoose = require("mongoose");
 const https = require("https");
 const http = require("http");
 const os = require("os");
@@ -30,7 +29,7 @@ async function _usuarioUsaVoz(phone) {
   const cached = _vozCache.get(phone);
   if (cached && Date.now() - cached.ts < 60000) return cached.usaVoz;
   try {
-    const usuario = await Usuario.findOne({ phone }).lean();
+    const usuario = await Usuario.findUnique({ where: { phone } });
     const session = await getSession(phone);
     const usaVoz = !!(usuario?.respuestasPorVoz || usuario?.modoAdultoMayor || session?.ultimaInteraccionVoz);
     _vozCache.set(phone, { usaVoz, ts: Date.now() });
@@ -309,7 +308,7 @@ function esComandoLugares(txt) {
 }
 
 async function mostrarMenuLugares(phone) {
-  const u = await Usuario.findOne({ phone }).lean();
+  const u = await Usuario.findUnique({ where: { phone } });
   const lf = u?.lugaresFrecuentes || {};
   
   let texto = "📌 *Mis lugares guardados*\n\n";
@@ -331,7 +330,7 @@ async function mostrarMenuLugares(phone) {
 }
 
 async function procesarMensajeUsuario(phone, mensaje, buttonId) {
-  let usuario = await Usuario.findOne({ phone });
+  let usuario = await Usuario.findUnique({ where: { phone } });
 
   // Términos y condiciones
   // Bloque de onboarding (términos + nombre): entrar si NO terminó el setup
@@ -389,7 +388,11 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
 
     if (session.step === "usuario_esperando_tc") {
       if (buttonId === "usuario_acepta_tc") {
-        await Usuario.findOneAndUpdate({ phone }, { phone, aceptoTerminos: true }, { upsert: true, new: true, setDefaultsOnInsert: true });
+        await Usuario.upsert({
+          where: { phone },
+          create: { phone, aceptoTerminos: true },
+          update: { aceptoTerminos: true },
+        });
         await setSession(phone, { step: "esperando_nombre_usuario" });
         await enviarMensaje(phone, `✅ ¡Bienvenido a ChatGo!\n\n¿Cuál es tu nombre? Así el chofer sabrá a quién buscar cuando llegue. 😊`);
       } else {
@@ -406,7 +409,7 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
         return;
       }
       const nombreLimpio = nombreIngresado.slice(0, 40);
-      await Usuario.findOneAndUpdate({ phone }, { nombre: nombreLimpio });
+      await Usuario.updateMany({ where: { phone }, data: { nombre: nombreLimpio } });
       await deleteSession(phone);
       await enviarMensaje(
         phone,
@@ -440,7 +443,7 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
         return;
       }
       const nombreLimpio = nombreIngresado.slice(0, 40);
-      await Usuario.findOneAndUpdate({ phone }, { nombre: nombreLimpio });
+      await Usuario.updateMany({ where: { phone }, data: { nombre: nombreLimpio } });
       await deleteSession(phone);
       await enviarMensaje(
         phone,
@@ -505,7 +508,7 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
       return;
     }
 
-    const choferesFlota = await Chofer.find({ flota: nombreFlota }).lean();
+    const choferesFlota = await Chofer.findMany({ where: { flota: nombreFlota } });
     if (!choferesFlota.length) {
       await enviarMensajeRaw(phone, `📋 La flota *${nombreFlota}* no tiene choferes asignados.`);
       return;
@@ -517,11 +520,13 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
     else desde.setHours(0, 0, 0, 0); // hoy desde las 00:00
 
     const phonesFlota = choferesFlota.map(c => c.phone);
-    const viajes = await Viaje.find({
-      choferPhone: { $in: phonesFlota },
-      estado: "completado",
-      fechaFin: { $gte: desde },
-    }).lean();
+    const viajes = await Viaje.findMany({
+      where: {
+        choferPhone: { in: phonesFlota },
+        estado: "completado",
+        fechaFin: { gte: desde },
+      },
+    });
 
     // Global
     const totalCarreras = viajes.length;
@@ -551,18 +556,21 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
   // "chofer 59171234567" → lista las carreras de hoy de ese chofer (con detalle).
   if (texto && /^chofer\s+\d{8,}/i.test(texto) && phone === CONFIG.ADMIN_PHONE) {
     const telChofer = texto.match(/\d{8,}/)[0];
-    const ch = await Chofer.findOne({ phone: telChofer }).lean();
+    const ch = await Chofer.findUnique({ where: { phone: telChofer } });
     if (!ch) {
       await enviarMensajeRaw(phone, `❌ No encontré un chofer con el número ${telChofer}.`);
       return;
     }
     const desde = new Date();
     desde.setHours(0, 0, 0, 0);
-    const viajes = await Viaje.find({
-      choferPhone: telChofer,
-      estado: "completado",
-      fechaFin: { $gte: desde },
-    }).sort({ fechaFin: 1 }).lean();
+    const viajes = await Viaje.findMany({
+      where: {
+        choferPhone: telChofer,
+        estado: "completado",
+        fechaFin: { gte: desde },
+      },
+      orderBy: { fechaFin: "asc" },
+    });
 
     let msg = `🧑‍✈️ *${ch.nombre || telChofer}*${ch.flota ? ` — flota ${ch.flota}` : ""}\n`;
     msg += `Placa: ${ch.placa || "?"} · Estado: ${ch.estado || "?"}\n`;
@@ -574,7 +582,7 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
       msg += `Carreras hoy: *${viajes.length}* · Total: *Bs ${totalCobr}*\n`;
       viajes.forEach((v, i) => {
         const hora = v.fechaFin ? new Date(v.fechaFin).toLocaleTimeString("es-BO", { hour: "2-digit", minute: "2-digit", timeZone: "America/La_Paz" }) : "?";
-        msg += `\n${i + 1}. ${hora} · Bs ${v.precioTotal || 0}\n   ${v.origen?.nombre || "?"} → ${v.destino?.nombre || "?"}\n`;
+        msg += `\n${i + 1}. ${hora} · Bs ${v.precioTotal || 0}\n   ${v.origenNombre || "?"} → ${v.destinoNombre || "?"}\n`;
       });
     }
     await enviarMensajeRaw(phone, msg);
@@ -604,9 +612,9 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
       const asignados = [];
       const noEncontrados = [];
       for (const tel of telefonos) {
-        const ch = await Chofer.findOne({ phone: tel });
+        const ch = await Chofer.findUnique({ where: { phone: tel } });
         if (ch) {
-          await Chofer.updateOne({ phone: tel }, { $set: { flota: nombreFlota } });
+          await Chofer.update({ where: { phone: tel }, data: { flota: nombreFlota } });
           asignados.push(ch.nombre || tel);
         } else {
           noEncontrados.push(tel);
@@ -620,7 +628,7 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
     } else {
       // Sin números → listar choferes de esa flota
       const nombreFlota = resto;
-      const choferes = await Chofer.find({ flota: nombreFlota }).lean();
+      const choferes = await Chofer.findMany({ where: { flota: nombreFlota } });
       if (!choferes.length) {
         await enviarMensajeRaw(phone, `📋 La flota *${nombreFlota}* no tiene choferes asignados todavía.`);
       } else {
@@ -687,7 +695,11 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
     const nombreCiudad = texto.replace(/^\/?ciudad\s+/i, "").trim();
     const ciudadDetectada = detectarCiudadPorTexto(nombreCiudad);
     if (ciudadDetectada) {
-      await Usuario.findOneAndUpdate({ phone }, { ciudad: ciudadDetectada }, { upsert: true });
+      await Usuario.upsert({
+        where: { phone },
+        create: { phone, ciudad: ciudadDetectada },
+        update: { ciudad: ciudadDetectada },
+      });
       await updateSession(phone, { ...session, ciudadUsuario: ciudadDetectada });
       await enviarMensaje(phone, `✅ Ciudad fijada en *${ciudadDetectada}*.\n\nAhora todos tus viajes se buscarán en ${ciudadDetectada}. Para cambiarla, escribe "ciudad" y el nombre de otra.`);
     } else {
@@ -729,10 +741,13 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
   // ─── COPILOTO IA: respuesta del pasajero a alerta de seguridad ───────────
   if (buttonId === "seg_todo_bien" || buttonId === "seg_necesito_ayuda") {
     const { manejarRespuestaPasajero } = require("../ai/copiloto");
-    const viajeSeg = await Viaje.findOne({
-      usuarioPhone: phone,
-      estado: { $in: ["en_curso", "esperando_pasajero", "en_camino"] },
-    }).sort({ createdAt: -1 });
+    const viajeSeg = await Viaje.findFirst({
+      where: {
+        usuarioPhone: phone,
+        estado: { in: ["en_curso", "esperando_pasajero", "en_camino"] },
+      },
+      orderBy: { createdAt: "desc" },
+    });
     if (viajeSeg) {
       await manejarRespuestaPasajero(viajeSeg, buttonId);
     } else {
@@ -744,10 +759,13 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
   // ─── COPILOTO IA: botón de pánico manual del pasajero ────────────────────
   if (buttonId === "seg_panico" || (texto && !buttonId && /\b(emergencia|auxilio|ayuda urgente|me est[aá]n|s[aá]quenme|secuestr)\b/i.test(texto))) {
     const { activarPanico } = require("../ai/copiloto");
-    const viajePanico = await Viaje.findOne({
-      usuarioPhone: phone,
-      estado: { $in: ["en_curso", "esperando_pasajero", "en_camino"] },
-    }).sort({ createdAt: -1 });
+    const viajePanico = await Viaje.findFirst({
+      where: {
+        usuarioPhone: phone,
+        estado: { in: ["en_curso", "esperando_pasajero", "en_camino"] },
+      },
+      orderBy: { createdAt: "desc" },
+    });
     if (viajePanico) {
       await activarPanico(viajePanico, "pasajero");
       await enviarMensaje(phone, "🆘 Alerta enviada. Nuestro equipo fue notificado y seguimos tu ubicación. Si es grave, llama al 110.");
@@ -798,12 +816,17 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
 
   if (buttonId?.startsWith("viaje_problema_")) {
     const viajeId = buttonId.replace("viaje_problema_", "");
-    // Registrar incidente en MongoDB
-    await Viaje.findByIdAndUpdate(viajeId, {
-      incidenteReportado: true,
-      incidenteDescripcion: "Pasajero reportó que no llegó al destino",
-      incidenteFecha: new Date(),
-    }).catch(() => {});
+    // Registrar incidente — nota: Viaje no tiene columnas de incidente en el
+    // esquema Prisma actual; se deja el intento envuelto en try/catch para no
+    // romper el flujo (el admin recibe la notificación de todos modos abajo).
+    try {
+      await Viaje.update({
+        where: { id: viajeId },
+        data: {
+          cancelacionMotivo: "incidente_reportado_por_pasajero",
+        },
+      });
+    } catch {}
     // Notificar al admin
     await enviarMensaje(
       CONFIG.ADMIN_PHONE,
@@ -896,7 +919,7 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
   if (session.step === "confirmando_cancelacion") {
     if (buttonId === "confirmar_cancelacion") { await procesarCancelacionPasajero(phone, session); return; }
     if (buttonId === "no_cancelar") {
-      const viaje = await Viaje.findOne({ usuarioPhone: phone, estado: { $in: ["pendiente","en_camino","esperando_pasajero","en_curso"] } });
+      const viaje = await Viaje.findFirst({ where: { usuarioPhone: phone, estado: { in: ["pendiente","en_camino","esperando_pasajero","en_curso"] } } });
       const pasoRestaurar = viaje
         ? viaje.estado === "pendiente" ? "esperando_chofer"
           : viaje.estado === "en_camino" ? "chofer_en_camino"
@@ -1010,7 +1033,7 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
     }
 
     // Onboarding de audio: explicar UNA SOLA VEZ cómo funciona y que ayudan a construir el mapa
-    const usuarioParaAudio = await Usuario.findOne({ phone }).lean();
+    const usuarioParaAudio = await Usuario.findUnique({ where: { phone } });
     if (!usuarioParaAudio?.audioOnboardingHecho) {
       await enviarMensaje(phone,
         `🎤 *¡Podés pedir tu taxi por voz!*\n\n` +
@@ -1028,7 +1051,7 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
         `⏳ Procesando tu audio...`
       );
       // Marcar que ya se explicó — no volver a mostrar este mensaje
-      await Usuario.findOneAndUpdate({ phone }, { audioOnboardingHecho: true });
+      await Usuario.updateMany({ where: { phone }, data: { audioOnboardingHecho: true } });
     } else if (!(await _usuarioUsaVoz(phone))) {
       // Solo mostrar "Procesando" si NO está en modo voz (en voz, el audio de respuesta basta)
       await enviarMensajeRaw(phone, "🎤 _Procesando tu audio..._");
@@ -1090,7 +1113,7 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
       
       // Ciudad del usuario para geocoding correcto — se calcula acá arriba porque
       // el CASO 2 (referencia vaga) también geocodifica y necesita el dato.
-      const usuarioParaGeocode = await Usuario.findOne({ phone }).lean();
+      const usuarioParaGeocode = await Usuario.findUnique({ where: { phone } });
       const ciudadParaAudio = session.ciudadUsuario || usuarioParaGeocode?.ciudad || "Cochabamba";
 
       // ─── CASO 2: Referencia vaga (zona amplia o lugar grande) ────────────
@@ -1184,7 +1207,8 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
         log.info(`[CROWDSOURCE] Esquina conocida confiable: ${det.calle1} y ${det.calle2} → ${esquina.zona || "?"} (usos: ${esquina.usos})`);
         esquina.usos = (esquina.usos || 0) + 1;
         esquina.ultimoUso = new Date();
-        esquina.save().catch(()=>{});
+        const { EsquinaMapeada } = require("../db/models");
+        EsquinaMapeada.update({ where: { id: esquina.id }, data: { usos: esquina.usos, ultimoUso: esquina.ultimoUso } }).catch(()=>{});
         return { lat: esquina.lat, lng: esquina.lng, nombre: `${esquina.calle1} y ${esquina.calle2}${esquina.zona ? " ("+esquina.zona+")" : ""}` };
       }
       
@@ -1451,9 +1475,9 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
     case "inicio": {
       // Entregar código a usuarios existentes que no tengan uno activo
       if (promoCodigosActiva()) {
-        const tieneCodigoActivo = await CodigoPromo.exists({
-          generadoPor: phone, usado: false, fechaVencimiento: { $gt: new Date() }
-        });
+        const tieneCodigoActivo = (await CodigoPromo.findFirst({
+          where: { generadoPor: phone, usado: false, fechaVencimiento: { gt: new Date() } },
+        })) !== null;
         if (!tieneCodigoActivo) {
           try {
             const codigoExistente = await crearCodigoPromo(phone, "promo_masiva");
@@ -1713,10 +1737,10 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
         // DETECCIÓN AUTOMÁTICA DE CIUDAD por el pin del usuario
         const ciudadDetectada = detectarCiudadPorCoords(coords.lat, coords.lng);
         if (ciudadDetectada) {
-          const usuarioCiudad = await Usuario.findOne({ phone }).lean();
+          const usuarioCiudad = await Usuario.findUnique({ where: { phone } });
           if (!usuarioCiudad?.ciudad) {
             // Primera vez — guardar ciudad detectada y confirmar al usuario
-            await Usuario.findOneAndUpdate({ phone }, { ciudad: ciudadDetectada, ciudadDetectada: true });
+            await Usuario.updateMany({ where: { phone }, data: { ciudad: ciudadDetectada, ciudadDetectada: true } });
             log.info(`[CIUDAD] Detectada: ${ciudadDetectada} para ${phone}`);
             // Actualizar sesión con la ciudad
             session.ciudadUsuario = ciudadDetectada;
@@ -1735,7 +1759,7 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
         if (session.referenciaVozOrigen) {
           try {
             const refNorm = normalizarReferencia(session.referenciaVozOrigen);
-            const yaExiste = await LocationReference.findOne({ referencia: refNorm });
+            const yaExiste = await LocationReference.findFirst({ where: { referencia: refNorm } });
             if (!yaExiste) {
               await guardarReferenciaVoz(session.referenciaVozOrigen, coords.lat, coords.lng, origen.nombre || session.referenciaVozOrigen, session.ciudadUsuario || "Cochabamba");
               log.info(`[CROWDSOURCE] Origen mapeado silenciosamente: "${session.referenciaVozOrigen}" → (${coords.lat}, ${coords.lng})`);
@@ -1763,7 +1787,7 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
       if (buttonId?.startsWith("ciudad_")) {
         const ciudadElegida = buttonId.replace("ciudad_", "").replace(/_/g, " ");
         if (CIUDADES[ciudadElegida]) {
-          await Usuario.findOneAndUpdate({ phone }, { ciudad: ciudadElegida, ciudadDetectada: false });
+          await Usuario.updateMany({ where: { phone }, data: { ciudad: ciudadElegida, ciudadDetectada: false } });
           const nuevaSession = { ...session, ciudadUsuario: ciudadElegida };
           const origenGuardado = session.origenPendiente || session.origen;
           delete nuevaSession.origenPendiente;
@@ -1826,7 +1850,7 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
         // asociarla automáticamente con el pin
         if (session.referenciaVozDestino) {
           const refNorm = normalizarReferencia(session.referenciaVozDestino);
-          const yaExiste = await LocationReference.findOne({ referencia: refNorm });
+          const yaExiste = await LocationReference.findFirst({ where: { referencia: refNorm } });
           if (!yaExiste) {
             await guardarReferenciaVoz(session.referenciaVozDestino, coords.lat, coords.lng, destino.nombre || session.referenciaVozDestino, session.ciudadUsuario || "Cochabamba");
             log.info(`[CROWDSOURCE] Destino mapeado silenciosamente: "${session.referenciaVozDestino}" → (${coords.lat}, ${coords.lng})`);
@@ -2066,7 +2090,7 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
       const sessionConDesc = {
         ...session,
         codigoPromoUsado: validacion.codigoDoc.codigo,
-        codigoPromoDocId: String(validacion.codigoDoc._id),
+        codigoPromoDocId: String(validacion.codigoDoc.id),
         descuentoBs: validacion.descuento,
         precio: validacion.nuevoPrecio,
         step: "confirmado",
@@ -2088,13 +2112,15 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
 
     case "sin_chofer":
       if (buttonId === "confirmar_viaje_recordatorio") {
-        const espera = await ListaEspera.findOne({ userPhone: phone });
+        const espera = await ListaEspera.findFirst({ where: { userPhone: phone } });
         await removeListaEspera(phone);
         await enviarMensaje(phone, "✅ Perfecto! Asignando tu chofer...");
+        const esperaOrigen = espera?.origenLat != null ? { lat: espera.origenLat, lng: espera.origenLng, nombre: espera.origenNombre } : null;
+        const esperaDestino = espera?.destinoLat != null ? { lat: espera.destinoLat, lng: espera.destinoLng, nombre: espera.destinoNombre } : null;
         const sessionConDatos = {
           ...session,
-          origen: espera?.origen || session.origen,
-          destino: espera?.destino || session.destino,
+          origen: esperaOrigen || session.origen,
+          destino: esperaDestino || session.destino,
           distancia: espera?.distancia || session.distancia,
           precio: espera?.precio || session.precio,
           precioPorKm: espera?.precioPorKm || session.precioPorKm,
@@ -2103,7 +2129,7 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
         await asignarChofer(phone, sessionConDatos);
       } else if (buttonId === "cancelar_viaje") {
         // Marcar como cancelando primero para bloquear el interval
-        await ListaEspera.findOneAndUpdate({ userPhone: phone }, { $set: { cancelando: true } });
+        await ListaEspera.updateMany({ where: { userPhone: phone }, data: { cancelando: true } });
         await deleteSession(phone);
         await removeListaEspera(phone);
         await enviarMensaje(phone, "❌ Entendido. Escribe cuando necesites taxi. 🚖");
@@ -2121,9 +2147,11 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
     case "chofer_en_camino":
     case "chofer_esperando_pasajero":
     case "en_curso": {
-      const viajeActivo = await Viaje.findOne({
-        usuarioPhone: phone,
-        estado: { $in: ["en_camino","esperando_pasajero","en_curso"] },
+      const viajeActivo = await Viaje.findFirst({
+        where: {
+          usuarioPhone: phone,
+          estado: { in: ["en_camino","esperando_pasajero","en_curso"] },
+        },
       });
 
       if (!viajeActivo) {
@@ -2134,8 +2162,8 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
       }
 
       if (buttonId === "cancelar_viaje_pasajero") {
-        await Viaje.findByIdAndUpdate(viajeActivo._id, { estado: "cancelado", fechaFin: new Date(), cancelacionMotivo: "cancelado_por_pasajero" });
-        await Chofer.findOneAndUpdate({ traccarId: viajeActivo.choferTraccarId }, { $set: { estado: "libre", viajeReservado: null, reservadoHasta: null } });
+        await Viaje.update({ where: { id: viajeActivo.id }, data: { estado: "cancelado", fechaFin: new Date(), cancelacionMotivo: "cancelado_por_pasajero" } });
+        await Chofer.updateMany({ where: { traccarId: viajeActivo.choferTraccarId }, data: { estado: "libre", viajeReservado: null, reservadoHasta: null } });
         await enviarMensaje(viajeActivo.choferPhone, `❌ El pasajero canceló el viaje.`);
         await deleteSession(phone);
         await enviarMensaje(phone, "❌ Viaje cancelado. Escribe cuando necesites otro taxi 🚖");
@@ -2159,11 +2187,13 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
     // Evita que un step desconocido (ej: 'calculando', 'confirmado') resetee
     // la sesión de un usuario que está esperando chofer
     default: {
-      const viajeActivoDefault = await Viaje.findOne({
-        usuarioPhone: phone,
-        estado: { $in: ["pendiente","en_camino","esperando_pasajero","en_curso"] },
+      const viajeActivoDefault = await Viaje.findFirst({
+        where: {
+          usuarioPhone: phone,
+          estado: { in: ["pendiente","en_camino","esperando_pasajero","en_curso"] },
+        },
       });
-      const enEsperaDefault = await ListaEspera.findOne({ userPhone: phone });
+      const enEsperaDefault = await ListaEspera.findFirst({ where: { userPhone: phone } });
 
       if (viajeActivoDefault) {
         const stepReal = viajeActivoDefault.estado === "pendiente" ? "esperando_chofer"

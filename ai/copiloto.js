@@ -42,11 +42,11 @@ async function registrarEvento(viaje, tipo, nivel, detalle, pos) {
   const nivelActual = viaje.nivelAlerta || "verde";
   const subeNivel = ordenNiveles[nivel] > ordenNiveles[nivelActual];
 
-  const update = { $push: { eventosSeguridad: evento } };
-  if (subeNivel) update.$set = { nivelAlerta: nivel };
+  const data = { eventosSeguridad: [...(viaje.eventosSeguridad || []), evento] };
+  if (subeNivel) data.nivelAlerta = nivel;
 
-  await Viaje.findByIdAndUpdate(viaje._id, update);
-  log.warn(`[COPILOTO] Viaje ${viaje._id} — ${tipo}/${nivel}: ${detalle}`);
+  await Viaje.update({ where: { id: viaje.id }, data });
+  log.warn(`[COPILOTO] Viaje ${viaje.id} — ${tipo}/${nivel}: ${detalle}`);
   return subeNivel;
 }
 
@@ -73,22 +73,22 @@ async function accionNaranja(viaje, motivo) {
   // Avisar al admin en paralelo
   await enviarMensaje(
     CONFIG.ADMIN_PHONE,
-    `🟠 *Alerta naranja*\n\n🆔 ${viaje._id}\n👤 Chofer: ${viaje.choferNombre || "—"} (+${viaje.choferPhone || "—"})\n🚗 ${viaje.choferPlaca || "—"}\n📋 ${motivo}\n\nSe consultó al pasajero.`
+    `🟠 *Alerta naranja*\n\n🆔 ${viaje.id}\n👤 Chofer: ${viaje.choferNombre || "—"} (+${viaje.choferPhone || "—"})\n🚗 ${viaje.choferPlaca || "—"}\n📋 ${motivo}\n\nSe consultó al pasajero.`
   );
 }
 
 async function accionRojo(viaje, motivo, pos) {
   // Protocolo de emergencia
-  await Viaje.findByIdAndUpdate(viaje._id, { $set: { nivelAlerta: "rojo" } });
+  await Viaje.update({ where: { id: viaje.id }, data: { nivelAlerta: "rojo" } });
 
   const linkVivo = pos
-    ? `https://chatgo.ia.bo/rastreo.html?id=${viaje._id}&api=${encodeURIComponent(CONFIG.APP_URL + "/track/" + viaje._id + "/pos")}`
+    ? `https://chatgo.ia.bo/rastreo.html?id=${viaje.id}&api=${encodeURIComponent(CONFIG.APP_URL + "/track/" + viaje.id + "/pos")}`
     : "(GPS no disponible)";
 
   // 1. Alertar al centro de monitoreo (admin) con máxima prioridad
   await enviarMensaje(
     CONFIG.ADMIN_PHONE,
-    `🔴🔴 *EMERGENCIA — ALERTA ROJA* 🔴🔴\n\n🆔 ${viaje._id}\n👤 Chofer: ${viaje.choferNombre || "—"} (+${viaje.choferPhone || "—"})\n🚗 Placa: ${viaje.choferPlaca || "—"}\n👥 Pasajero: +${viaje.usuarioPhone || "—"}\n\n📋 Motivo: ${motivo}\n📍 Ubicación en vivo:\n${linkVivo}\n\n⚠️ Requiere atención INMEDIATA.`
+    `🔴🔴 *EMERGENCIA — ALERTA ROJA* 🔴🔴\n\n🆔 ${viaje.id}\n👤 Chofer: ${viaje.choferNombre || "—"} (+${viaje.choferPhone || "—"})\n🚗 Placa: ${viaje.choferPlaca || "—"}\n👥 Pasajero: +${viaje.usuarioPhone || "—"}\n\n📋 Motivo: ${motivo}\n📍 Ubicación en vivo:\n${linkVivo}\n\n⚠️ Requiere atención INMEDIATA.`
   );
 
   // 2. Avisar al pasajero que se activó el protocolo
@@ -111,8 +111,8 @@ async function evaluarViaje(viaje, pos) {
     }
 
     // Si ya está muy cerca del destino, está llegando — no alertar
-    if (viaje.destino?.lat) {
-      const distDestinoM = distanciaEntrePuntos(pos.lat, pos.lng, viaje.destino.lat, viaje.destino.lng) * 1000;
+    if (viaje.destinoLat) {
+      const distDestinoM = distanciaEntrePuntos(pos.lat, pos.lng, viaje.destinoLat, viaje.destinoLng) * 1000;
       if (distDestinoM < UMBRAL.PROXIMIDAD_DESTINO_M) {
         return viaje.nivelAlerta || "verde";
       }
@@ -129,7 +129,7 @@ async function evaluarViaje(viaje, pos) {
         // ¿hay tráfico/bloqueo que justifique? consultar Google
         let justificado = false;
         try {
-          const trafico = await calcularTiempoConTrafico(pos.lat, pos.lng, viaje.destino.lat, viaje.destino.lng);
+          const trafico = await calcularTiempoConTrafico(pos.lat, pos.lng, viaje.destinoLat, viaje.destinoLng);
           if (trafico?.hayTrafico) justificado = true;
         } catch (e) { /* sin datos de tráfico, asumir no justificado */ }
 
@@ -146,7 +146,7 @@ async function evaluarViaje(viaje, pos) {
     const estaDetenido = velocidad !== null ? velocidad < 3 : false;
     if (estaDetenido) {
       if (!viaje.detenidoDesde) {
-        await Viaje.findByIdAndUpdate(viaje._id, { $set: { detenidoDesde: new Date() } });
+        await Viaje.update({ where: { id: viaje.id }, data: { detenidoDesde: new Date() } });
       } else {
         const minDetenido = (ahora - new Date(viaje.detenidoDesde).getTime()) / 60000;
         if (minDetenido > UMBRAL.DETENIDO_NARANJA_MIN) {
@@ -159,7 +159,7 @@ async function evaluarViaje(viaje, pos) {
     } else {
       // se movió: resetear contador de detención
       if (viaje.detenidoDesde) {
-        await Viaje.findByIdAndUpdate(viaje._id, { $set: { detenidoDesde: null } });
+        await Viaje.update({ where: { id: viaje.id }, data: { detenidoDesde: null } });
       }
     }
 
@@ -177,7 +177,7 @@ async function evaluarViaje(viaje, pos) {
         // verificar si es tráfico real antes de escalar
         let porTrafico = false;
         try {
-          const trafico = await calcularTiempoConTrafico(pos.lat, pos.lng, viaje.destino.lat, viaje.destino.lng);
+          const trafico = await calcularTiempoConTrafico(pos.lat, pos.lng, viaje.destinoLat, viaje.destinoLng);
           if (trafico?.hayTrafico) porTrafico = true;
         } catch (e) {}
         if (!porTrafico) motivos.push(`retraso ${Math.round(factor * 100 - 100)}% sobre estimado`);
@@ -186,8 +186,9 @@ async function evaluarViaje(viaje, pos) {
 
     // ─── DECISIÓN DE NIVEL ───────────────────────────────────────────────
     // Guardar última posición conocida siempre
-    await Viaje.findByIdAndUpdate(viaje._id, {
-      $set: { ultimaPosicionLat: pos.lat, ultimaPosicionLng: pos.lng, ultimaPosicionAt: new Date() },
+    await Viaje.update({
+      where: { id: viaje.id },
+      data: { ultimaPosicionLat: pos.lat, ultimaPosicionLng: pos.lng, ultimaPosicionAt: new Date() },
     });
 
     if (motivos.length === 0) {
@@ -227,9 +228,13 @@ async function manejarRespuestaPasajero(viaje, respuesta) {
     return "rojo";
   } else if (respuesta === "seg_todo_bien") {
     // bajar a verde y registrar que el pasajero confirmó
-    await Viaje.findByIdAndUpdate(viaje._id, {
-      $set: { nivelAlerta: "verde" },
-      $push: { eventosSeguridad: { tipo: "confirmacion_ok", nivel: "verde", detalle: "Pasajero confirmó que todo está bien", timestamp: new Date() } },
+    const eventosSeguridad = [
+      ...(viaje.eventosSeguridad || []),
+      { tipo: "confirmacion_ok", nivel: "verde", detalle: "Pasajero confirmó que todo está bien", timestamp: new Date() },
+    ];
+    await Viaje.update({
+      where: { id: viaje.id },
+      data: { nivelAlerta: "verde", eventosSeguridad },
     });
     await enviarMensaje(viaje.usuarioPhone, "✅ Gracias. Seguimos cuidando tu viaje. 🚖");
     return "verde";
@@ -239,8 +244,9 @@ async function manejarRespuestaPasajero(viaje, respuesta) {
 
 // Botón de pánico manual (pasajero o chofer lo activan cuando quieran)
 async function activarPanico(viaje, quien) {
-  await Viaje.findByIdAndUpdate(viaje._id, {
-    $set: { panicoActivado: true, panicoAt: new Date() },
+  await Viaje.update({
+    where: { id: viaje.id },
+    data: { panicoActivado: true, panicoAt: new Date() },
   });
   await registrarEvento(viaje, "panico_manual", "rojo", `Botón de pánico activado por ${quien}`, {
     lat: viaje.ultimaPosicionLat, lng: viaje.ultimaPosicionLng,

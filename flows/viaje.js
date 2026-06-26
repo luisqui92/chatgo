@@ -1,5 +1,4 @@
 // ChatGo — Flow viaje
-const mongoose = require("mongoose");
 const os = require("os");
 const { CONFIG, log, detectarCiudadPorCoords } = require("../config");
 const { Usuario, Chofer, Viaje, SessionState, ListaEspera, CodigoPromo } = require("../db/models");
@@ -59,31 +58,37 @@ async function asignarChofer(userPhone, session, excludeTraccarIds = [], intento
 
   const ciudadViaje = detectarCiudadPorCoords(session.origen?.lat, session.origen?.lng) || session.ciudadUsuario || null;
   const viaje = await Viaje.create({
-    usuarioPhone: userPhone,
-    choferPhone: chofer.phone,
-    choferTraccarId: chofer.traccarId,
-    choferNombre: chofer.nombre,
-    choferPlaca: chofer.placa,
-    ciudad: ciudadViaje,
-    origen: session.origen,
-    destino: session.destino,
-    paradas: session.paradas || [],
-    observaciones: session.observaciones || "",
-    distanciaKm: session.distancia,
-    precioBase: session.precioBase || session.precio,
-    descuentoBs: session.descuentoBs || 0,
-    codigoPromoUsado: session.codigoPromoUsado || null,
-    precioTotal: session.precio,
-    precioPorKm: session.precioPorKm,
-    tipoVehiculo: chofer.tipoVehiculo || tipoSolicitado || "auto",
-    estado: "pendiente",
-    fechaAsignacion: new Date(),
+    data: {
+      usuarioPhone: userPhone,
+      choferPhone: chofer.phone,
+      choferTraccarId: chofer.traccarId,
+      choferNombre: chofer.nombre,
+      choferPlaca: chofer.placa,
+      ciudad: ciudadViaje,
+      origenLat: session.origen?.lat,
+      origenLng: session.origen?.lng,
+      origenNombre: session.origen?.nombre,
+      destinoLat: session.destino?.lat,
+      destinoLng: session.destino?.lng,
+      destinoNombre: session.destino?.nombre,
+      paradas: session.paradas || [],
+      observaciones: session.observaciones || "",
+      distanciaKm: session.distancia,
+      precioBase: session.precioBase || session.precio,
+      descuentoBs: session.descuentoBs || 0,
+      codigoPromoUsado: session.codigoPromoUsado || null,
+      precioTotal: session.precio,
+      precioPorKm: session.precioPorKm,
+      tipoVehiculo: chofer.tipoVehiculo || tipoSolicitado || "auto",
+      estado: "pendiente",
+      fechaAsignacion: new Date(),
+    },
   });
 
-  const reservado = await reservarChoferTraccar(chofer.traccarId, viaje._id);
+  const reservado = await reservarChoferTraccar(chofer.traccarId, viaje.id);
   if (!reservado) {
     log.warn(`[ASIGNAR] Chofer ${chofer.nombre} ya fue reservado. Reintentando...`);
-    await Viaje.findByIdAndDelete(viaje._id);
+    await Viaje.delete({ where: { id: viaje.id } });
     // FIX BUG#7: pasar intento + 1 en lugar de recursión sin límite
     await asignarChofer(userPhone, session, [...excludeTraccarIds, chofer.traccarId], intento + 1);
     return;
@@ -92,7 +97,7 @@ async function asignarChofer(userPhone, session, excludeTraccarIds = [], intento
   // FIX BUG#1 — consumir código DESPUÉS de confirmar reserva exitosa
   if (session.codigoPromoDocId) {
     try {
-      await consumirCodigoPromo(session.codigoPromoDocId, userPhone, viaje._id);
+      await consumirCodigoPromo(session.codigoPromoDocId, userPhone, viaje.id);
     } catch (e) {
       log.error("[PROMO] Error consumiendo código:", e.message);
     }
@@ -103,7 +108,7 @@ async function asignarChofer(userPhone, session, excludeTraccarIds = [], intento
     step: "esperando_chofer",
     choferId: chofer.traccarId,
     choferPhone: chofer.phone,
-    viajeId: viaje._id.toString(),
+    viajeId: viaje.id.toString(),
   });
 
   const linkViaje = generarLinkRutaConParadas(session.origen, session.paradas || [], session.destino);
@@ -149,28 +154,33 @@ async function asignarChofer(userPhone, session, excludeTraccarIds = [], intento
 async function procesarCancelacionPasajero(phone, session) {
   // Marcar atómicamente como cancelando ANTES de cualquier otra operación
   // Esto evita que el interval procese esta entrada mientras se cancela
-  await ListaEspera.findOneAndUpdate(
-    { userPhone: phone },
-    { $set: { cancelando: true } }
-  );
+  await ListaEspera.updateMany({
+    where: { userPhone: phone },
+    data: { cancelando: true },
+  });
 
   // FIX BUG#2 — incluir "en_curso" y "buscando_otro_chofer" en el filtro
-  const viaje = await Viaje.findOne({
-    usuarioPhone: phone,
-    estado: { $in: ["pendiente", "en_camino", "esperando_pasajero", "en_curso", "buscando_otro_chofer"] },
+  const viaje = await Viaje.findFirst({
+    where: {
+      usuarioPhone: phone,
+      estado: { in: ["pendiente", "en_camino", "esperando_pasajero", "en_curso", "buscando_otro_chofer"] },
+    },
   });
 
   if (viaje) {
-    await Viaje.findByIdAndUpdate(viaje._id, {
-      estado: "cancelado_pasajero",
-      cancelacionMotivo: "cancelado_por_pasajero",
-      fechaFin: new Date(),
+    await Viaje.update({
+      where: { id: viaje.id },
+      data: {
+        estado: "cancelado_pasajero",
+        cancelacionMotivo: "cancelado_por_pasajero",
+        fechaFin: new Date(),
+      },
     });
     if (viaje.choferTraccarId) {
-      await Chofer.findOneAndUpdate(
-        { traccarId: viaje.choferTraccarId },
-        { estado: "libre", viajeReservado: null, reservadoHasta: null }
-      );
+      await Chofer.update({
+        where: { traccarId: viaje.choferTraccarId },
+        data: { estado: "libre", viajeReservado: null, reservadoHasta: null },
+      });
       await enviarMensaje(viaje.choferPhone, `❌ El pasajero canceló el viaje. Ya estás LIBRE para recibir otros viajes.`);
     }
     await enviarMensaje(phone, `✅ Viaje cancelado. Escribe cuando necesites otro taxi. 🚖`);
@@ -188,8 +198,8 @@ async function procesarCancelacionPasajero(phone, session) {
 
 async function procesarPedidoAyuda(phone, esChofer = false) {
   const viaje = esChofer
-    ? await Viaje.findOne({ choferPhone: phone, estado: { $in: ["en_camino","esperando_pasajero","en_curso"] } })
-    : await Viaje.findOne({ usuarioPhone: phone, estado: { $in: ["pendiente","en_camino","esperando_pasajero","en_curso"] } });
+    ? await Viaje.findFirst({ where: { choferPhone: phone, estado: { in: ["en_camino","esperando_pasajero","en_curso"] } } })
+    : await Viaje.findFirst({ where: { usuarioPhone: phone, estado: { in: ["pendiente","en_camino","esperando_pasajero","en_curso"] } } });
 
   await enviarMensaje(phone, `🆘 *Soporte ChatGo*\n\nHemos notificado al administrador. Te contactarán pronto desde +591 62741818.`);
 
@@ -212,7 +222,7 @@ async function procesarPedidoAyuda(phone, esChofer = false) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 async function solicitarRating(userPhone, viajeId) {
-  await Viaje.findByIdAndUpdate(viajeId, { ratingSolicitado: true });
+  await Viaje.update({ where: { id: viajeId }, data: { ratingSolicitado: true } });
   await updateSession(userPhone, { step: "esperando_rating", viajeIdRating: String(viajeId) });
   await enviarBotones(
     userPhone,
@@ -226,28 +236,34 @@ async function solicitarRating(userPhone, viajeId) {
 }
 
 async function registrarRating(userPhone, rating, viajeId) {
-  const viaje = await Viaje.findByIdAndUpdate(viajeId, { ratingPasajero: rating });
-  if (!viaje) return;
+  let viaje;
+  try {
+    viaje = await Viaje.update({ where: { id: viajeId }, data: { ratingPasajero: rating } });
+  } catch (e) {
+    return;
+  }
 
   if (viaje.choferPhone) {
-    const chofer = await Chofer.findOne({ phone: viaje.choferPhone });
+    const chofer = await Chofer.findUnique({ where: { phone: viaje.choferPhone } });
     if (chofer) {
       const totalAnterior = (chofer.ratingPromedio || 0) * (chofer.ratingCantidad || 0);
       const nuevaCantidad = (chofer.ratingCantidad || 0) + 1;
       const nuevoPromedio = (totalAnterior + rating) / nuevaCantidad;
-      await Chofer.findByIdAndUpdate(chofer._id, {
-        ratingPromedio: Math.round(nuevoPromedio * 10) / 10,
-        ratingCantidad: nuevaCantidad,
+      await Chofer.update({
+        where: { id: chofer.id },
+        data: {
+          ratingPromedio: Math.round(nuevoPromedio * 10) / 10,
+          ratingCantidad: nuevaCantidad,
+        },
       });
     }
   }
 
   // Incrementar contador de viajes del usuario
-  const usuarioActualizado = await Usuario.findOneAndUpdate(
-    { phone: userPhone },
-    { $inc: { viajesTotal: 1 } },
-    { new: true }
-  );
+  const usuarioActualizado = await Usuario.update({
+    where: { phone: userPhone },
+    data: { viajesTotal: { increment: 1 } },
+  });
 
   await deleteSession(userPhone);
 
@@ -294,7 +310,7 @@ async function registrarRating(userPhone, rating, viajeId) {
     );
     await enviarMensaje(
       CONFIG.ADMIN_PHONE,
-      `⚠️ *Rating bajo*\n\nPasajero: +${userPhone}\nChofer: ${viaje.choferNombre} (+${viaje.choferPhone})\nRating: ${rating}/5\nViaje: ${viaje._id}`
+      `⚠️ *Rating bajo*\n\nPasajero: +${userPhone}\nChofer: ${viaje.choferNombre} (+${viaje.choferPhone})\nRating: ${rating}/5\nViaje: ${viaje.id}`
     );
   }
 }

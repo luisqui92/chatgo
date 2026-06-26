@@ -4,10 +4,9 @@
 // dentro de los límites de la ciudad (descarta errores de geocodificación).
 
 require("dotenv").config();
-const mongoose = require("mongoose");
 const axios = require("axios");
 const { CONFIG, CIUDADES, getBoundsUsuario, getContextoGeocode } = require("../config");
-const { LocationReference } = require("../db/models");
+const { LocationReference, prisma } = require("../db/models");
 const { normalizarReferencia } = require("../services/google");
 
 // ─── LISTAS DE LUGARES POR CIUDAD ────────────────────────────────────────────
@@ -134,23 +133,9 @@ async function main() {
     process.exit(1);
   }
 
-  await mongoose.connect(CONFIG.MONGODB_URI);
-  console.log(`✅ Conectado a MongoDB`);
-
-  // Migrar índice viejo (referencia única global) → nuevo (referencia+ciudad).
-  // Si existe el índice viejo, lo eliminamos para que funcione el compuesto.
-  try {
-    const indices = await LocationReference.collection.indexes();
-    const viejo = indices.find(i => i.name === "referencia_1" && i.unique);
-    if (viejo) {
-      await LocationReference.collection.dropIndex("referencia_1");
-      console.log("🔧 Índice viejo 'referencia_1' eliminado (migración a referencia+ciudad).");
-    }
-    // Asegurar el índice compuesto
-    await LocationReference.collection.createIndex({ referencia: 1, ciudad: 1 }, { unique: true });
-  } catch (e) {
-    console.log("ℹ️  Aviso al migrar índices:", e.message);
-  }
+  // El índice único compuesto (referencia+ciudad) ya está declarado en
+  // prisma/schema.prisma (@@unique([referencia, ciudad])) y se aplica vía
+  // migraciones de Prisma — no hace falta gestionarlo a mano como con Mongo.
 
   console.log(`📍 Pre-cargando ${lista.length} lugares de ${ciudad}...\n`);
 
@@ -161,21 +146,27 @@ async function main() {
     const r = await geocodificar(nombre, ciudad);
     if (r.ok) {
       const norm = normalizarReferencia(nombre);
-      await LocationReference.findOneAndUpdate(
-        { referencia: norm, ciudad },
-        {
-          $set: {
-            referenciaOriginal: nombre,
-            lat: r.lat,
-            lng: r.lng,
-            nombreResuelto: r.nombre,
-            ciudad,
-            precargado: true,
-          },
-          $setOnInsert: { contador: 5 }, // contador alto = confiable
+      await LocationReference.upsert({
+        where: { referencia_ciudad: { referencia: norm, ciudad } },
+        create: {
+          referencia: norm,
+          referenciaOriginal: nombre,
+          lat: r.lat,
+          lng: r.lng,
+          nombreResuelto: r.nombre,
+          ciudad,
+          precargado: true,
+          contador: 5, // contador alto = confiable
         },
-        { upsert: true }
-      );
+        update: {
+          referenciaOriginal: nombre,
+          lat: r.lat,
+          lng: r.lng,
+          nombreResuelto: r.nombre,
+          ciudad,
+          precargado: true,
+        },
+      });
       console.log(`✅ ${nombre} → (${r.lat.toFixed(5)}, ${r.lng.toFixed(5)})`);
       guardados++;
     } else {
@@ -197,7 +188,7 @@ async function main() {
     fallidos.forEach(f => console.log(`  - ${f}`));
   }
 
-  await mongoose.disconnect();
+  await prisma.$disconnect();
   console.log(`\n🏁 Listo. ${guardados} lugares de ${ciudad} están en la memoria de ChatGo.`);
 }
 

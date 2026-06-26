@@ -279,10 +279,12 @@ async function buscarReferenciaEnMemoria(referencia, ciudadUsuario) {
   // 1. Búsqueda exacta filtrada por ciudad (SOLO esa ciudad, sin fallback a otras
   // para no agarrar un lugar homónimo de otra ciudad, ej Ventura Mall que existe
   // tanto en Santa Cruz como en datos viejos de Cochabamba)
-  const docExacto = await LocationReference.findOne({ referencia: norm, ciudad: ciudadUsuario });
+  const docExacto = await LocationReference.findUnique({
+    where: { referencia_ciudad: { referencia: norm, ciudad: ciudadUsuario } },
+  });
   if (docExacto) {
     log.info(`[VOICE_MEM] Hit exacto: "${referencia}" en ${ciudadUsuario} → (${docExacto.lat}, ${docExacto.lng})`);
-    await LocationReference.findByIdAndUpdate(docExacto._id, { $inc: { contador: 1 } });
+    await LocationReference.update({ where: { id: docExacto.id }, data: { contador: { increment: 1 } } });
     return { lat: docExacto.lat, lng: docExacto.lng, nombre: docExacto.nombreResuelto };
   }
 
@@ -292,7 +294,7 @@ async function buscarReferenciaEnMemoria(referencia, ciudadUsuario) {
 
   // Filtrar por ciudad para no confundir lugares de distintas ciudades
   // (ej: una "avenida 6 de Agosto" existe en varias ciudades)
-  const todas = await LocationReference.find({ ciudad: ciudadUsuario }).lean();
+  const todas = await LocationReference.findMany({ where: { ciudad: ciudadUsuario } });
 
   // NUEVO: match por intersección/palabras clave en vez de similitud global estricta.
   // Reconoce el mismo lugar aunque el usuario diga las calles distinto, sin confundir
@@ -323,14 +325,11 @@ async function guardarReferenciaVoz(referenciaOriginal, lat, lng, nombre, ciudad
   }
   try {
     const norm = normalizarReferencia(referenciaOriginal);
-    await LocationReference.findOneAndUpdate(
-      { referencia: norm, ciudad: ciudadUsuario },
-      {
-        $set: { referenciaOriginal, lat, lng, nombreResuelto: nombre, ciudad: ciudadUsuario },
-        $inc: { contador: 1 },
-      },
-      { upsert: true }
-    );
+    await LocationReference.upsert({
+      where: { referencia_ciudad: { referencia: norm, ciudad: ciudadUsuario } },
+      create: { referencia: norm, referenciaOriginal, lat, lng, nombreResuelto: nombre, ciudad: ciudadUsuario, contador: 1 },
+      update: { referenciaOriginal, lat, lng, nombreResuelto: nombre, ciudad: ciudadUsuario, contador: { increment: 1 } },
+    });
     log.info(`[VOICE_MEM] Guardado: "${referenciaOriginal}" (${ciudadUsuario}) → ${nombre}`);
   } catch (e) {
     log.error("[VOICE_MEM] Error guardando:", e.message);

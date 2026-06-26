@@ -11,7 +11,6 @@ function calcularDistanciaSimple(lat1, lng1, lat2, lng2) {
     Math.sin(dLng / 2) ** 2;
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
-const mongoose = require("mongoose");
 const https = require("https");
 const http = require("http");
 const os = require("os");
@@ -28,7 +27,7 @@ const { choferPagoAlDia, crearCodigoPromo, enPromoGratis, enviarCodigoDescuento,
 
 
 async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, mensaje) {
-  let chofer = await Chofer.findOne({ phone });
+  let chofer = await Chofer.findUnique({ where: { phone } });
 
   if (!chofer) {
     const NUMERO_REGISTRO = process.env.NUMERO_REGISTRO || "59164637067";
@@ -65,11 +64,11 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
       const match = codigosValidos.find(c => c.replace(/\s+/g, "") === codigoIngresado);
       if (match) {
         // Guardar el pre-registro: este teléfono pertenece a esta flota
-        await PreRegistroFlota.findOneAndUpdate(
-          { phone },
-          { $set: { flota: match } },
-          { upsert: true }
-        );
+        await PreRegistroFlota.upsert({
+          where: { phone },
+          create: { phone, flota: match },
+          update: { flota: match },
+        });
         await deleteSession(phone);
         await enviarMensaje(phone,
           `✅ ¡Código correcto! Quedas registrado para el radiotaxi *${match}*.\n\n` +
@@ -104,10 +103,13 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
   // ─── COPILOTO IA: pánico del chofer por palabra clave ────────────────────
   if (!buttonId && mensajeTexto && /\b(emergencia|auxilio|me asaltan|me est[aá]n robando|s[aá]quenme|pánico|panico)\b/i.test(mensajeTexto)) {
     const { activarPanico } = require("../ai/copiloto");
-    const viajePanico = await Viaje.findOne({
-      choferPhone: phone,
-      estado: { $in: ["en_curso", "esperando_pasajero", "en_camino"] },
-    }).sort({ createdAt: -1 });
+    const viajePanico = await Viaje.findFirst({
+      where: {
+        choferPhone: phone,
+        estado: { in: ["en_curso", "esperando_pasajero", "en_camino"] },
+      },
+      orderBy: { createdAt: "desc" },
+    });
     if (viajePanico) {
       await activarPanico(viajePanico, "chofer");
       await enviarMensaje(phone, "🆘 Alerta enviada. Nuestro equipo fue notificado y seguimos tu ubicación. Si es grave, llama al 110.");
@@ -117,19 +119,19 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
 
   if (buttonId) {
     if (buttonId === "aceptar_viaje") {
-      const viaje = await Viaje.findOne({ choferTraccarId: chofer.traccarId, estado: "pendiente" });
+      const viaje = await Viaje.findFirst({ where: { choferTraccarId: chofer.traccarId, estado: "pendiente" } });
       if (!viaje) return enviarMensaje(phone, "No tienes viajes pendientes (quizás expiró).");
 
       const userPhone = viaje.usuarioPhone;
-      await Chofer.findByIdAndUpdate(chofer._id, { estado: "ocupado", viajeReservado: null, reservadoHasta: null });
-      await Viaje.findByIdAndUpdate(viaje._id, { estado: "en_camino", fechaAceptacion: new Date() });
+      await Chofer.update({ where: { id: chofer.id }, data: { estado: "ocupado", viajeReservado: null, reservadoHasta: null } });
+      await Viaje.update({ where: { id: viaje.id }, data: { estado: "en_camino", fechaAceptacion: new Date() } });
 
       // IA: registrar aceptación para métricas de despacho
       const tiempoRespuesta = viaje.fechaAsignacion
         ? Math.round((Date.now() - new Date(viaje.fechaAsignacion).getTime()) / 1000)
         : null;
       registrarEventoChofer(chofer.phone, "aceptado", {
-        viajeId: String(viaje._id),
+        viajeId: String(viaje.id),
         segundosParaResponder: tiempoRespuesta,
         distanciaAlOrigen: viaje.distanciaKm,
       }).catch(() => {});
@@ -138,7 +140,7 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
       if (session) await updateSession(userPhone, { ...session, step: "chofer_en_camino" });
 
       // Link de rastreo propio — expira exactamente cuando termina el viaje
-      const linkRastreo = generarLinkRastreoPropio(viaje._id);
+      const linkRastreo = generarLinkRastreoPropio(viaje.id);
       const tipoVeh = chofer.tipoVehiculo || "auto";
       const emojiV = tipoVeh === "moto" ? "🏍️" : "🚗";
       const labelV = tipoVeh === "moto" ? "Moto" : "Auto";
@@ -195,12 +197,12 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
     }
 
     if (buttonId === "rechazar_viaje") {
-      const viaje = await Viaje.findOne({ choferTraccarId: chofer.traccarId, estado: "pendiente" });
+      const viaje = await Viaje.findFirst({ where: { choferTraccarId: chofer.traccarId, estado: "pendiente" } });
       if (viaje) {
-        await Viaje.findByIdAndUpdate(viaje._id, { estado: "rechazado_chofer", cancelacionMotivo: "rechazo_chofer" });
+        await Viaje.update({ where: { id: viaje.id }, data: { estado: "rechazado_chofer", cancelacionMotivo: "rechazo_chofer" } });
         await liberarReservaChoferTraccar(chofer.traccarId);
         // IA: registrar rechazo
-        registrarEventoChofer(chofer.phone, "rechazado", { viajeId: String(viaje._id) }).catch(() => {});
+        registrarEventoChofer(chofer.phone, "rechazado", { viajeId: String(viaje.id) }).catch(() => {});
         await enviarMensaje(phone, "Ok, buscaremos otro chofer para ese pasajero.");
         const session = await getSession(viaje.usuarioPhone);
         if (session) {
@@ -214,9 +216,11 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
     // FIX BUG#3 — llegue_al_punto busca en en_camino Y en esperando_pasajero
     // para evitar conflicto con la detección GPS automática
     if (buttonId === "llegue_al_punto") {
-      const viaje = await Viaje.findOne({
-        choferTraccarId: chofer.traccarId,
-        estado: { $in: ["en_camino", "esperando_pasajero"] },
+      const viaje = await Viaje.findFirst({
+        where: {
+          choferTraccarId: chofer.traccarId,
+          estado: { in: ["en_camino", "esperando_pasajero"] },
+        },
       });
       if (!viaje) return enviarMensaje(phone, "No tienes viajes activos.");
 
@@ -234,7 +238,7 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
       }
 
       // Estado en_camino — transición manual
-      await Viaje.findByIdAndUpdate(viaje._id, { estado: "esperando_pasajero", llegadaOrigenNotificada: true });
+      await Viaje.update({ where: { id: viaje.id }, data: { estado: "esperando_pasajero", llegadaOrigenNotificada: true } });
       const session = await getSession(viaje.usuarioPhone);
       if (session) await updateSession(viaje.usuarioPhone, { ...session, step: "chofer_esperando_pasajero" });
 
@@ -244,7 +248,7 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
 
       const colorLlegueManual = chofer.colorVehiculo ? ` ${chofer.colorVehiculo}` : "";
       await enviarMensaje(viaje.usuarioPhone, `🚕 *¡Tu chofer llegó!*\n\n👤 ${chofer.nombre}\n${emoji} ${label}${colorLlegueManual} · placa: ${chofer.placa}\n\nDirígete al vehículo.`);
-      const usuarioLlegueBtn = await Usuario.findOne({ phone: viaje.usuarioPhone }).lean();
+      const usuarioLlegueBtn = await Usuario.findUnique({ where: { phone: viaje.usuarioPhone } });
       const nombreLlegueBtn = usuarioLlegueBtn?.nombre ? `\n🙋 Pregunta por: *ChatGo para ${usuarioLlegueBtn.nombre}*` : "";
       await enviarBotones(
         phone,
@@ -258,15 +262,15 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
     }
 
     if (buttonId === "iniciar_viaje") {
-      const viaje = await Viaje.findOne({ choferTraccarId: chofer.traccarId, estado: "esperando_pasajero" });
+      const viaje = await Viaje.findFirst({ where: { choferTraccarId: chofer.traccarId, estado: "esperando_pasajero" } });
       if (!viaje) return enviarMensaje(phone, "No tienes viajes activos.");
       // Calcular ruta completa (polilínea + tiempo con tráfico) al iniciar
       let tiempoEstimadoMin = null;
       let rutaUpdate = {};
       try {
         const ruta = await obtenerRutaCompleta(
-          viaje.origen.lat, viaje.origen.lng,
-          viaje.destino.lat, viaje.destino.lng
+          viaje.origenLat, viaje.origenLng,
+          viaje.destinoLat, viaje.destinoLng
         );
         if (ruta) {
           tiempoEstimadoMin = ruta.minutosEstimados;
@@ -277,28 +281,31 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
         } else {
           // fallback: al menos el tiempo con tráfico
           const trafico = await calcularTiempoConTrafico(
-            viaje.origen.lat, viaje.origen.lng,
-            viaje.destino.lat, viaje.destino.lng
+            viaje.origenLat, viaje.origenLng,
+            viaje.destinoLat, viaje.destinoLng
           );
           if (trafico) tiempoEstimadoMin = trafico.minutosConTrafico;
         }
       } catch(e) { log.error("[INICIO_VIAJE_RUTA]", e.message); }
 
-      await Viaje.findByIdAndUpdate(viaje._id, {
-        estado: "en_curso",
-        tiempoEstimadoMin,
-        fechaInicioViaje: new Date(),
-        nivelAlerta: "verde",
-        ...rutaUpdate,
+      await Viaje.update({
+        where: { id: viaje.id },
+        data: {
+          estado: "en_curso",
+          tiempoEstimadoMin,
+          fechaInicioViaje: new Date(),
+          nivelAlerta: "verde",
+          ...rutaUpdate,
+        },
       });
       const session = await getSession(viaje.usuarioPhone);
       if (session) await updateSession(viaje.usuarioPhone, { ...session, step: "en_curso" });
       await enviarMensaje(viaje.usuarioPhone, `🚖 *Viaje iniciado*\n\n¡Disfruta tu viaje con ChatGo!`);
-      const linkAlDestino = `https://www.google.com/maps/dir/?api=1&origin=${viaje.origen.lat},${viaje.origen.lng}&destination=${viaje.destino.lat},${viaje.destino.lng}&travelmode=driving`;
+      const linkAlDestino = `https://www.google.com/maps/dir/?api=1&origin=${viaje.origenLat},${viaje.origenLng}&destination=${viaje.destinoLat},${viaje.destinoLng}&travelmode=driving`;
       await enviarBotones(
         phone,
         `▶️ *Viaje iniciado*\n\n` +
-          `🏁 Destino: ${viaje.destino.nombre || "destino del pasajero"}\n` +
+          `🏁 Destino: ${viaje.destinoNombre || "destino del pasajero"}\n` +
           `📏 ${viaje.distanciaKm} km\n\n` +
           `🗺️ Ir al destino:\n${linkAlDestino}\n\nConduce con cuidado! 🚖`,
         [{ id: "terminar_viaje", title: "🏁 Terminar viaje" }]
@@ -307,17 +314,22 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
     }
 
     if (buttonId === "cancelar_viaje_chofer") {
-      const viaje = await Viaje.findOne({
-        choferTraccarId: chofer.traccarId,
-        estado: { $in: ["en_camino", "esperando_pasajero"] },
+      const viaje = await Viaje.findFirst({
+        where: {
+          choferTraccarId: chofer.traccarId,
+          estado: { in: ["en_camino", "esperando_pasajero"] },
+        },
       });
       if (viaje) {
-        await Viaje.findByIdAndUpdate(viaje._id, {
-          estado: "cancelado_chofer",
-          cancelacionMotivo: "cancelado_por_chofer",
-          fechaFin: new Date(),
+        await Viaje.update({
+          where: { id: viaje.id },
+          data: {
+            estado: "cancelado_chofer",
+            cancelacionMotivo: "cancelado_por_chofer",
+            fechaFin: new Date(),
+          },
         });
-        await Chofer.findByIdAndUpdate(chofer._id, { estado: "libre" });
+        await Chofer.update({ where: { id: chofer.id }, data: { estado: "libre" } });
         await enviarMensaje(viaje.usuarioPhone, `❌ Tu chofer canceló el viaje. Puedes pedir otro cuando quieras.`);
         await enviarMensaje(phone, `❌ Viaje cancelado. Ya estás LIBRE.`);
         await deleteSession(viaje.usuarioPhone);
@@ -327,9 +339,11 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
 
     if (buttonId === "terminar_viaje") {
       // Acepta en_curso o esperando_pasajero (edge case: pasajero no subió pero chofer quiere terminar)
-      const viaje = await Viaje.findOne({
-        choferTraccarId: chofer.traccarId,
-        estado: { $in: ["en_curso", "esperando_pasajero"] },
+      const viaje = await Viaje.findFirst({
+        where: {
+          choferTraccarId: chofer.traccarId,
+          estado: { in: ["en_curso", "esperando_pasajero"] },
+        },
       });
       if (!viaje) {
         await enviarMensaje(phone, "No tienes viajes activos para terminar.");
@@ -341,10 +355,10 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
         let finalizacionSospechosa = false;
         let distanciaAlDestino = null;
 
-        if (viaje.destino?.lat && viaje.destino?.lng) {
+        if (viaje.destinoLat && viaje.destinoLng) {
           try {
             const posChofer = await obtenerUbicacionChofer(chofer.traccarId);
-            const distKm = calcularDistanciaSimple(posChofer.lat, posChofer.lng, viaje.destino.lat, viaje.destino.lng);
+            const distKm = calcularDistanciaSimple(posChofer.lat, posChofer.lng, viaje.destinoLat, viaje.destinoLng);
             distanciaAlDestino = Math.round(distKm * 1000); // en metros
             if (distanciaAlDestino > METROS_MAX_DESTINO) {
               finalizacionSospechosa = true;
@@ -355,27 +369,36 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
           }
         }
         // ─────────────────────────────────────────────────────────────────
+        // Nota: finalizacionSospechosa/distanciaAlDestino son solo lógica en memoria
+        // para esta solicitud (avisos a chofer/pasajero/admin) — no existen como
+        // columnas en el modelo Viaje (tampoco existían en el schema Mongoose original).
 
-        await Viaje.findByIdAndUpdate(viaje._id, {
-          estado: "completado",
-          fechaFin: new Date(),
-          finalizacionSospechosa,
-          distanciaAlDestinoAlFinalizar: distanciaAlDestino,
+        await Viaje.update({
+          where: { id: viaje.id },
+          data: {
+            estado: "completado",
+            fechaFin: new Date(),
+          },
         });
-        await Usuario.findOneAndUpdate({ phone: viaje.usuarioPhone }, { $inc: { viajesTotal: 1 } });
+        await Usuario.update({ where: { phone: viaje.usuarioPhone }, data: { viajesTotal: { increment: 1 } } });
 
-        const choferActual = await Chofer.findById(chofer._id);
+        const choferActual = await Chofer.findUnique({ where: { id: chofer.id } });
         const sigueAlDia = enPromoGratis() || choferPagoAlDia(choferActual);
-        await Chofer.findByIdAndUpdate(chofer._id, {
-          estado: sigueAlDia ? "libre" : "offline",
-          $inc: { viajesTotal: 1 },
+        await Chofer.update({
+          where: { id: chofer.id },
+          data: {
+            estado: sigueAlDia ? "libre" : "offline",
+            viajesTotal: { increment: 1 },
+          },
         });
-        await guardarRutaFrecuente(viaje.usuarioPhone, viaje.origen, viaje.destino, viaje.tipoVehiculo || "auto");
+        const origenViaje = { lat: viaje.origenLat, lng: viaje.origenLng, nombre: viaje.origenNombre };
+        const destinoViaje = { lat: viaje.destinoLat, lng: viaje.destinoLng, nombre: viaje.destinoNombre };
+        await guardarRutaFrecuente(viaje.usuarioPhone, origenViaje, destinoViaje, viaje.tipoVehiculo || "auto");
 
   // IA: registrar evento completado para métricas del chofer
   if (chofer) {
     registrarEventoChofer(chofer.phone, "completado", {
-      viajeId: String(viaje._id),
+      viajeId: String(viaje.id),
       distanciaAlOrigen: viaje.distanciaKm,
     }).catch(() => {});
   }
@@ -389,22 +412,22 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
   // CROWDSOURCING SILENCIOSO POST-VIAJE: enriquecer la memoria de voz
   // con los nombres reales de origen y destino del viaje completado
   try {
-    const usuarioViaje = await Usuario.findOne({ phone: viaje.usuarioPhone }).lean();
+    const usuarioViaje = await Usuario.findUnique({ where: { phone: viaje.usuarioPhone } });
     const ciudadViaje = usuarioViaje?.ciudad || "Cochabamba";
-    if (viaje.origen?.lat && viaje.origen?.nombre && !esPlusCode(viaje.origen.nombre)) {
-      const normO = normalizarReferencia(viaje.origen.nombre);
-      const existeO = await LocationReference.findOne({ referencia: normO, ciudad: ciudadViaje });
+    if (viaje.origenLat && viaje.origenNombre && !esPlusCode(viaje.origenNombre)) {
+      const normO = normalizarReferencia(viaje.origenNombre);
+      const existeO = await LocationReference.findFirst({ where: { referencia: normO, ciudad: ciudadViaje } });
       if (!existeO) {
-        await guardarReferenciaVoz(viaje.origen.nombre, viaje.origen.lat, viaje.origen.lng, viaje.origen.nombre, ciudadViaje);
-        log.info(`[CROWDSOURCE] Post-viaje origen: "${viaje.origen.nombre}" (${ciudadViaje})`);
+        await guardarReferenciaVoz(viaje.origenNombre, viaje.origenLat, viaje.origenLng, viaje.origenNombre, ciudadViaje);
+        log.info(`[CROWDSOURCE] Post-viaje origen: "${viaje.origenNombre}" (${ciudadViaje})`);
       }
     }
-    if (viaje.destino?.lat && viaje.destino?.nombre && !esPlusCode(viaje.destino.nombre)) {
-      const normD = normalizarReferencia(viaje.destino.nombre);
-      const existeD = await LocationReference.findOne({ referencia: normD, ciudad: ciudadViaje });
+    if (viaje.destinoLat && viaje.destinoNombre && !esPlusCode(viaje.destinoNombre)) {
+      const normD = normalizarReferencia(viaje.destinoNombre);
+      const existeD = await LocationReference.findFirst({ where: { referencia: normD, ciudad: ciudadViaje } });
       if (!existeD) {
-        await guardarReferenciaVoz(viaje.destino.nombre, viaje.destino.lat, viaje.destino.lng, viaje.destino.nombre, ciudadViaje);
-        log.info(`[CROWDSOURCE] Post-viaje destino: "${viaje.destino.nombre}" (${ciudadViaje})`);
+        await guardarReferenciaVoz(viaje.destinoNombre, viaje.destinoLat, viaje.destinoLng, viaje.destinoNombre, ciudadViaje);
+        log.info(`[CROWDSOURCE] Post-viaje destino: "${viaje.destinoNombre}" (${ciudadViaje})`);
       }
     }
   } catch (e) { log.error("[CROWDSOURCE_POST_VIAJE]", e.message); }
@@ -419,7 +442,7 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
           try {
             const nuevoCodigo = await crearCodigoPromo(viaje.usuarioPhone, "post_viaje");
             if (nuevoCodigo) {
-              await Viaje.findByIdAndUpdate(viaje._id, { codigoPromoGenerado: nuevoCodigo.codigo });
+              await Viaje.update({ where: { id: viaje.id }, data: { codigoPromoGenerado: nuevoCodigo.codigo } });
               await enviarCodigoDescuento(viaje.usuarioPhone, nuevoCodigo, "tu próximo viaje");
             }
           } catch (e) {
@@ -439,20 +462,20 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
             viaje.usuarioPhone,
             `⚠️ Detectamos que el viaje finalizó a *${distanciaAlDestino} metros* del destino.\n\n¿Llegaste a tu destino correctamente?`,
             [
-              { id: `viaje_ok_${viaje._id}`, title: "✅ Sí, llegué bien" },
-              { id: `viaje_problema_${viaje._id}`, title: "❌ No llegué" },
+              { id: `viaje_ok_${viaje.id}`, title: "✅ Sí, llegué bien" },
+              { id: `viaje_problema_${viaje.id}`, title: "❌ No llegué" },
             ]
           );
           // Notificar al admin
           await enviarMensaje(
             CONFIG.ADMIN_PHONE,
-            `🚨 *Finalización sospechosa*\n\n👤 Chofer: ${chofer.nombre} (+${phone})\n🚗 Placa: ${chofer.placa}\n📍 Finalizó a *${distanciaAlDestino}m* del destino\n🗺️ Destino: ${viaje.destino?.nombre || "—"}\n🆔 Viaje: ${viaje._id}`
+            `🚨 *Finalización sospechosa*\n\n👤 Chofer: ${chofer.nombre} (+${phone})\n🚗 Placa: ${chofer.placa}\n📍 Finalizó a *${distanciaAlDestino}m* del destino\n🗺️ Destino: ${viaje.destinoNombre || "—"}\n🆔 Viaje: ${viaje.id}`
           );
           log.warn(`[ALERTA_VIAJE] Finalización sospechosa - chofer ${chofer.phone} a ${distanciaAlDestino}m del destino`);
         }
         // ─────────────────────────────────────────────────────────────────
 
-        await solicitarRating(viaje.usuarioPhone, viaje._id);
+        await solicitarRating(viaje.usuarioPhone, viaje.id);
 
         if (sigueAlDia) {
           await deleteSession(phone); // limpiar sesión para que el webhook no lo confunda con pasajero
@@ -471,7 +494,7 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
 
     if (buttonId === "chofer_libre") {
       if (!choferPagoAlDia(chofer) && !enPromoGratis()) {
-        await Chofer.findByIdAndUpdate(chofer._id, { estado: "offline" });
+        await Chofer.update({ where: { id: chofer.id }, data: { estado: "offline" } });
         await enviarMensaje(phone, `Para estar LIBRE primero paga tu cuota diaria de *Bs 10*.`);
         if (CONFIG.QR_IMAGE_URL) await enviarImagen(phone, CONFIG.QR_IMAGE_URL, `📲 Escanea el QR y envíame la *foto del comprobante* para activarte.`);
         await setSession(phone, { step: "chofer_esperando_comprobante" });
@@ -496,7 +519,7 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
         );
         return;
       }
-      await Chofer.findByIdAndUpdate(chofer._id, { estado: "libre" });
+      await Chofer.update({ where: { id: chofer.id }, data: { estado: "libre" } });
       if (enPromoGratis()) {
         await enviarBotones(
           phone,
@@ -516,7 +539,7 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
     }
 
     if (buttonId === "chofer_ocupado") {
-      await Chofer.findByIdAndUpdate(chofer._id, { estado: "ocupado" });
+      await Chofer.update({ where: { id: chofer.id }, data: { estado: "ocupado" } });
       await enviarBotones(phone, `🔴 Estado: *OCUPADO*`, [
         { id: "chofer_libre", title: "🟢 Libre" },
         { id: "chofer_ayuda", title: "❓ Ayuda" },
@@ -558,27 +581,33 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
       return;
     }
 
-    await Chofer.findByIdAndUpdate(chofer._id, {
-      "pagoDiario.fecha": new Date(),
-      "pagoDiario.fechaStr": fechaStrBolivia(),
-      "pagoDiario.pagado": true,
-      "pagoDiario.aprobado": false,
-      "pagoDiario.comprobanteValidado": true,
+    await Chofer.update({
+      where: { id: chofer.id },
+      data: {
+        pagoDiarioFecha: new Date(),
+        pagoDiarioFechaStr: fechaStrBolivia(),
+        pagoDiarioPagado: true,
+        pagoDiarioAprobado: false,
+        pagoDiarioComprobanteValidado: true,
+      },
     });
     await deleteSession(phone);
 
     // El banco suele avisar (vía MacroDroid) ANTES de que el chofer mande la foto del
     // comprobante. Si ya llegó una notificación sin matchear, la usamos para aprobar
     // de una vez en lugar de esperar al admin.
-    const notisRecientes = await NotificacionPago.find({ usado: false });
+    const notisRecientes = await NotificacionPago.findMany({ where: { usado: false } });
     let notiUsada = null;
     if (notisRecientes.length === 1) notiUsada = notisRecientes[0];
 
     if (notiUsada) {
-      await NotificacionPago.findByIdAndUpdate(notiUsada._id, { usado: true });
-      await Chofer.findByIdAndUpdate(chofer._id, {
-        "pagoDiario.aprobado": true,
-        estado: "libre",
+      await NotificacionPago.update({ where: { id: notiUsada.id }, data: { usado: true } });
+      await Chofer.update({
+        where: { id: chofer.id },
+        data: {
+          pagoDiarioAprobado: true,
+          estado: "libre",
+        },
       });
       await enviarBotones(phone, `✅ *Pago confirmado automáticamente!*\n🚖 Ya estás LIBRE para recibir viajes.`, [
         { id: "chofer_ocupado", title: "🔴 Ocupado" },
@@ -599,9 +628,11 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
   }
 
   // Chat con pasajero durante viaje
-  const viajeActivo = await Viaje.findOne({
-    choferTraccarId: chofer.traccarId,
-    estado: { $in: ["en_camino","esperando_pasajero","en_curso"] },
+  const viajeActivo = await Viaje.findFirst({
+    where: {
+      choferTraccarId: chofer.traccarId,
+      estado: { in: ["en_camino","esperando_pasajero","en_curso"] },
+    },
   });
   if (viajeActivo && mensaje && mensaje.type) {
     const reenviado = await relayMensajeChat(phone, viajeActivo.usuarioPhone, mensaje, "tu chofer");
@@ -610,7 +641,7 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
 
   // Menú del chofer
   if (!choferPagoAlDia(chofer) && !enPromoGratis()) {
-    await Chofer.findByIdAndUpdate(chofer._id, { estado: "offline" });
+    await Chofer.update({ where: { id: chofer.id }, data: { estado: "offline" } });
     await enviarMensaje(phone, `👋 Hola ${chofer.nombre}!\n\nPara iniciar tu jornada necesitas pagar *Bs 10*.`);
     if (CONFIG.QR_IMAGE_URL) await enviarImagen(phone, CONFIG.QR_IMAGE_URL, `📲 Escanea el QR y envíame la *foto del comprobante*.`);
     await setSession(phone, { step: "chofer_esperando_comprobante" });

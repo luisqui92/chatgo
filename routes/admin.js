@@ -1,5 +1,4 @@
 // ChatGo — admin.js
-const mongoose = require("mongoose");
 const { enviarBotones } = require("../services/whatsapp");
 const { enPromoGratis, escapeHtml, fechaStrBolivia, promoCodigosActiva } = require("../services/utils");
 const { limitLogin, limitAdmin } = require("../services/ratelimit");
@@ -49,11 +48,12 @@ app.get("/demo/choferes", async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET");
   try {
-    const choferes = await Chofer.find({ nombre: { $exists: true, $ne: null, $ne: "" } })
-      .select("nombre placa tipoVehiculo viajesTotal ratingPromedio ratingCantidad zona phone")
-      .limit(50)
-      .lean();
-    
+    const choferes = await Chofer.findMany({
+      where: { AND: [{ nombre: { not: null } }, { nombre: { not: "" } }] },
+      select: { nombre: true, placa: true, tipoVehiculo: true, viajesTotal: true, ratingPromedio: true, ratingCantidad: true, phone: true },
+      take: 50,
+    });
+
     // Ofuscar teléfonos (últimos 4 dígitos)
     const ofuscados = choferes.map(c => ({
       nombre: c.nombre || "Sin nombre",
@@ -62,7 +62,7 @@ app.get("/demo/choferes", async (req, res) => {
       viajesTotal: c.viajesTotal || 0,
       rating: c.ratingPromedio ? Number(c.ratingPromedio).toFixed(1) : null,
       ratingCantidad: c.ratingCantidad || 0,
-      zona: c.zona || null,
+      zona: null,
       phoneMask: c.phone ? "+591 *** ** " + String(c.phone).slice(-4) : null,
     }));
     
@@ -283,18 +283,18 @@ async function tickDemo() {
     const ahora = Date.now();
     
     // Si cambió el día, borrar todo lo del día anterior
-    const ultimoViaje = await ViajeDemo.findOne().sort({ diaId: -1 }).lean();
+    const ultimoViaje = await ViajeDemo.findFirst({ orderBy: { diaId: "desc" } });
     if (ultimoViaje && ultimoViaje.diaId !== diaId) {
-      await ViajeDemo.deleteMany({ diaId: { $ne: diaId } });
+      await ViajeDemo.deleteMany({ where: { diaId: { not: diaId } } });
       log.info(`[DEMO] Nuevo día ${diaId} — viajes anteriores eliminados`);
     }
-    
+
     // Obtener choferes reales activos
-    const choferes = await Chofer.find({ nombre: { $exists: true, $ne: null, $ne: "" } }).limit(50).lean();
+    const choferes = await Chofer.findMany({ where: { AND: [{ nombre: { not: null } }, { nombre: { not: "" } }] }, take: 50 });
     if (choferes.length === 0) return;
-    
+
     // Si es la primera vez del día, generar histórico desde las 4 AM
-    const cantHoy = await ViajeDemo.countDocuments({ diaId });
+    const cantHoy = await ViajeDemo.count({ where: { diaId } });
     if (cantHoy === 0) {
       const inicioDia = new Date();
       inicioDia.setHours(4, 0, 0, 0);
@@ -314,33 +314,35 @@ async function tickDemo() {
         if (doc) docsAGuardar.push(doc);
       }
       if (docsAGuardar.length > 0) {
-        await ViajeDemo.insertMany(docsAGuardar);
+        await ViajeDemo.createMany({ data: docsAGuardar });
         log.info(`[DEMO] Día ${diaId} inicializado · ${docsAGuardar.length} viajes históricos`);
       }
       return;
     }
-    
+
     // Avanzar viajes activos (cambiar estados según el tiempo)
-    const activos = await ViajeDemo.find({ 
-      diaId, 
-      estado: { $in: ['pendiente','en_camino','esperando_pasajero','en_curso'] } 
-    }).lean();
-    
+    const activos = await ViajeDemo.findMany({
+      where: {
+        diaId,
+        estado: { in: ['pendiente','en_camino','esperando_pasajero','en_curso'] },
+      },
+    });
+
     for (const v of activos) {
       let nuevoEstado = v.estado;
       let posLat = v.choferPosLat, posLng = v.choferPosLng;
-      
+
       if (v.estado === 'pendiente' && ahora >= v.tAceptado) {
         nuevoEstado = 'en_camino';
       } else if (v.estado === 'en_camino' && ahora >= v.tLlegoOrigen) {
         nuevoEstado = 'esperando_pasajero';
-        posLat = v.origen.lat;
-        posLng = v.origen.lng;
+        posLat = v.origenLat;
+        posLng = v.origenLng;
       } else if (v.estado === 'en_camino') {
         // Interpolar posición del chofer al origen
         const progreso = (ahora - v.tAceptado) / (v.tLlegoOrigen - v.tAceptado);
-        posLat = v.choferPosLat + (v.origen.lat - v.choferPosLat) * progreso;
-        posLng = v.choferPosLng + (v.origen.lng - v.choferPosLng) * progreso;
+        posLat = v.choferPosLat + (v.origenLat - v.choferPosLat) * progreso;
+        posLng = v.choferPosLng + (v.origenLng - v.choferPosLng) * progreso;
       } else if (v.estado === 'esperando_pasajero' && ahora >= v.tSubioPasajero) {
         nuevoEstado = 'en_curso';
       } else if (v.estado === 'en_curso' && ahora >= v.tCompletado) {
@@ -348,10 +350,10 @@ async function tickDemo() {
       } else if (v.estado === 'en_curso') {
         // Interpolar posición del chofer al destino
         const progreso = (ahora - v.tSubioPasajero) / (v.tCompletado - v.tSubioPasajero);
-        posLat = v.origen.lat + (v.destino.lat - v.origen.lat) * progreso;
-        posLng = v.origen.lng + (v.destino.lng - v.origen.lng) * progreso;
+        posLat = v.origenLat + (v.destinoLat - v.origenLat) * progreso;
+        posLng = v.origenLng + (v.destinoLng - v.origenLng) * progreso;
       }
-      
+
       const updates = { choferPosLat: posLat, choferPosLng: posLng };
       if (nuevoEstado !== v.estado) {
         updates.estado = nuevoEstado;
@@ -359,17 +361,17 @@ async function tickDemo() {
           updates.rating = Math.random() > 0.12 ? 4 + Math.floor(Math.random() * 2) : 2 + Math.floor(Math.random() * 2);
         }
       }
-      await ViajeDemo.updateOne({ _id: v._id }, updates);
+      await ViajeDemo.update({ where: { id: v.id }, data: updates });
     }
-    
+
     // Crear nuevo viaje si la probabilidad lo indica
     const horaActual = new Date().getHours();
     const probTick = (10 / 60) * factorHora(horaActual); // ~10/hora ajustado por curva
     if (Math.random() < probTick) {
       const doc = generarViajeDemo(ahora, ahora, choferes, diaId);
       if (doc) {
-        await ViajeDemo.create(doc);
-        log.info(`[DEMO] Nuevo viaje · ${doc.usuarioNombre} → ${doc.destino.nombre}`);
+        await ViajeDemo.create({ data: doc });
+        log.info(`[DEMO] Nuevo viaje · ${doc.usuarioNombre} → ${doc.destinoNombre}`);
       }
     }
   } catch (e) {
@@ -427,8 +429,12 @@ function generarViajeDemo(momentoCreacion, ahoraReal, choferes, diaId) {
     choferTipo: chofer.tipoVehiculo || "auto",
     usuarioNombre: nombrePasajeroDemo(),
     usuarioPhone: '5917' + (1000000 + Math.floor(Math.random() * 9000000)),
-    origen: { nombre: origen.nombre, lat: origen.lat, lng: origen.lng },
-    destino: { nombre: destino.nombre, lat: destino.lat, lng: destino.lng },
+    origenNombre: origen.nombre,
+    origenLat: origen.lat,
+    origenLng: origen.lng,
+    destinoNombre: destino.nombre,
+    destinoLat: destino.lat,
+    destinoLng: destino.lng,
     distanciaKm: Math.round(distKm * 10) / 10,
     precioTotal: calcularPrecioDemo(distKm, chofer.tipoVehiculo || 'auto'),
     estado,
@@ -456,8 +462,8 @@ app.get("/demo/estado", async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   try {
     const diaId = diaIdActual();
-    const viajes = await ViajeDemo.find({ diaId }).sort({ tInicio: -1 }).limit(200).lean();
-    const choferesReales = await Chofer.find({ nombre: { $exists: true, $ne: null, $ne: "" } }).limit(50).lean();
+    const viajes = await ViajeDemo.findMany({ where: { diaId }, orderBy: { tInicio: "desc" }, take: 200 });
+    const choferesReales = await Chofer.findMany({ where: { AND: [{ nombre: { not: null } }, { nombre: { not: "" } }] }, take: 50 });
     
     // Calcular estados de choferes según viajes activos
     const ocupados = new Set();
@@ -496,7 +502,7 @@ app.get("/demo/estado", async (req, res) => {
         viajesTotal: c.viajesTotal || 0,
         rating: c.ratingPromedio ? Number(c.ratingPromedio).toFixed(1) : (4.5 + Math.random() * 0.5).toFixed(1),
         ratingCantidad: c.ratingCantidad || 0,
-        zona: c.zona || null,
+        zona: null,
         phoneMask: c.phone ? "+591 *** ** " + String(c.phone).slice(-4) : null,
         estado,
         pos: posiciones[c.nombre] || posicionLibreDispersa(i),
@@ -545,22 +551,23 @@ app.get("/unidades", requireAuth(), async (req, res) => {
 app.get("/stats", requireAuth(), async (req, res) => {
   try {
     const hoyStr = fechaStrBolivia();
-    const [usuarios, choferes, choferesLibres, choferesPagados, viajesHoy, viajesActivos, ratingPromedio] = await Promise.all([
-      Usuario.countDocuments(),
-      Chofer.countDocuments(),
-      Chofer.countDocuments({ estado: "libre" }),
-      Chofer.countDocuments({ "pagoDiario.aprobado": true, "pagoDiario.fechaStr": hoyStr }),
-      Viaje.countDocuments({ createdAt: { $gte: new Date(Date.now() - 24 * 3600 * 1000) } }),
-      Viaje.countDocuments({ estado: { $in: ["pendiente","en_camino","esperando_pasajero","en_curso"] } }),
-      Viaje.aggregate([{ $match: { ratingPasajero: { $exists: true } } }, { $group: { _id: null, avg: { $avg: "$ratingPasajero" }, count: { $sum: 1 } } }]),
+    const [usuarios, choferes, choferesLibres, choferesPagados, viajesHoy, viajesActivos, ratingAgg] = await Promise.all([
+      Usuario.count(),
+      Chofer.count(),
+      Chofer.count({ where: { estado: "libre" } }),
+      Chofer.count({ where: { pagoDiarioAprobado: true, pagoDiarioFechaStr: hoyStr } }),
+      Viaje.count({ where: { createdAt: { gte: new Date(Date.now() - 24 * 3600 * 1000) } } }),
+      Viaje.count({ where: { estado: { in: ["pendiente","en_camino","esperando_pasajero","en_curso"] } } }),
+      Viaje.aggregate({ where: { ratingPasajero: { not: null } }, _avg: { ratingPasajero: true }, _count: { ratingPasajero: true } }),
     ]);
-    res.json({ hoy: hoyStr, usuarios, choferes, choferesLibres, choferesPagadosHoy: choferesPagados, viajesUltimas24h: viajesHoy, viajesActivos, rating: ratingPromedio[0] ? { promedio: Math.round(ratingPromedio[0].avg * 10) / 10, cantidad: ratingPromedio[0].count } : null });
+    const ratingPromedio = ratingAgg._count.ratingPasajero > 0 ? { promedio: Math.round(ratingAgg._avg.ratingPasajero * 10) / 10, cantidad: ratingAgg._count.ratingPasajero } : null;
+    res.json({ hoy: hoyStr, usuarios, choferes, choferesLibres, choferesPagadosHoy: choferesPagados, viajesUltimas24h: viajesHoy, viajesActivos, rating: ratingPromedio });
   } catch (e) { res.json({ error: e.message }); }
 });
 
 app.get("/admin/referencias-voz", requireAuth(), async (req, res) => {
   try {
-    const refs = await LocationReference.find().sort({ contador: -1 }).limit(100).lean();
+    const refs = await LocationReference.findMany({ orderBy: { contador: "desc" }, take: 100 });
     res.json({ total: refs.length, referencias: refs });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -581,8 +588,10 @@ app.get("/promo", requireAuth(), (req, res) => {
 
 app.get("/admin/viaje/:id", requireAuth(), async (req, res) => {
   try {
-    const viaje = await Viaje.findById(req.params.id).lean();
+    const viaje = await Viaje.findUnique({ where: { id: req.params.id } });
     if (!viaje) { res.status(404).send("<h1>Viaje no encontrado</h1>"); return; }
+    const origen = { lat: viaje.origenLat, lng: viaje.origenLng, nombre: viaje.origenNombre };
+    const destino = { lat: viaje.destinoLat, lng: viaje.destinoLng, nombre: viaje.destinoNombre };
 
     let posChofer = null, posError = null;
     if (viaje.choferTraccarId) {
@@ -597,7 +606,7 @@ app.get("/admin/viaje/:id", requireAuth(), async (req, res) => {
 <style>*{margin:0;padding:0;box-sizing:border-box;}body{font-family:-apple-system,sans-serif;background:#0f1419;color:#e6e6e6;}.header{background:#161b22;padding:12px 16px;border-bottom:1px solid #30363d;display:flex;justify-content:space-between;align-items:center;}.header h1{font-size:16px;color:#00d97e;}.back{color:#58a6ff;text-decoration:none;font-size:13px;}.info{background:#161b22;padding:12px 16px;border-bottom:1px solid #30363d;display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;}.info-label{color:#8b949e;font-size:10px;text-transform:uppercase;}.info-value{font-size:14px;margin-top:2px;}.estado{padding:2px 8px;border-radius:10px;font-size:11px;display:inline-block;}.estado-en_curso{background:#0d3d20;color:#3fb950;}.estado-completado{background:#0d3d20;color:#3fb950;}.estado-pendiente,.estado-esperando_pasajero{background:#3d2c0d;color:#d29922;}.estado-en_camino{background:#0d2c3d;color:#58a6ff;}.estado-cancelado,.estado-cancelado_pasajero,.estado-cancelado_chofer{background:#3d0d0d;color:#f85149;}#map{height:calc(100vh - 200px);width:100%;}.leyenda{position:absolute;bottom:10px;left:10px;background:rgba(22,27,34,.95);padding:10px;border-radius:8px;border:1px solid #30363d;font-size:12px;z-index:1000;}.leyenda div{margin:3px 0;}.mi{display:inline-block;width:14px;height:14px;border-radius:50%;margin-right:6px;vertical-align:middle;}</style>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/></head>
 <body>
-<div class="header"><a href="/admin" class="back">← Volver al panel</a><h1>🚖 Viaje #${String(viaje._id).slice(-6).toUpperCase()}</h1><button onclick="location.reload()" style="background:#1f6feb;color:white;border:none;padding:6px 12px;border-radius:6px;cursor:pointer;font-size:12px;">🔄 Actualizar</button></div>
+<div class="header"><a href="/admin" class="back">← Volver al panel</a><h1>🚖 Viaje #${String(viaje.id).slice(-6).toUpperCase()}</h1><button onclick="location.reload()" style="background:#1f6feb;color:white;border:none;padding:6px 12px;border-radius:6px;cursor:pointer;font-size:12px;">🔄 Actualizar</button></div>
 <div class="info">
   <div><div class="info-label">Estado</div><div class="info-value"><span class="estado estado-${viaje.estado}">${viaje.estado.toUpperCase()}</span></div></div>
   <div><div class="info-label">Pasajero</div><div class="info-value">+${escapeHtml(viaje.usuarioPhone||"—")}</div></div>
@@ -616,7 +625,7 @@ app.get("/admin/viaje/:id", requireAuth(), async (req, res) => {
 </div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-const viaje=${JSON.stringify({origen:viaje.origen,paradas:viaje.paradas||[],destino:viaje.destino,posChofer,estado:viaje.estado})};
+const viaje=${JSON.stringify({origen,paradas:viaje.paradas||[],destino,posChofer,estado:viaje.estado})};
 const puntos=[viaje.origen,...viaje.paradas,viaje.destino].filter(p=>p&&p.lat);
 if(viaje.posChofer)puntos.push(viaje.posChofer);
 const cLat=puntos.reduce((s,p)=>s+p.lat,0)/puntos.length;
@@ -639,7 +648,7 @@ if(['pendiente','en_camino','esperando_pasajero','en_curso'].includes(viaje.esta
 
 app.get("/admin/mapa", requireAuth(), async (req, res) => {
   try {
-    const choferes = await Chofer.find().lean();
+    const choferes = await Chofer.findMany();
     const choferesConPos = await Promise.all(choferes.map(async c => {
       if (!c.traccarId) return null;
       try { const p = await obtenerUbicacionChofer(c.traccarId); return { phone: c.phone, nombre: c.nombre, placa: c.placa, tipoVehiculo: c.tipoVehiculo||"auto", estado: c.estado, traccarId: c.traccarId, lat: p.lat, lng: p.lng, hace_min: p.minutos }; }
@@ -673,13 +682,13 @@ setTimeout(()=>location.reload(),30000);
 
 app.get("/admin/mapa-data", requireAuth(), async (req, res) => {
   try {
-    const choferes = await Chofer.find().lean();
+    const choferes = await Chofer.findMany();
     const choferesConPos = await Promise.all(choferes.map(async c => {
       if (!c.traccarId) return null;
       try { const pos = await obtenerUbicacionChofer(c.traccarId); if (pos.minutos > 30) return null; return { phone: c.phone, nombre: c.nombre||"—", placa: c.placa||"—", tipoVehiculo: c.tipoVehiculo||"auto", estado: c.estado||"offline", traccarId: c.traccarId, lat: pos.lat, lng: pos.lng, hace_min: pos.minutos, ratingPromedio: c.ratingPromedio||0, viajesTotal: c.viajesTotal||0 }; }
       catch { return null; }
     }));
-    const viajesActivos = await Viaje.find({ estado: { $in: ["pendiente","en_camino","esperando_pasajero","en_curso"] } }).lean();
+    const viajesActivos = await Viaje.findMany({ where: { estado: { in: ["pendiente","en_camino","esperando_pasajero","en_curso"] } } });
     res.json({ timestamp: new Date().toISOString(), choferes: choferesConPos.filter(Boolean), viajesActivos });
   } catch (e) { log.error("[MAPA_DATA]", e.message); res.status(500).json({ error: e.message }); }
 });
@@ -688,30 +697,31 @@ app.get("/admin/data", requireAuth(), async (req, res) => {
   try {
     const hoyStr = fechaStrBolivia();
     const ahora = Date.now();
-    const choferes = await Chofer.find().sort({ updatedAt: -1 }).lean();
+    const choferes = await Chofer.findMany({ orderBy: { updatedAt: "desc" } });
     const choferesConPos = await Promise.all(choferes.map(async c => {
       let pos = null, posError = null;
       if (c.traccarId) { try { const p = await obtenerUbicacionChofer(c.traccarId); pos = { lat: p.lat, lng: p.lng, hace_min: p.minutos, traccarOk: true }; } catch (e) { posError = e.message; } }
-      const pagoAlDia = !!(c.pagoDiario?.aprobado && c.pagoDiario?.fechaStr === hoyStr);
-      return { _id: c._id, phone: c.phone, nombre: c.nombre||"", placa: c.placa||"", tipoVehiculo: c.tipoVehiculo||"auto", traccarId: c.traccarId||"", estado: c.estado||"offline", viajesTotal: c.viajesTotal||0, ratingPromedio: c.ratingPromedio||0, ratingCantidad: c.ratingCantidad||0, pagoDiario: c.pagoDiario||{}, pagoAlDia, viajeReservado: c.viajeReservado, ultimaPos: pos, posError };
+      const pagoAlDia = !!(c.pagoDiarioAprobado && c.pagoDiarioFechaStr === hoyStr);
+      const pagoDiario = { aprobado: c.pagoDiarioAprobado, pagado: c.pagoDiarioPagado, fecha: c.pagoDiarioFecha, fechaStr: c.pagoDiarioFechaStr, comprobanteValidado: c.pagoDiarioComprobanteValidado };
+      return { id: c.id, phone: c.phone, nombre: c.nombre||"", placa: c.placa||"", tipoVehiculo: c.tipoVehiculo||"auto", traccarId: c.traccarId||"", estado: c.estado||"offline", viajesTotal: c.viajesTotal||0, ratingPromedio: c.ratingPromedio||0, ratingCantidad: c.ratingCantidad||0, pagoDiario, pagoAlDia, viajeReservado: c.viajeReservado, ultimaPos: pos, posError };
     }));
-    const viajesActivos = await Viaje.find({ estado: { $in: ["pendiente","en_camino","esperando_pasajero","en_curso"] } }).sort({ createdAt: -1 }).lean();
-    const viajesRecientes = await Viaje.find().sort({ createdAt: -1 }).limit(20).lean();
-    const listaEspera = await ListaEspera.find().lean();
+    const viajesActivos = await Viaje.findMany({ where: { estado: { in: ["pendiente","en_camino","esperando_pasajero","en_curso"] } }, orderBy: { createdAt: "desc" } });
+    const viajesRecientes = await Viaje.findMany({ orderBy: { createdAt: "desc" }, take: 20 });
+    const listaEspera = await ListaEspera.findMany();
     const _results = await Promise.allSettled([
-      Usuario.countDocuments(),
-      Usuario.countDocuments({ createdAt: { $gte: new Date(ahora - 24*3600*1000) } }),
-      Viaje.countDocuments({ createdAt: { $gte: new Date(ahora - 24*3600*1000) } }),
-      Viaje.countDocuments({ estado: "completado", fechaFin: { $gte: new Date(ahora - 24*3600*1000) } }),
-      Viaje.aggregate([{ $match: { ratingPasajero: { $exists: true } } }, { $group: { _id: null, avg: { $avg: "$ratingPasajero" }, count: { $sum: 1 } } }]),
-      CodigoPromo.countDocuments({ usado: false, fechaVencimiento: { $gt: new Date() } }),
-      CodigoPromo.countDocuments({ usado: true }),
+      Usuario.count(),
+      Usuario.count({ where: { createdAt: { gte: new Date(ahora - 24*3600*1000) } } }),
+      Viaje.count({ where: { createdAt: { gte: new Date(ahora - 24*3600*1000) } } }),
+      Viaje.count({ where: { estado: "completado", fechaFin: { gte: new Date(ahora - 24*3600*1000) } } }),
+      Viaje.aggregate({ where: { ratingPasajero: { not: null } }, _avg: { ratingPasajero: true }, _count: { ratingPasajero: true } }),
+      CodigoPromo.count({ where: { usado: false, fechaVencimiento: { gt: new Date() } } }),
+      CodigoPromo.count({ where: { usado: true } }),
     ]);
     const [totalUsuarios, usuariosNuevosHoy, viajes24h, viajesCompletados24h, ratingAgg, codigosActivos, codigosUsados] = _results.map(r => r.status === "fulfilled" ? r.value : 0);
     res.json({
       timestamp: new Date().toISOString(),
       hoy: hoyStr,
-      stats: { totalUsuarios, usuariosNuevosHoy, viajes24h, viajesCompletados24h, rating: (ratingAgg && ratingAgg[0]) ? { promedio: Math.round(ratingAgg[0].avg * 10) / 10, cantidad: ratingAgg[0].count } : null, codigosActivos, codigosUsados, choferesTotal: choferes.length, choferesLibres: choferesConPos.filter(c=>c.estado==="libre").length, choferesOcupados: choferesConPos.filter(c=>c.estado==="ocupado").length, choferesOffline: choferesConPos.filter(c=>c.estado==="offline").length, choferesPagadosHoy: choferesConPos.filter(c=>c.pagoAlDia).length, choferesConGPSReciente: choferesConPos.filter(c=>c.ultimaPos&&c.ultimaPos.hace_min<=15).length, viajesActivos: viajesActivos.length, enListaEspera: listaEspera.length },
+      stats: { totalUsuarios, usuariosNuevosHoy, viajes24h, viajesCompletados24h, rating: (ratingAgg && ratingAgg._count && ratingAgg._count.ratingPasajero > 0) ? { promedio: Math.round(ratingAgg._avg.ratingPasajero * 10) / 10, cantidad: ratingAgg._count.ratingPasajero } : null, codigosActivos, codigosUsados, choferesTotal: choferes.length, choferesLibres: choferesConPos.filter(c=>c.estado==="libre").length, choferesOcupados: choferesConPos.filter(c=>c.estado==="ocupado").length, choferesOffline: choferesConPos.filter(c=>c.estado==="offline").length, choferesPagadosHoy: choferesConPos.filter(c=>c.pagoAlDia).length, choferesConGPSReciente: choferesConPos.filter(c=>c.ultimaPos&&c.ultimaPos.hace_min<=15).length, viajesActivos: viajesActivos.length, enListaEspera: listaEspera.length },
       choferes: choferesConPos, viajesActivos, viajesRecientes, listaEspera,
       promo: { viajesActiva: enPromoGratis(), viajesFin: CONFIG.PROMO_GRATIS_HASTA, codigosActiva: promoCodigosActiva(), codigosFin: CONFIG.PROMO_CODIGOS_HASTA },
     });
@@ -721,28 +731,28 @@ app.get("/admin/data", requireAuth(), async (req, res) => {
 app.get("/admin/aprobar-chofer/:phone", requireAuth(["superadmin","admin"]), async (req, res) => {
   try {
     const phone = req.params.phone;
-    const chofer = await Chofer.findOne({ phone });
+    const chofer = await Chofer.findUnique({ where: { phone } });
     if (!chofer) return res.json({ error: `Chofer +${phone} no encontrado` });
 
-    await Chofer.findOneAndUpdate(
-      { phone },
-      {
-        "pagoDiario.aprobado": true,
-        "pagoDiario.pagado": true,
-        "pagoDiario.fecha": new Date(),
-        "pagoDiario.fechaStr": fechaStrBolivia(),
+    await Chofer.update({
+      where: { phone },
+      data: {
+        pagoDiarioAprobado: true,
+        pagoDiarioPagado: true,
+        pagoDiarioFecha: new Date(),
+        pagoDiarioFechaStr: fechaStrBolivia(),
         estado: "libre",
         viajeReservado: null,
         reservadoHasta: null,
-      }
-    );
+      },
+    });
 
     // Si el chofer puso un código de radiotaxi antes de registrarse, aplicarle la flota
     if (!chofer.flota) {
       try {
-        const pre = await PreRegistroFlota.findOne({ phone });
+        const pre = await PreRegistroFlota.findUnique({ where: { phone } });
         if (pre?.flota) {
-          await Chofer.updateOne({ phone }, { $set: { flota: pre.flota } });
+          await Chofer.update({ where: { phone }, data: { flota: pre.flota } });
           log.info(`[FLOTA] Chofer ${phone} vinculado a flota "${pre.flota}" desde pre-registro`);
         }
       } catch (e) { log.error("[FLOTA_PREREG]", e.message); }
@@ -771,12 +781,14 @@ app.get("/admin/aprobar-chofer/:phone", requireAuth(["superadmin","admin"]), asy
 app.get("/admin/pendientes-aprobacion", requireAuth(), async (req, res) => {
   try {
     const hoyStr = fechaStrBolivia();
-    const pendientes = await Chofer.find({
-      $or: [
-        { "pagoDiario.pagado": true, "pagoDiario.aprobado": false },
-        { estado: "offline", "pagoDiario.fechaStr": { $ne: hoyStr } },
-      ]
-    }).lean();
+    const pendientes = await Chofer.findMany({
+      where: {
+        OR: [
+          { pagoDiarioPagado: true, pagoDiarioAprobado: false },
+          { estado: "offline", pagoDiarioFechaStr: { not: hoyStr } },
+        ],
+      },
+    });
 
     res.json({
       total: pendientes.length,
@@ -786,7 +798,7 @@ app.get("/admin/pendientes-aprobacion", requireAuth(), async (req, res) => {
         phone: c.phone,
         placa: c.placa,
         estado: c.estado,
-        pagoDiario: c.pagoDiario,
+        pagoDiario: { pagado: c.pagoDiarioPagado, aprobado: c.pagoDiarioAprobado, fecha: c.pagoDiarioFecha, fechaStr: c.pagoDiarioFechaStr, comprobanteValidado: c.pagoDiarioComprobanteValidado },
         linkAprobar: `${CONFIG.APP_URL}/admin/aprobar-chofer/${c.phone}`,
       })),
     });
@@ -822,23 +834,25 @@ app.get("/admin/geocod", requireAuth(), async (req, res) => {
 // Diagnóstico de viaje — ver exactamente qué coords se usaron
 app.get("/admin/viaje-coords/:viajeId", requireAuth(), async (req, res) => {
   try {
-    const viaje = await Viaje.findById(req.params.viajeId).lean();
+    const viaje = await Viaje.findUnique({ where: { id: req.params.viajeId } });
     if (!viaje) return res.json({ error: "Viaje no encontrado" });
-    const linkRuta = generarLinkRutaConParadas(viaje.origen, viaje.paradas || [], viaje.destino);
+    const origen = { lat: viaje.origenLat, lng: viaje.origenLng, nombre: viaje.origenNombre };
+    const destino = { lat: viaje.destinoLat, lng: viaje.destinoLng, nombre: viaje.destinoNombre };
+    const linkRuta = generarLinkRutaConParadas(origen, viaje.paradas || [], destino);
     res.json({
-      viajeId: viaje._id,
+      viajeId: viaje.id,
       estado: viaje.estado,
       origen: {
-        nombre: viaje.origen?.nombre,
-        lat: viaje.origen?.lat,
-        lng: viaje.origen?.lng,
-        mapLink: `https://www.google.com/maps?q=${viaje.origen?.lat},${viaje.origen?.lng}`,
+        nombre: origen.nombre,
+        lat: origen.lat,
+        lng: origen.lng,
+        mapLink: `https://www.google.com/maps?q=${origen.lat},${origen.lng}`,
       },
       destino: {
-        nombre: viaje.destino?.nombre,
-        lat: viaje.destino?.lat,
-        lng: viaje.destino?.lng,
-        mapLink: `https://www.google.com/maps?q=${viaje.destino?.lat},${viaje.destino?.lng}`,
+        nombre: destino.nombre,
+        lat: destino.lat,
+        lng: destino.lng,
+        mapLink: `https://www.google.com/maps?q=${destino.lat},${destino.lng}`,
       },
       linkRutaChofer: linkRuta,
     });
@@ -853,12 +867,14 @@ app.get("/track/:viajeId/pos", async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "https://chatgo.ia.bo");
   res.setHeader("Access-Control-Allow-Methods", "GET");
   try {
-    const viaje = await Viaje.findById(req.params.viajeId).lean();
+    const viaje = await Viaje.findUnique({ where: { id: req.params.viajeId } });
     if (!viaje) return res.json({ error: "not_found" });
+    const origen = { lat: viaje.origenLat, lng: viaje.origenLng, nombre: viaje.origenNombre };
+    const destino = { lat: viaje.destinoLat, lng: viaje.destinoLng, nombre: viaje.destinoNombre };
 
     const activo = ["en_camino","esperando_pasajero","en_curso"].includes(viaje.estado);
     if (!activo) {
-      return res.json({ terminado: true, estado: viaje.estado, destino: viaje.destino });
+      return res.json({ terminado: true, estado: viaje.estado, destino });
     }
 
     const pos = await obtenerUbicacionChofer(viaje.choferTraccarId);
@@ -871,8 +887,8 @@ app.get("/track/:viajeId/pos", async (req, res) => {
       choferNombre: viaje.choferNombre,
       choferPlaca: viaje.choferPlaca,
       tipoVehiculo: viaje.tipoVehiculo || "auto",
-      origen: viaje.origen,
-      destino: viaje.destino,
+      origen,
+      destino,
       distanciaKm: viaje.distanciaKm,
       precioTotal: viaje.precioTotal,
     });
@@ -885,7 +901,7 @@ app.get("/track/:viajeId/pos", async (req, res) => {
 // Página de rastreo HTML con Google Maps
 app.get("/track/:viajeId", async (req, res) => {
   try {
-    const viaje = await Viaje.findById(req.params.viajeId).lean();
+    const viaje = await Viaje.findUnique({ where: { id: req.params.viajeId } });
 
     if (!viaje) {
       res.setHeader("Content-Type", "text/html; charset=utf-8");
@@ -969,11 +985,11 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;backgrou
   </div>
   <div class="info-item info-wide">
     <div class="info-label">📍 Origen</div>
-    <div class="info-value">${viaje.origen?.nombre || "Tu ubicación"}</div>
+    <div class="info-value">${viaje.origenNombre || "Tu ubicación"}</div>
   </div>
   <div class="info-item info-wide">
     <div class="info-label">🏁 Destino</div>
-    <div class="info-value">${viaje.destino?.nombre || "Tu destino"}</div>
+    <div class="info-value">${viaje.destinoNombre || "Tu destino"}</div>
   </div>
   <div class="info-item">
     <div class="info-label">Distancia</div>
@@ -992,15 +1008,15 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;backgrou
 </div>
 
 <script>
-const VID = "${viaje._id}";
+const VID = "${viaje.id}";
 const GMKEY = "${CONFIG.GOOGLE_MAPS_KEY}";
-const ORIGEN = ${JSON.stringify(viaje.origen || {})};
-const DESTINO = ${JSON.stringify(viaje.destino || {})};
+const ORIGEN = ${JSON.stringify({ lat: viaje.origenLat, lng: viaje.origenLng, nombre: viaje.origenNombre })};
+const DESTINO = ${JSON.stringify({ lat: viaje.destinoLat, lng: viaje.destinoLng, nombre: viaje.destinoNombre })};
 let map, taxiMarker, terminado = ${activo ? "false" : "true"};
 let segundos = 0, timer;
 
 function initMap() {
-  const centro = { lat: ${viaje.origen?.lat || -17.3935}, lng: ${viaje.origen?.lng || -66.157} };
+  const centro = { lat: ${viaje.origenLat || -17.3935}, lng: ${viaje.origenLng || -66.157} };
   map = new google.maps.Map(document.getElementById("map"), {
     center: centro, zoom: 14,
     disableDefaultUI: true, zoomControl: true,
@@ -1138,10 +1154,10 @@ if(d.choferes.length===0){html+='<div class="empty">No hay choferes registrados.
 d.choferes.forEach(c=>{let mapaLink="—";if(c.ultimaPos)mapaLink='<a class="maplink" href="https://www.google.com/maps?q='+c.ultimaPos.lat+','+c.ultimaPos.lng+'" target="_blank">🗺️ Ver</a>';const rating=c.ratingCantidad>0?c.ratingPromedio.toFixed(1)+' ('+c.ratingCantidad+')':'—';let clase="chofer";clase+=" estado-"+c.estado;clase+=c.ultimaPos&&c.ultimaPos.hace_min<=15?" con-gps":" sin-gps";clase+=c.pagoAlDia?" pagado":" impago";html+='<tr class="'+clase+'"><td>'+estadoBadge(c.estado)+'</td><td class="truncate" title="'+(c.nombre||"")+'">'+(c.nombre||"—")+'</td><td>'+(c.placa||"—")+'</td><td>'+tipoVehBadge(c.tipoVehiculo)+'</td><td>'+fmtTel(c.phone)+'</td><td>'+(c.wialonId||"—")+'</td><td>'+gpsBadge(c.ultimaPos)+'</td><td>'+pagoBadge(c)+'</td><td>'+c.viajesTotal+'</td><td>'+rating+'</td><td>'+mapaLink+'</td></tr>';});
 html+='</tbody></table></div>';}html+='</div>';
 html+='<div class="section"><h2>🚖 Viajes activos <span class="badge">'+d.viajesActivos.length+'</span></h2>';
-if(d.viajesActivos.length===0){html+='<div class="empty">No hay viajes activos.</div>';}else{html+='<div style="overflow-x:auto"><table><thead><tr><th>Estado</th><th>Tipo</th><th>Pasajero</th><th>Chofer</th><th>Origen</th><th>Destino</th><th>Km</th><th>Precio</th><th>Inicio</th><th>Mapa</th></tr></thead><tbody>';d.viajesActivos.forEach(v=>{html+='<tr><td><span class="estado estado-'+(v.estado==="en_curso"?"libre":"ocupado")+'">'+v.estado+'</span></td><td>'+tipoVehBadge(v.tipoVehiculo||"auto")+'</td><td>'+fmtTel(v.usuarioPhone)+'</td><td>'+(v.choferNombre||"—")+'<br><small>'+(v.choferPlaca||"")+'</small></td><td class="truncate">'+(v.origen?.nombre||"📍")+'</td><td class="truncate">'+(v.destino?.nombre||"🏁")+'</td><td>'+(v.distanciaKm||"—")+' km</td><td>Bs '+(v.precioTotal||"—")+'</td><td>'+fmtHora(v.fechaInicio)+'</td><td><a class="maplink" href="/admin/viaje/'+v._id+'" target="_blank">🗺️</a></td></tr>';});html+='</tbody></table></div>';}html+='</div>';
-if(d.listaEspera.length>0){html+='<div class="section"><h2>⏳ Lista de espera <span class="badge">'+d.listaEspera.length+'</span></h2><div style="overflow-x:auto"><table><thead><tr><th>Pasajero</th><th>Tipo</th><th>Origen</th><th>Destino</th><th>Precio</th><th>Esperando desde</th><th>Notificado</th></tr></thead><tbody>';d.listaEspera.forEach(e=>{html+='<tr><td>'+fmtTel(e.userPhone)+'</td><td>'+(e.tipoVehiculoSolicitado?tipoVehBadge(e.tipoVehiculoSolicitado):"—")+'</td><td class="truncate">'+(e.origen?.nombre||"—")+'</td><td class="truncate">'+(e.destino?.nombre||"—")+'</td><td>Bs '+(e.precio||"—")+'</td><td>'+fmtHora(e.timestamp)+'</td><td>'+(e.notificado?"✅":"⏳")+'</td></tr>';});html+='</tbody></table></div></div>';}
+if(d.viajesActivos.length===0){html+='<div class="empty">No hay viajes activos.</div>';}else{html+='<div style="overflow-x:auto"><table><thead><tr><th>Estado</th><th>Tipo</th><th>Pasajero</th><th>Chofer</th><th>Origen</th><th>Destino</th><th>Km</th><th>Precio</th><th>Inicio</th><th>Mapa</th></tr></thead><tbody>';d.viajesActivos.forEach(v=>{html+='<tr><td><span class="estado estado-'+(v.estado==="en_curso"?"libre":"ocupado")+'">'+v.estado+'</span></td><td>'+tipoVehBadge(v.tipoVehiculo||"auto")+'</td><td>'+fmtTel(v.usuarioPhone)+'</td><td>'+(v.choferNombre||"—")+'<br><small>'+(v.choferPlaca||"")+'</small></td><td class="truncate">'+(v.origenNombre||"📍")+'</td><td class="truncate">'+(v.destinoNombre||"🏁")+'</td><td>'+(v.distanciaKm||"—")+' km</td><td>Bs '+(v.precioTotal||"—")+'</td><td>'+fmtHora(v.fechaInicio)+'</td><td><a class="maplink" href="/admin/viaje/'+v.id+'" target="_blank">🗺️</a></td></tr>';});html+='</tbody></table></div>';}html+='</div>';
+if(d.listaEspera.length>0){html+='<div class="section"><h2>⏳ Lista de espera <span class="badge">'+d.listaEspera.length+'</span></h2><div style="overflow-x:auto"><table><thead><tr><th>Pasajero</th><th>Tipo</th><th>Origen</th><th>Destino</th><th>Precio</th><th>Esperando desde</th><th>Notificado</th></tr></thead><tbody>';d.listaEspera.forEach(e=>{html+='<tr><td>'+fmtTel(e.userPhone)+'</td><td>'+(e.tipoVehiculoSolicitado?tipoVehBadge(e.tipoVehiculoSolicitado):"—")+'</td><td class="truncate">'+(e.origenNombre||"—")+'</td><td class="truncate">'+(e.destinoNombre||"—")+'</td><td>Bs '+(e.precio||"—")+'</td><td>'+fmtHora(e.timestamp)+'</td><td>'+(e.notificado?"✅":"⏳")+'</td></tr>';});html+='</tbody></table></div></div>';}
 html+='<div class="section"><h2>📜 Últimos 20 viajes</h2><div style="overflow-x:auto"><table><thead><tr><th>Fecha</th><th>Estado</th><th>Tipo</th><th>Pasajero</th><th>Chofer</th><th>Km</th><th>Precio</th><th>⭐</th><th>Mapa</th></tr></thead><tbody>';
-d.viajesRecientes.forEach(v=>{const rTxt=v.ratingPasajero?"⭐"+v.ratingPasajero:"—";let clE="offline";if(v.estado==="completado")clE="libre";else if(["en_curso","en_camino","esperando_pasajero","pendiente"].includes(v.estado))clE="ocupado";html+='<tr><td>'+fmtHora(v.createdAt||v.fechaInicio)+'</td><td><span class="estado estado-'+clE+'">'+v.estado+'</span></td><td>'+tipoVehBadge(v.tipoVehiculo||"auto")+'</td><td>'+fmtTel(v.usuarioPhone)+'</td><td>'+(v.choferNombre||"—")+'</td><td>'+(v.distanciaKm||"—")+' km</td><td>Bs '+(v.precioTotal||"—")+'</td><td>'+rTxt+'</td><td><a class="maplink" href="/admin/viaje/'+v._id+'" target="_blank">🗺️</a></td></tr>';});
+d.viajesRecientes.forEach(v=>{const rTxt=v.ratingPasajero?"⭐"+v.ratingPasajero:"—";let clE="offline";if(v.estado==="completado")clE="libre";else if(["en_curso","en_camino","esperando_pasajero","pendiente"].includes(v.estado))clE="ocupado";html+='<tr><td>'+fmtHora(v.createdAt||v.fechaInicio)+'</td><td><span class="estado estado-'+clE+'">'+v.estado+'</span></td><td>'+tipoVehBadge(v.tipoVehiculo||"auto")+'</td><td>'+fmtTel(v.usuarioPhone)+'</td><td>'+(v.choferNombre||"—")+'</td><td>'+(v.distanciaKm||"—")+' km</td><td>Bs '+(v.precioTotal||"—")+'</td><td>'+rTxt+'</td><td><a class="maplink" href="/admin/viaje/'+v.id+'" target="_blank">🗺️</a></td></tr>';});
 html+='</tbody></table></div></div>';
 document.getElementById("content").innerHTML=html;}
 function filtrarChoferes(){const filtro=document.getElementById("filtroChofer").value;const filas=document.querySelectorAll("#tablaChoferes tbody tr");filas.forEach(f=>{let m=true;if(filtro==="libre")m=f.classList.contains("estado-libre");else if(filtro==="ocupado")m=f.classList.contains("estado-ocupado");else if(filtro==="offline")m=f.classList.contains("estado-offline");else if(filtro==="con-gps")m=f.classList.contains("con-gps");else if(filtro==="sin-gps")m=f.classList.contains("sin-gps");else if(filtro==="pagado")m=f.classList.contains("pagado");else if(filtro==="impago")m=f.classList.contains("impago");f.style.display=m?"":"none";});}
@@ -1158,7 +1174,7 @@ cargar();
 async function getFlotaPorToken(token) {
   if (!token) return null;
   // Buscar la flota por su token en la base de datos (colección flotas)
-  const flota = await Flota.findOne({ token: token.trim(), activa: true }).lean();
+  const flota = await Flota.findFirst({ where: { token: token.trim(), activa: true } });
   return flota ? flota.codigo : null;
 }
 
@@ -1172,14 +1188,17 @@ app.get("/admin/flota-data", async (req, res) => {
     const hoyStr = fechaStrBolivia();
     const inicioHoy = new Date(); inicioHoy.setHours(0, 0, 0, 0);
 
-    const choferes = await Chofer.find({ flota }).lean();
+    const choferes = await Chofer.findMany({ where: { flota } });
     const phones = choferes.map(c => c.phone);
 
-    const viajesHoy = await Viaje.find({
-      choferPhone: { $in: phones },
-      estado: "completado",
-      fechaFin: { $gte: inicioHoy },
-    }).sort({ fechaFin: -1 }).lean();
+    const viajesHoy = await Viaje.findMany({
+      where: {
+        choferPhone: { in: phones },
+        estado: "completado",
+        fechaFin: { gte: inicioHoy },
+      },
+      orderBy: { fechaFin: "desc" },
+    });
 
     const choferesData = await Promise.all(choferes.map(async c => {
       let pos = null;
@@ -1198,8 +1217,8 @@ app.get("/admin/flota-data", async (req, res) => {
     const carreras = viajesHoy.map(v => ({
       hora: v.fechaFin ? new Date(v.fechaFin).toLocaleTimeString("es-BO", { hour: "2-digit", minute: "2-digit", timeZone: "America/La_Paz" }) : "—",
       chofer: v.choferNombre || "—",
-      origen: v.origen?.nombre || "📍",
-      destino: v.destino?.nombre || "🏁",
+      origen: v.origenNombre || "📍",
+      destino: v.destinoNombre || "🏁",
       km: v.distanciaKm || "—",
       cobro: v.precioTotal || 0,
     }));

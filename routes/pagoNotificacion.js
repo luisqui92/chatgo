@@ -22,14 +22,19 @@ module.exports = function (app, { Chofer, NotificacionPago, enviarMensaje, envia
     }
     try {
       const phone = CONFIG.CHOFER_PRUEBA_PHONE;
-      await Chofer.findOneAndUpdate({ phone }, {
-        estado: "offline",
-        "pagoDiario.fecha": null,
-        "pagoDiario.fechaStr": null,
-        "pagoDiario.pagado": false,
-        "pagoDiario.aprobado": false,
-        "pagoDiario.comprobanteValidado": false,
-      });
+      try {
+        await Chofer.update({
+          where: { phone },
+          data: {
+            estado: "offline",
+            pagoDiarioFecha: null,
+            pagoDiarioFechaStr: null,
+            pagoDiarioPagado: false,
+            pagoDiarioAprobado: false,
+            pagoDiarioComprobanteValidado: false,
+          },
+        });
+      } catch (eUpd) { /* chofer de prueba no encontrado — ignorar */ }
       await deleteSession(phone);
       log.info(`[PAGO_YAPE] Chofer de prueba (+${phone}) reseteado`);
       res.json({ ok: true, phone });
@@ -54,18 +59,21 @@ module.exports = function (app, { Chofer, NotificacionPago, enviarMensaje, envia
       const monto = extraerMonto(texto);
       const hoyStr = fechaStrBolivia();
 
-      const pendientes = await Chofer.find({
-        "pagoDiario.pagado": true,
-        "pagoDiario.aprobado": false,
-        "pagoDiario.comprobanteValidado": true,
-        "pagoDiario.fechaStr": hoyStr,
-      }).sort({ "pagoDiario.fecha": 1 });
+      const pendientes = await Chofer.findMany({
+        where: {
+          pagoDiarioPagado: true,
+          pagoDiarioAprobado: false,
+          pagoDiarioComprobanteValidado: true,
+          pagoDiarioFechaStr: hoyStr,
+        },
+        orderBy: { pagoDiarioFecha: "asc" },
+      });
 
       if (!pendientes.length) {
         // La notificación llegó antes que la foto del comprobante (es lo normal: el banco
         // avisa al instante, el chofer recién manda la foto después). La guardamos un rato
         // para que el flujo de validación del comprobante la matchee cuando llegue.
-        await NotificacionPago.create({ texto, monto });
+        await NotificacionPago.create({ data: { texto, monto } });
         log.info("[PAGO_YAPE] Sin choferes esperando aprobación todavía, notificación guardada para matchear después");
         return;
       }
@@ -86,11 +94,14 @@ module.exports = function (app, { Chofer, NotificacionPago, enviarMensaje, envia
         return;
       }
 
-      await Chofer.findByIdAndUpdate(candidato._id, {
-        "pagoDiario.aprobado": true,
-        "pagoDiario.fecha": new Date(),
-        "pagoDiario.fechaStr": hoyStr,
-        estado: "libre",
+      await Chofer.update({
+        where: { id: candidato.id },
+        data: {
+          pagoDiarioAprobado: true,
+          pagoDiarioFecha: new Date(),
+          pagoDiarioFechaStr: hoyStr,
+          estado: "libre",
+        },
       });
       await enviarBotones(candidato.phone, `✅ *Pago confirmado automáticamente!*\n🚖 Ya estás LIBRE para recibir viajes.`, [
         { id: "chofer_ocupado", title: "🔴 Ocupado" },
