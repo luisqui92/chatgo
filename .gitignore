@@ -1,4 +1,7 @@
 node_modules
 
+# Secretos / credenciales — nunca commitear
+.env
+
 # Prisma local dev env (credenciales de MySQL local, no producción)
 .env.prisma.local
