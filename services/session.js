@@ -1,7 +1,8 @@
 // ChatGo — Sesiones, Rate Limit, Lista de Espera
+const crypto = require("crypto");
 const { CONFIG, log, detectarCiudadPorCoords } = require("../config");
 const { horaStrBolivia, fechaStrBolivia } = require("../services/utils");
-const { SessionState, ListaEspera, RateLimit } = require("../db/models");
+const { SessionState, ListaEspera, RateLimit, prisma } = require("../db/models");
 
 const sessionCache = new Map();
 const processedMsgIds = new Map();
@@ -19,7 +20,7 @@ function yaProcesoMensaje(msgId) {
 
 async function getSession(phone) {
   if (sessionCache.has(phone)) return sessionCache.get(phone);
-  const doc = await SessionState.findOne({ phone });
+  const doc = await SessionState.findUnique({ where: { phone } });
   const data = doc ? doc.data : null;
   if (data) sessionCache.set(phone, data);
   return data;
@@ -27,11 +28,11 @@ async function getSession(phone) {
 
 async function setSession(phone, data) {
   sessionCache.set(phone, data);
-  await SessionState.findOneAndUpdate(
-    { phone },
-    { phone, data },
-    { upsert: true, new: true }
-  );
+  await SessionState.upsert({
+    where: { phone },
+    update: { data },
+    create: { phone, data },
+  });
 }
 
 async function updateSession(phone, patch) {
@@ -43,7 +44,7 @@ async function updateSession(phone, patch) {
 
 async function deleteSession(phone) {
   sessionCache.delete(phone);
-  await SessionState.deleteOne({ phone });
+  await SessionState.deleteMany({ where: { phone } });
 }
 
 async function ensureSession(phone, defaults = { step: "inicio" }) {
@@ -55,54 +56,46 @@ async function ensureSession(phone, defaults = { step: "inicio" }) {
 async function addListaEspera(userPhone, session) {
   const tipoSolicitado = session.tipoVehiculoSolicitado || null;
   const ciudad = detectarCiudadPorCoords(session.origen?.lat, session.origen?.lng) || session.ciudadUsuario || null;
-  const existente = await ListaEspera.findOne({ userPhone });
-  if (existente) {
-    existente.ciudad = ciudad;
-    existente.origen = session.origen;
-    existente.destino = session.destino;
-    existente.distancia = session.distancia;
-    existente.precio = session.precio;
-    existente.precioPorKm = session.precioPorKm;
-    existente.tipoVehiculoSolicitado = tipoSolicitado;
-    existente.ofertaActivaWialonId = null;
-    existente.ofertaActivaHasta = null;
-    await existente.save();
-    return existente;
-  }
-  return await ListaEspera.create({
-    userPhone,
+  const data = {
     ciudad,
-    origen: session.origen,
-    destino: session.destino,
-    distancia: session.distancia,
-    precio: session.precio,
-    precioPorKm: session.precioPorKm,
+    origenLat: session.origen?.lat ?? null,
+    origenLng: session.origen?.lng ?? null,
+    origenNombre: session.origen?.nombre ?? null,
+    destinoLat: session.destino?.lat ?? null,
+    destinoLng: session.destino?.lng ?? null,
+    destinoNombre: session.destino?.nombre ?? null,
+    distancia: session.distancia ?? null,
+    precio: session.precio ?? null,
+    precioPorKm: session.precioPorKm ?? null,
     tipoVehiculoSolicitado: tipoSolicitado,
-    timestamp: new Date(),
+    ofertaActivaWialonId: null,
+    ofertaActivaHasta: null,
+  };
+  return await ListaEspera.upsert({
+    where: { userPhone },
+    update: data,
+    create: { userPhone, timestamp: new Date(), ...data },
   });
 }
 
 async function removeListaEspera(userPhone) {
-  await ListaEspera.deleteOne({ userPhone });
+  await ListaEspera.deleteMany({ where: { userPhone } });
 }
 
 async function checkRateLimit(phone) {
   const horaStr = horaStrBolivia();
-  const doc = await RateLimit.findOneAndUpdate(
-    { phone },
-    [
-      {
-        $set: {
-          phone,
-          horaStr,
-          count: {
-            $cond: [{ $eq: ["$horaStr", horaStr] }, { $add: ["$count", 1] }, 1],
-          },
-        },
-      },
-    ],
-    { upsert: true, new: true }
-  );
+  const newId = crypto.randomUUID();
+  // Upsert atómico con incremento condicional (equivalente al pipeline de Mongo):
+  // si ya existía un registro de esta misma hora, suma 1; si es otra hora, reinicia en 1.
+  await prisma.$executeRaw`
+    INSERT INTO ratelimits (id, phone, horaStr, count, createdAt, updatedAt)
+    VALUES (${newId}, ${phone}, ${horaStr}, 1, NOW(), NOW())
+    ON DUPLICATE KEY UPDATE
+      count = IF(horaStr = ${horaStr}, count + 1, 1),
+      horaStr = ${horaStr},
+      updatedAt = NOW()
+  `;
+  const doc = await RateLimit.findUnique({ where: { phone } });
   return doc.count <= CONFIG.MAX_MENSAJES_POR_HORA;
 }
 
