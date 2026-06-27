@@ -241,9 +241,9 @@ const COLECCIONES = [
     modelo: Demanda,
     transform: (d) => ({
       id: d._id.toString(),
-      zona: d.zona,
-      hora: d.hora,
-      diaSemana: d.diaSemana,
+      zona: d.zona ?? "desconocida",
+      hora: d.hora ?? 0,
+      diaSemana: d.diaSemana ?? 0,
       cantidad: d.cantidad ?? 1,
       ultimaActualizacion: d.ultimaActualizacion ?? new Date(),
     }),
