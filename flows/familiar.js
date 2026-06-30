@@ -251,7 +251,6 @@ async function manejarFlujoFamiliar(phone, mensaje, buttonId) {
   }
 
   // ── Salir del flujo familiar ──────────────────────────────────────────────
-  const t = texto.toLowerCase().trim();
   if (t === "salir" || t === "volver" || t === "menu" || t === "menú" || buttonId === "familiar_salir") {
     await deleteSession(phone);
     await enviarMensaje(phone, "✅ Saliste del modo familiar.\n\nEnviá tu ubicación o escribí a dónde querés ir para pedir un viaje 🚖");
