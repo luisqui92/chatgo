@@ -266,7 +266,8 @@ function _normalizarPhone(num) {
 
 async function _iniciarVinculacion(familiarPhone, adultoPhone, session) {
   const familiar = await Usuario.findUnique({ where: { phone: familiarPhone } });
-  const nombreFamiliar = familiar?.nombre || familiarPhone;
+  // Preferir el nombre real de WhatsApp (guardado en sesión) sobre el nombre del DB
+  const nombreFamiliar = session?.waName || familiar?.nombre || familiarPhone;
 
   await updateSession(adultoPhone, {
     step: "familiar_confirmando_vinculo",

@@ -6,7 +6,7 @@ const http = require("http");
 const os = require("os");
 const { CONFIG, log } = require("../config");
 const { Usuario, Chofer, Viaje, ListaEspera, CodigoPromo, LocationReference } = require("../db/models");
-const { getSession, checkRateLimit, sessionCache, yaProcesoMensaje } = require("../services/session");
+const { getSession, updateSession, checkRateLimit, sessionCache, yaProcesoMensaje } = require("../services/session");
 const { enviarMensaje, enviarBotones, verificarFirmaMeta } = require("../services/whatsapp");
 const { procesarMensajeUsuario } = require("../flows/pasajero");
 const { procesarMensajeChofer } = require("../flows/chofer");
@@ -51,6 +51,11 @@ app.post("/webhook", limitWebhook, async (req, res) => {
         const mediaId = msg.image?.id || null;
 
         log.info(`[WEBHOOK] From: ${phone}, Type: ${msg.type}, Text: "${msg.text?.body || ""}", Button: ${buttonId || "-"}`);
+
+        // Guardar nombre de perfil WhatsApp en sesión (viene en value.contacts, no en msg)
+        const waContacts = req.body.entry?.[0]?.changes?.[0]?.value?.contacts;
+        const waName = waContacts?.find(c => c.wa_id === phone)?.profile?.name;
+        if (waName) await updateSession(phone, { waName });
 
         const dentroLimite = await checkRateLimit(phone);
         if (!dentroLimite) { log.warn(`[WEBHOOK] Rate limit excedido para ${phone}`); continue; }
