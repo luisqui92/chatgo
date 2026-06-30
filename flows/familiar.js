@@ -54,14 +54,14 @@ async function manejarFlujoFamiliar(phone, mensaje, buttonId) {
     // Si viene el teléfono directo en el mensaje ("vincular con 59171234567")
     const matchInline = texto.match(/vincular\s+con\s+(\d{7,15})/i);
     if (matchInline) {
-      return await _iniciarVinculacion(phone, matchInline[1], session);
+      return await _iniciarVinculacion(phone, _normalizarPhone(matchInline[1]), session);
     }
     await updateSession(phone, { step: "familiar_esperando_telefono" });
     await enviarMensaje(phone,
       "👴 *Modo Familiar — ChatGo*\n\n" +
       "¿Cuál es el número de WhatsApp de tu familiar?\n\n" +
-      "Escribe el número con código de país, sin espacios ni signos.\n" +
-      "Ej: _59171234567_"
+      "Escribe solo el número, sin espacios ni signos.\n" +
+      "Ej: _71234567_"
     );
     return;
   }
@@ -70,10 +70,10 @@ async function manejarFlujoFamiliar(phone, mensaje, buttonId) {
   if (step === "familiar_esperando_telefono") {
     const num = texto.replace(/\D/g, "");
     if (num.length < 7) {
-      await enviarMensaje(phone, "❌ Número no válido. Escribe el número con código de país.\nEj: _59171234567_");
+      await enviarMensaje(phone, "❌ Número no válido. Escribe solo el número de celular.\nEj: _71234567_");
       return;
     }
-    return await _iniciarVinculacion(phone, num, session);
+    return await _iniciarVinculacion(phone, _normalizarPhone(num), session);
   }
 
   // ── Adulto mayor confirma/rechaza la vinculación ─────────────────────────
@@ -230,6 +230,13 @@ async function manejarFlujoFamiliar(phone, mensaje, buttonId) {
 }
 
 // ─── HELPERS PRIVADOS ─────────────────────────────────────────────────────────
+
+// Agrega 591 (Bolivia) si el número no trae código de país
+function _normalizarPhone(num) {
+  const n = String(num).replace(/\D/g, "");
+  if (n.startsWith("591") && n.length >= 11) return n;
+  return "591" + n;
+}
 
 async function _iniciarVinculacion(familiarPhone, adultoPhone, session) {
   const familiar = await Usuario.findUnique({ where: { phone: familiarPhone } });
