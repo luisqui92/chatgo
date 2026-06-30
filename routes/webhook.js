@@ -46,7 +46,7 @@ app.post("/webhook", limitWebhook, async (req, res) => {
         }
 
         const phone = msg.from;
-        const buttonId = msg.interactive?.button_reply?.id || null;
+        const buttonId = msg.interactive?.button_reply?.id || msg.button?.payload || null;
         const textoUpper = msg.text?.body?.trim().toUpperCase() || "";
         const mediaId = msg.image?.id || null;
 

@@ -12,7 +12,7 @@
 const { log } = require("../config");
 const { Usuario } = require("../db/models");
 const { getSession, updateSession, deleteSession } = require("../services/session");
-const { enviarMensaje, enviarBotones } = require("../services/whatsapp");
+const { enviarMensaje, enviarBotones, enviarPlantillaVincular } = require("../services/whatsapp");
 const { obtenerDireccion } = require("../services/google");
 const {
   vincularFamiliar, cuentasQueGestiona,
@@ -268,25 +268,27 @@ async function _iniciarVinculacion(familiarPhone, adultoPhone, session) {
   const familiar = await Usuario.findUnique({ where: { phone: familiarPhone } });
   const nombreFamiliar = familiar?.nombre || familiarPhone;
 
-  // Guardar solicitud pendiente en la sesión del adulto.
-  // Los botones se envían cuando el adulto escriba por primera vez (ver handler familiar_confirmando_vinculo).
   await updateSession(adultoPhone, {
     step: "familiar_confirmando_vinculo",
     familiarPhone,
     nombreFamiliar,
   });
-
   await updateSession(familiarPhone, { step: "familiar_esperando_confirmacion", adultoPhone });
 
-  const botNum = process.env.WHATSAPP_NUMBER || "59177908529";
-  const link = `https://wa.me/${botNum}?text=hola`;
+  const enviado = await enviarPlantillaVincular(adultoPhone, nombreFamiliar);
 
-  await enviarMensaje(familiarPhone,
-    `📨 *Solicitud lista*\n\n` +
-    `Reenviá este mensaje a *${adultoPhone}* para que acepte la vinculación:\n\n` +
-    `👇 *Toca este link para conectarte con ChatGo:*\n${link}\n\n` +
-    `_Tu familiar solo tiene que tocar el link y presionar Enviar. Después le aparecerá la confirmación automáticamente._`
-  );
+  if (enviado) {
+    await enviarMensaje(familiarPhone,
+      `📨 *Solicitud enviada*\n\nLe llegó una notificación a *${adultoPhone}* para que acepte la vinculación.\n\n_Te aviso cuando confirme._ ✅`
+    );
+  } else {
+    // Fallback: link wa.me si la plantilla falla (ej: número no registrado en WhatsApp)
+    const botNum = process.env.WHATSAPP_NUMBER || "59177908529";
+    const link = `https://wa.me/${botNum}?text=hola`;
+    await enviarMensaje(familiarPhone,
+      `📨 *Solicitud lista*\n\nReenviá este link a *${adultoPhone}* para que acepte:\n\n${link}`
+    );
+  }
 }
 
 async function _mostrarMenuCuenta(familiarPhone, adultoPhone, session) {

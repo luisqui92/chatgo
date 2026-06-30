@@ -255,4 +255,48 @@ function verificarFirmaMeta(req) {
   }
 }
 
-module.exports = { enviarMensaje, enviarBotones, enviarImagen, enviarVoz, reenviarImagenPorId, reenviarAudioPorId, reenviarVideoPorId, reenviarUbicacion, reenviarDocumentoPorId, relayMensajeChat, descargarImagenMeta, obtenerUrlMedia, verificarFirmaMeta };
+async function enviarPlantillaVincular(adultoPhone, nombreFamiliar) {
+  try {
+    await axios.post(
+      `https://graph.facebook.com/v19.0/${CONFIG.WHATSAPP_PHONE_ID}/messages`,
+      {
+        messaging_product: "whatsapp",
+        to: adultoPhone,
+        type: "template",
+        template: {
+          name: "vincular_cuenta_familiar",
+          language: { code: "es_EC" },
+          components: [
+            {
+              type: "body",
+              parameters: [
+                { type: "text", text: " " },            // {{1}} placeholder
+                { type: "text", text: nombreFamiliar },  // {{2}} = nombre del familiar
+              ],
+            },
+            {
+              type: "button",
+              sub_type: "quick_reply",
+              index: "0",
+              parameters: [{ type: "payload", payload: "familiar_confirmar_vinculo" }],
+            },
+            {
+              type: "button",
+              sub_type: "quick_reply",
+              index: "1",
+              parameters: [{ type: "payload", payload: "familiar_rechazar_vinculo" }],
+            },
+          ],
+        },
+      },
+      { headers: { Authorization: `Bearer ${CONFIG.WHATSAPP_TOKEN}` }, timeout: CONFIG.TIMEOUT_META }
+    );
+    log.info(`[WSP] enviarPlantillaVincular: enviado a ${adultoPhone}`);
+    return true;
+  } catch (e) {
+    log.error("[WSP] enviarPlantillaVincular:", e.response?.data?.error?.message || e.message, JSON.stringify(e.response?.data));
+    return false;
+  }
+}
+
+module.exports = { enviarMensaje, enviarBotones, enviarImagen, enviarVoz, reenviarImagenPorId, reenviarAudioPorId, reenviarVideoPorId, reenviarUbicacion, reenviarDocumentoPorId, relayMensajeChat, descargarImagenMeta, obtenerUrlMedia, verificarFirmaMeta, enviarPlantillaVincular };
