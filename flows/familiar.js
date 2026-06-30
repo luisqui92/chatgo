@@ -89,6 +89,21 @@ async function manejarFlujoFamiliar(phone, mensaje, buttonId) {
 
   // ── Adulto mayor confirma/rechaza la vinculación ─────────────────────────
   if (step === "familiar_confirmando_vinculo") {
+    // Si el adulto escribió texto (tocó el link y mandó "hola") → enviarle los botones ahora
+    if (!buttonId) {
+      const { familiarPhone: fPhone, nombreFamiliar: nFam } = session;
+      const adulto = await Usuario.findUnique({ where: { phone } }).catch(() => null);
+      await enviarBotones(phone,
+        `👋 Hola${adulto?.nombre ? `, *${adulto.nombre}*` : ""}.\n\n` +
+        `*${nFam || fPhone}* quiere vincularse a tu cuenta de ChatGo para ayudarte a configurar tus lugares favoritos y recargar saldo.\n\n` +
+        `¿Aceptas?`,
+        [
+          { id: "familiar_confirmar_vinculo", title: "✅ Sí, acepto" },
+          { id: "familiar_rechazar_vinculo",  title: "❌ No acepto" },
+        ]
+      );
+      return;
+    }
     if (buttonId === "familiar_confirmar_vinculo") {
       const { familiarPhone, nombreFamiliar } = session;
       const nombreFamiliarFinal = nombreFamiliar || familiarPhone;
@@ -253,31 +268,25 @@ async function _iniciarVinculacion(familiarPhone, adultoPhone, session) {
   const familiar = await Usuario.findUnique({ where: { phone: familiarPhone } });
   const nombreFamiliar = familiar?.nombre || familiarPhone;
 
-  // Verificar si el adulto ya existe en el sistema
-  const adulto = await Usuario.findUnique({ where: { phone: adultoPhone } });
-
-  await updateSession(familiarPhone, { step: "familiar_esperando_confirmacion", adultoPhone });
-  await enviarMensaje(familiarPhone,
-    `📨 Se enviará una solicitud de vinculación a *${adultoPhone}*.\n\n` +
-    "Tu familiar deberá aceptarla para que puedas gestionar su cuenta."
-  );
-
-  // Enviar solicitud al adulto mayor
-  await enviarBotones(adultoPhone,
-    `👋 Hola${adulto?.nombre ? `, *${adulto.nombre}*` : ""}.\n\n` +
-    `*${nombreFamiliar}* quiere vincularse a tu cuenta de ChatGo para ayudarte a configurar tus lugares favoritos y recargar saldo.\n\n` +
-    `¿Aceptas?`,
-    [
-      { id: "familiar_confirmar_vinculo", title: "✅ Sí, acepto" },
-      { id: "familiar_rechazar_vinculo",  title: "❌ No acepto" },
-    ]
-  );
-
+  // Guardar solicitud pendiente en la sesión del adulto.
+  // Los botones se envían cuando el adulto escriba por primera vez (ver handler familiar_confirmando_vinculo).
   await updateSession(adultoPhone, {
     step: "familiar_confirmando_vinculo",
     familiarPhone,
     nombreFamiliar,
   });
+
+  await updateSession(familiarPhone, { step: "familiar_esperando_confirmacion", adultoPhone });
+
+  const botNum = process.env.WHATSAPP_NUMBER || "59177908529";
+  const link = `https://wa.me/${botNum}?text=hola`;
+
+  await enviarMensaje(familiarPhone,
+    `📨 *Solicitud lista*\n\n` +
+    `Reenviá este mensaje a *${adultoPhone}* para que acepte la vinculación:\n\n` +
+    `👇 *Toca este link para conectarte con ChatGo:*\n${link}\n\n` +
+    `_Tu familiar solo tiene que tocar el link y presionar Enviar. Después le aparecerá la confirmación automáticamente._`
+  );
 }
 
 async function _mostrarMenuCuenta(familiarPhone, adultoPhone, session) {
