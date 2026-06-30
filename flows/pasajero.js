@@ -8,7 +8,8 @@ const { getSession, setSession, updateSession, deleteSession, ensureSession, rem
 const { enviarMensaje: enviarMensajeRaw, enviarBotones: enviarBotonesRaw, relayMensajeChat, obtenerUrlMedia } = require("../services/whatsapp");
 const { evaluarPrecisionReferencia, detectarYExtrarCoordsMaps, normalizarReferencia, guardarReferenciaVoz, geocodificarConMemoria, calcularDistancia, calcularDistanciaConParadas, obtenerDireccion, buscarReferenciaEnMemoria } = require("../services/google");
 const { transcribirAudio, extraerUbicaciones } = require("../services/openai");
-const { promoCodigosActiva, crearCodigoPromo, validarCodigoPromo, enviarCodigoDescuento, esIntentoCancelar, esPedidoAyuda, detectarIncompatibilidadMoto, construirBotonesHistorial, sugerenciaPorHora, buscarEsquinaMapeada, guardarEsquina, obtenerLugarPersonal, guardarLugarPersonal, evaluarReferencia, mensajePidiendoReferencia, calcularPrecio } = require("../services/utils");
+const { promoCodigosActiva, crearCodigoPromo, validarCodigoPromo, enviarCodigoDescuento, esIntentoCancelar, esPedidoAyuda, detectarIncompatibilidadMoto, construirBotonesHistorial, sugerenciaPorHora, buscarEsquinaMapeada, guardarEsquina, obtenerLugarPersonal, guardarLugarPersonal, obtenerLugarOtros, evaluarReferencia, mensajePidiendoReferencia, calcularPrecio } = require("../services/utils");
+const { esMensajeFamiliar, manejarFlujoFamiliar } = require("../flows/familiar");
 const { calcularMultiplierSurge, aplicarSurge, textoSurge } = require("../ai");
 const { generarAudioDesdeTexto } = require("../services/openai");
 const { enviarVoz } = require("../services/whatsapp");
@@ -313,10 +314,15 @@ async function mostrarMenuLugares(phone) {
   
   let texto = "📌 *Mis lugares guardados*\n\n";
   texto += `🏠 *Casa:* ${lf.casa?.nombre || "_no guardada_"}\n`;
-  texto += `💼 *Trabajo:* ${lf.trabajo?.nombre || "_no guardado_"}\n\n`;
-  texto += "Cuando los tengas guardados, podés decir por audio:\n";
+  texto += `💼 *Trabajo:* ${lf.trabajo?.nombre || "_no guardado_"}\n`;
+  const otros = lf.otros || [];
+  if (otros.length) {
+    texto += "\n*Otros lugares:*\n";
+    for (const o of otros) texto += `• _${o.alias}_: ${o.nombre || o.alias}\n`;
+  }
+  texto += "\nCuando los tengas guardados, podés decir por audio:\n";
   texto += '• 🎤 _"llévame a casa"_\n';
-  texto += '• 🎤 _"salgo del trabajo"_\n\n';
+  texto += '• 🎤 _"quiero ir a la iglesia"_\n\n';
   texto += "¿Qué querés hacer?";
   
   const botones = [];
@@ -330,11 +336,18 @@ async function mostrarMenuLugares(phone) {
 }
 
 async function procesarMensajeUsuario(phone, mensaje, buttonId) {
+  // ── Flujo familiar (vincular, configurar lugares de adulto mayor) ──────────
+  const sesionFamiliar = await getSession(phone);
+  const textoFamiliar = mensaje?.text?.body?.trim() || "";
+  if (await esMensajeFamiliar(phone, textoFamiliar, buttonId, sesionFamiliar)) {
+    return await manejarFlujoFamiliar(phone, mensaje, buttonId);
+  }
+
   let usuario = await Usuario.findUnique({ where: { phone } });
 
   // Términos y condiciones
   // Bloque de onboarding (términos + nombre): entrar si NO terminó el setup
-  const sesionPrevia = await getSession(phone);
+  const sesionPrevia = sesionFamiliar;
 
   // Expirar sesiones de confirmación viejas: si quedó un viaje a medio confirmar
   // (el pasajero no respondió "sí/no" y se fue), no debe mezclarse con un pedido
@@ -1068,16 +1081,25 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
       const detOrigen = ubicaciones.origenDetalle;
       const detDestino = ubicaciones.destinoDetalle;
       
-      // ─── CASO 1: Lugar personal (mi casa, mi trabajo) ───────────────────
-      // Si el usuario dijo "casa" o "trabajo", buscar en sus lugares guardados
+      // ─── CASO 1: Lugar personal (mi casa, mi trabajo, o alias favorito) ──
+      // Primero verifica casa/trabajo; si no, busca en otros[] por alias.
       async function resolverPersonal(det, esOrigen) {
-        if (!det || det.tipo !== "personal" || !det.lugar_personal) return null;
-        const guardado = await obtenerLugarPersonal(phone, det.lugar_personal);
-        if (guardado && guardado.lat && guardado.lng) {
-          return { coords: { lat: guardado.lat, lng: guardado.lng, nombre: guardado.nombre || det.lugar_personal } };
+        if (!det) return null;
+        if (det.tipo === "personal" && det.lugar_personal) {
+          const guardado = await obtenerLugarPersonal(phone, det.lugar_personal);
+          if (guardado && guardado.lat && guardado.lng) {
+            return { coords: { lat: guardado.lat, lng: guardado.lng, nombre: guardado.nombre || det.lugar_personal } };
+          }
+          return { necesitaGuardar: true, tipo: det.lugar_personal };
         }
-        // No tiene guardado — pedirle que mande el pin para guardarlo
-        return { necesitaGuardar: true, tipo: det.lugar_personal };
+        // Alias personalizado (iglesia, casa de Ana, hospital, etc.)
+        if (det.texto) {
+          const alias = await obtenerLugarOtros(phone, det.texto);
+          if (alias && alias.lat && alias.lng) {
+            return { coords: { lat: alias.lat, lng: alias.lng, nombre: alias.nombre || alias.alias } };
+          }
+        }
+        return null;
       }
       
       const personalOrigen = await resolverPersonal(detOrigen, true);

@@ -138,6 +138,41 @@ async function avisarSaldoBajoAFamiliares(adultoPhone, umbral = 20) {
   }
 }
 
+// ─── GESTIÓN DE LUGARES FAMILIARES ─────────────────────────────────────────
+const { guardarLugarOtros, eliminarLugarOtros } = require("../services/utils");
+
+async function _verificarFamiliar(adultoPhone, familiarPhone) {
+  const u = await Usuario.findUnique({ where: { phone: adultoPhone } });
+  if (!u) return { ok: false, motivo: "no_existe" };
+  const esFamiliar = u.familiaresVinculados?.some(f => f.phone === familiarPhone);
+  if (!esFamiliar) return { ok: false, motivo: "no_autorizado", usuario: u };
+  return { ok: true, usuario: u };
+}
+
+// Familiar agrega un lugar personalizado a la cuenta del adulto mayor.
+async function agregarLugarFamiliar(adultoPhone, familiarPhone, alias, lat, lng, nombre) {
+  const { ok, motivo } = await _verificarFamiliar(adultoPhone, familiarPhone);
+  if (!ok) return { ok: false, motivo };
+  await guardarLugarOtros(adultoPhone, alias, lat, lng, nombre);
+  return { ok: true };
+}
+
+// Familiar elimina un lugar personalizado.
+async function eliminarLugarFamiliar(adultoPhone, familiarPhone, alias) {
+  const { ok, motivo } = await _verificarFamiliar(adultoPhone, familiarPhone);
+  if (!ok) return { ok: false, motivo };
+  await eliminarLugarOtros(adultoPhone, alias);
+  return { ok: true };
+}
+
+// Familiar lista los lugares guardados del adulto mayor.
+async function listarLugaresFamiliar(adultoPhone, familiarPhone) {
+  const { ok, motivo, usuario } = await _verificarFamiliar(adultoPhone, familiarPhone);
+  if (!ok) return { ok: false, motivo };
+  const lf = usuario.lugaresFrecuentes || {};
+  return { ok: true, lugares: { casa: lf.casa || null, trabajo: lf.trabajo || null, otros: lf.otros || [] } };
+}
+
 module.exports = {
   responderPorVoz,
   limpiarTextoParaVoz,
@@ -146,4 +181,7 @@ module.exports = {
   recargarSaldo,
   descontarViaje,
   avisarSaldoBajoAFamiliares,
+  agregarLugarFamiliar,
+  eliminarLugarFamiliar,
+  listarLugaresFamiliar,
 };

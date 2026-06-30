@@ -615,4 +615,48 @@ function calcularPrecio(km, tipoVehiculo) {
 }
 
 
-module.exports = { fechaStrBolivia, horaStrBolivia, formatearFechaPromo, promoCodigosActiva, enPromoGratis, choferPagoAlDia, generarCodigoUnico, crearCodigoPromo, validarCodigoPromo, consumirCodigoPromo, mensajeCodigoEntregado, enviarCodigoDescuento, validarPlaca, normalizarPlaca, acortarParaBoton, esIntentoCancelar, esPedidoAyuda, esPlusCode, detectarIncompatibilidadMoto, obtenerUltimoViaje, obtenerDestinosFrecuentes, guardarRutaFrecuente, sugerenciaPorHora, construirBotonesHistorial, escapeHtml, normalizarNombreCalle, llaveEsquina, buscarEsquinaMapeada, guardarEsquina, obtenerLugarPersonal, guardarLugarPersonal, evaluarReferencia, mensajePidiendoReferencia, calcularPrecio, validarEsquinaConGoogle };
+// ─── LUGARES PERSONALIZADOS (otros[]) ────────────────────────────────────────
+
+// Busca un alias en lugaresFrecuentes.otros[] del usuario (case-insensitive).
+async function obtenerLugarOtros(phone, alias) {
+  try {
+    const { Usuario } = require("../db/models");
+    const u = await Usuario.findUnique({ where: { phone } });
+    if (!u || !u.lugaresFrecuentes?.otros?.length) return null;
+    const norm = String(alias).toLowerCase().trim();
+    return u.lugaresFrecuentes.otros.find(o => o.alias?.toLowerCase().trim() === norm) || null;
+  } catch (e) { return null; }
+}
+
+// Guarda (o actualiza) un lugar en lugaresFrecuentes.otros[].
+async function guardarLugarOtros(phone, alias, lat, lng, nombre) {
+  try {
+    const { Usuario } = require("../db/models");
+    const u = await Usuario.findUnique({ where: { phone } });
+    if (!u) return false;
+    const lf = u.lugaresFrecuentes || {};
+    const otros = lf.otros || [];
+    const norm = String(alias).toLowerCase().trim();
+    const idx = otros.findIndex(o => o.alias?.toLowerCase().trim() === norm);
+    const entrada = { alias: norm, lat, lng, nombre };
+    if (idx >= 0) otros[idx] = entrada; else otros.push(entrada);
+    await Usuario.update({ where: { phone }, data: { lugaresFrecuentes: { ...lf, otros } } });
+    return true;
+  } catch (e) { return false; }
+}
+
+// Elimina un alias de lugaresFrecuentes.otros[].
+async function eliminarLugarOtros(phone, alias) {
+  try {
+    const { Usuario } = require("../db/models");
+    const u = await Usuario.findUnique({ where: { phone } });
+    if (!u || !u.lugaresFrecuentes?.otros) return false;
+    const lf = u.lugaresFrecuentes;
+    const norm = String(alias).toLowerCase().trim();
+    const otros = lf.otros.filter(o => o.alias?.toLowerCase().trim() !== norm);
+    await Usuario.update({ where: { phone }, data: { lugaresFrecuentes: { ...lf, otros } } });
+    return true;
+  } catch (e) { return false; }
+}
+
+module.exports = { fechaStrBolivia, horaStrBolivia, formatearFechaPromo, promoCodigosActiva, enPromoGratis, choferPagoAlDia, generarCodigoUnico, crearCodigoPromo, validarCodigoPromo, consumirCodigoPromo, mensajeCodigoEntregado, enviarCodigoDescuento, validarPlaca, normalizarPlaca, acortarParaBoton, esIntentoCancelar, esPedidoAyuda, esPlusCode, detectarIncompatibilidadMoto, obtenerUltimoViaje, obtenerDestinosFrecuentes, guardarRutaFrecuente, sugerenciaPorHora, construirBotonesHistorial, escapeHtml, normalizarNombreCalle, llaveEsquina, buscarEsquinaMapeada, guardarEsquina, obtenerLugarPersonal, guardarLugarPersonal, obtenerLugarOtros, guardarLugarOtros, eliminarLugarOtros, evaluarReferencia, mensajePidiendoReferencia, calcularPrecio, validarEsquinaConGoogle };
