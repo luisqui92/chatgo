@@ -250,9 +250,17 @@ async function manejarFlujoFamiliar(phone, mensaje, buttonId) {
     return await _mostrarMenuCuenta(phone, adultoPhone, session);
   }
 
+  // ── Salir del flujo familiar ──────────────────────────────────────────────
+  const t = texto.toLowerCase().trim();
+  if (t === "salir" || t === "volver" || t === "menu" || t === "menú" || buttonId === "familiar_salir") {
+    await deleteSession(phone);
+    await enviarMensaje(phone, "✅ Saliste del modo familiar.\n\nEnviá tu ubicación o escribí a dónde querés ir para pedir un viaje 🚖");
+    return;
+  }
+
   // ── Fallback ──────────────────────────────────────────────────────────────
   await enviarMensaje(phone,
-    '⚠️ No entendí. Escribe *"mis cuentas"* para ver tus familiares vinculados,\no *"vincular"* para agregar uno nuevo.'
+    '⚠️ No entendí. Escribe *"mis cuentas"* para ver tus familiares vinculados,\no *"vincular"* para agregar uno nuevo.\n\nEscribí *"salir"* para volver a pedir viajes.'
   );
 }
 
@@ -310,7 +318,7 @@ async function _mostrarMenuCuenta(familiarPhone, adultoPhone, session) {
     [
       { id: "familiar_ver_lugares",    title: "📌 Ver lugares" },
       { id: "familiar_agregar_lugar",  title: "➕ Agregar lugar" },
-      { id: "familiar_eliminar_lugar", title: "🗑️ Eliminar lugar" },
+      { id: "familiar_salir",          title: "🚖 Pedir viaje" },
     ]
   );
 }
