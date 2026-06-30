@@ -93,8 +93,9 @@ async function manejarFlujoFamiliar(phone, mensaje, buttonId) {
     if (!buttonId) {
       const { familiarPhone: fPhone, nombreFamiliar: nFam } = session;
       const adulto = await Usuario.findUnique({ where: { phone } }).catch(() => null);
+      const nombreAdulto = session?.waName || adulto?.nombre;
       await enviarBotones(phone,
-        `👋 Hola${adulto?.nombre ? `, *${adulto.nombre}*` : ""}.\n\n` +
+        `👋 Hola${nombreAdulto ? `, *${nombreAdulto}*` : ""}.\n\n` +
         `*${nFam || fPhone}* quiere vincularse a tu cuenta de ChatGo para ayudarte a configurar tus lugares favoritos y recargar saldo.\n\n` +
         `¿Aceptas?`,
         [
@@ -294,7 +295,8 @@ async function _iniciarVinculacion(familiarPhone, adultoPhone, session) {
 
 async function _mostrarMenuCuenta(familiarPhone, adultoPhone, session) {
   const adulto = await Usuario.findUnique({ where: { phone: adultoPhone } });
-  const nombre = adulto?.nombre || adultoPhone;
+  const adultoSession = await getSession(adultoPhone);
+  const nombre = adultoSession?.waName || adulto?.nombre || adultoPhone;
   const lf = adulto?.lugaresFrecuentes || {};
   const otros = lf.otros || [];
   const totalLugares = (lf.casa ? 1 : 0) + (lf.trabajo ? 1 : 0) + otros.length;
