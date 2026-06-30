@@ -139,7 +139,7 @@ async function avisarSaldoBajoAFamiliares(adultoPhone, umbral = 20) {
 }
 
 // ─── GESTIÓN DE LUGARES FAMILIARES ─────────────────────────────────────────
-const { guardarLugarOtros, eliminarLugarOtros } = require("../services/utils");
+const { guardarLugarOtros, eliminarLugarOtros, guardarLugarPersonal } = require("../services/utils");
 
 async function _verificarFamiliar(adultoPhone, familiarPhone) {
   const u = await Usuario.findUnique({ where: { phone: adultoPhone } });
@@ -150,10 +150,23 @@ async function _verificarFamiliar(adultoPhone, familiarPhone) {
 }
 
 // Familiar agrega un lugar personalizado a la cuenta del adulto mayor.
+const _ALIAS_CASA    = ["casa", "mi casa", "hogar", "mi hogar", "home"];
+const _ALIAS_TRABAJO = ["trabajo", "mi trabajo", "oficina", "mi oficina", "work"];
+
 async function agregarLugarFamiliar(adultoPhone, familiarPhone, alias, lat, lng, nombre) {
   const { ok, motivo } = await _verificarFamiliar(adultoPhone, familiarPhone);
   if (!ok) return { ok: false, motivo };
-  await guardarLugarOtros(adultoPhone, alias, lat, lng, nombre);
+  const norm = alias.toLowerCase().trim();
+  if (_ALIAS_CASA.includes(norm)) {
+    await guardarLugarPersonal(adultoPhone, "casa", lat, lng, nombre);
+    // limpiar si estaba en otros con ese alias
+    await eliminarLugarOtros(adultoPhone, alias);
+  } else if (_ALIAS_TRABAJO.includes(norm)) {
+    await guardarLugarPersonal(adultoPhone, "trabajo", lat, lng, nombre);
+    await eliminarLugarOtros(adultoPhone, alias);
+  } else {
+    await guardarLugarOtros(adultoPhone, alias, lat, lng, nombre);
+  }
   return { ok: true };
 }
 
