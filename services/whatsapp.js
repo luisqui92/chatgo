@@ -270,8 +270,7 @@ async function enviarPlantillaVincular(adultoPhone, nombreFamiliar) {
             {
               type: "body",
               parameters: [
-                { type: "text", text: " " },            // {{1}} placeholder
-                { type: "text", text: nombreFamiliar },  // {{2}} = nombre del familiar
+                { type: "text", text: nombreFamiliar },
               ],
             },
             {
