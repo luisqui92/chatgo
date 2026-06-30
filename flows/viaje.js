@@ -5,7 +5,7 @@ const { Usuario, Chofer, Viaje, SessionState, ListaEspera, CodigoPromo } = requi
 const { getSession, updateSession, deleteSession, addListaEspera, removeListaEspera, sessionCache } = require("../services/session");
 const { enviarMensaje, enviarBotones } = require("../services/whatsapp");
 const { buscarChoferDisponibleTraccar, reservarChoferTraccar, liberarReservaChoferTraccar } = require("../services/traccar");
-const { distanciaEntrePuntos, generarLinkRutaConParadas } = require("../services/google");
+const { distanciaEntrePuntos, generarLinkRutaConParadas, generarLinkMapaPropio } = require("../services/google");
 const { enviarAlertasChoferes, monitorearViajeEnCurso, procesarReactivaciones } = require("../ai");
 const { choferPagoAlDia, consumirCodigoPromo, enPromoGratis, fechaStrBolivia } = require("../services/utils");
 
@@ -111,7 +111,7 @@ async function asignarChofer(userPhone, session, excludeTraccarIds = [], intento
     viajeId: viaje.id.toString(),
   });
 
-  const linkViaje = generarLinkRutaConParadas(session.origen, session.paradas || [], session.destino);
+  const linkViaje = generarLinkMapaPropio(viaje.id);
 
   let textoParadas = "";
   if (session.paradas && session.paradas.length > 0) {
@@ -132,7 +132,7 @@ async function asignarChofer(userPhone, session, excludeTraccarIds = [], intento
       textoParadas +
       `🏁 Destino: ${session.destino.nombre || "Ver mapa"}\n` +
       textoObs +
-      `\n🗺️ Ruta del viaje:\n${linkViaje}\n\n` +
+      `\n🗺️ Ver ruta con tráfico:\n${linkViaje}\n\n` +
       `⏱️ Tienes *${CONFIG.TIMEOUT_ACEPTACION_CHOFER}s* para aceptar`,
     [
       { id: "aceptar_viaje", title: "✅ Aceptar" },

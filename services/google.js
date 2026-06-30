@@ -589,6 +589,11 @@ async function calcularDistanciaConParadas(origen, paradas, destino) {
   };
 }
 
+function generarLinkMapaPropio(viajeId) {
+  const base = CONFIG.APP_URL || "https://api.chatgo.ia.bo";
+  return `${base}/mapa/${viajeId}`;
+}
+
 function generarLinkRutaConParadas(origen, paradas, destino) {
   let url = `https://www.google.com/maps/dir/?api=1`;
   url += `&origin=${origen.lat},${origen.lng}`;
@@ -739,4 +744,4 @@ async function verificarTraficoEnRuta(origen, destino) {
 }
 
 
-module.exports = { distanciaEntrePuntos, calcularTiempoConTrafico, obtenerRutaCompleta, distanciaARuta, decodificarPolyline, evaluarPrecisionReferencia, extraerCoordsDeUrlGmaps, resolverUrlCorta, extraerNombreLugarDeUrl, detectarYExtrarCoordsMaps, normalizarReferencia, generarTrigramas, similitudTexto, buscarReferenciaEnMemoria, guardarReferenciaVoz, dentroDeCocha, geocodificarConMemoria, calcularDistancia, calcularDistanciaConParadas, generarLinkRutaConParadas, geocodificarDireccion, obtenerDireccion, verificarTraficoEnRuta };
+module.exports = { distanciaEntrePuntos, calcularTiempoConTrafico, obtenerRutaCompleta, distanciaARuta, decodificarPolyline, evaluarPrecisionReferencia, extraerCoordsDeUrlGmaps, resolverUrlCorta, extraerNombreLugarDeUrl, detectarYExtrarCoordsMaps, normalizarReferencia, generarTrigramas, similitudTexto, buscarReferenciaEnMemoria, guardarReferenciaVoz, dentroDeCocha, geocodificarConMemoria, calcularDistancia, calcularDistanciaConParadas, generarLinkRutaConParadas, generarLinkMapaPropio, geocodificarDireccion, obtenerDireccion, verificarTraficoEnRuta };
