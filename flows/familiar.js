@@ -45,13 +45,24 @@ async function esMensajeFamiliar(phone, texto, buttonId, session) {
 async function manejarFlujoFamiliar(phone, mensaje, buttonId) {
   const texto = mensaje?.text?.body?.trim() || "";
   const location = mensaje?.location || null;
+  const contacto = mensaje?.contacts?.[0] || null;
   const session = await getSession(phone) || {};
   const step = session.step || "";
   const t = texto.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").trim();
 
+  // ── Contacto compartido (en cualquier step de vinculación) ───────────────
+  if (contacto && (!step || step === "familiar_inicio" || step === "familiar_esperando_telefono")) {
+    const numContacto = contacto.phones?.[0]?.phone?.replace(/\D/g, "");
+    if (numContacto && numContacto.length >= 7) {
+      return await _iniciarVinculacion(phone, _normalizarPhone(numContacto), session);
+    }
+    await enviarMensaje(phone, "❌ El contacto compartido no tiene un número válido. Escribí el número manualmente.");
+    return;
+  }
+
   // ── Iniciar vinculación ──────────────────────────────────────────────────
   if (!step || step === "familiar_inicio" || t === "vincular" || t.startsWith("vincular con")) {
-    // Si viene el teléfono directo en el mensaje ("vincular con 59171234567")
+    // Si viene el teléfono directo en el mensaje ("vincular con 71234567")
     const matchInline = texto.match(/vincular\s+con\s+(\d{7,15})/i);
     if (matchInline) {
       return await _iniciarVinculacion(phone, _normalizarPhone(matchInline[1]), session);
@@ -60,7 +71,7 @@ async function manejarFlujoFamiliar(phone, mensaje, buttonId) {
     await enviarMensaje(phone,
       "👴 *Modo Familiar — ChatGo*\n\n" +
       "¿Cuál es el número de WhatsApp de tu familiar?\n\n" +
-      "Escribe solo el número, sin espacios ni signos.\n" +
+      "Podés escribir el número o *compartir el contacto* directamente desde tu agenda 📇\n" +
       "Ej: _71234567_"
     );
     return;
@@ -70,7 +81,7 @@ async function manejarFlujoFamiliar(phone, mensaje, buttonId) {
   if (step === "familiar_esperando_telefono") {
     const num = texto.replace(/\D/g, "");
     if (num.length < 7) {
-      await enviarMensaje(phone, "❌ Número no válido. Escribe solo el número de celular.\nEj: _71234567_");
+      await enviarMensaje(phone, "❌ Número no válido. Escribí el número o compartí el contacto desde tu agenda 📇");
       return;
     }
     return await _iniciarVinculacion(phone, _normalizarPhone(num), session);
