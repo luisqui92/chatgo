@@ -203,16 +203,17 @@ Solo JSON.`,
 
 // ─── TEXT-TO-SPEECH: genera audio amigable desde texto (modo adulto mayor) ──
 // Devuelve un Buffer con el audio MP3 (formato probado con WhatsApp).
-// Usa la API de TTS de OpenAI. Voz "onyx" es cálida y natural en español.
-async function generarAudioDesdeTexto(texto, voz = "onyx") {
+// Usa la API de TTS de OpenAI. Voz "nova" = femenina, natural en español.
+async function generarAudioDesdeTexto(texto, voz = "nova") {
   try {
     const res = await axios.post(
       "https://api.openai.com/v1/audio/speech",
       {
         model: "tts-1",
         voice: voz,
-        input: texto.substring(0, 600), // límite corto: audios largos tardan demasiado
-        response_format: "mp3", // mp3 = formato probado con el bot que funcionaba
+        speed: 1.15,
+        input: texto.substring(0, 600),
+        response_format: "mp3",
       },
       {
         headers: {
