@@ -617,14 +617,16 @@ function calcularPrecio(km, tipoVehiculo) {
 
 // ─── LUGARES PERSONALIZADOS (otros[]) ────────────────────────────────────────
 
-// Busca un alias en lugaresFrecuentes.otros[] del usuario (case-insensitive).
+const _sinAcentos = s => String(s).toLowerCase().trim().normalize("NFD").replace(/[̀-ͯ]/g, "");
+
+// Busca un alias en lugaresFrecuentes.otros[] (case-insensitive, sin acentos).
 async function obtenerLugarOtros(phone, alias) {
   try {
     const { Usuario } = require("../db/models");
     const u = await Usuario.findUnique({ where: { phone } });
     if (!u || !u.lugaresFrecuentes?.otros?.length) return null;
-    const norm = String(alias).toLowerCase().trim();
-    return u.lugaresFrecuentes.otros.find(o => o.alias?.toLowerCase().trim() === norm) || null;
+    const norm = _sinAcentos(alias);
+    return u.lugaresFrecuentes.otros.find(o => _sinAcentos(o.alias) === norm) || null;
   } catch (e) { return null; }
 }
 
