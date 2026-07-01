@@ -1043,18 +1043,10 @@ function initMap() {
   else showFin();
 }
 
-const TAXI_SVG = \`<svg xmlns="http://www.w3.org/2000/svg" width="64" height="76">
-  <rect x="1" y="1" width="62" height="26" rx="13" fill="white" stroke="#1D9E75" stroke-width="2.5"/>
-  <text x="32" y="19" text-anchor="middle" font-size="13" font-weight="700" font-family="-apple-system,BlinkMacSystemFont,sans-serif" fill="#1D9E75">ChatGo 🚖</text>
-  <polygon points="25,27 39,27 32,36" fill="white" stroke="#1D9E75" stroke-width="1.5" stroke-linejoin="round"/>
-  <circle cx="32" cy="55" r="19" fill="#1D9E75" stroke="white" stroke-width="2.5"/>
-  <text x="32" y="63" text-anchor="middle" font-size="22">🚗</text>
-</svg>\`;
-
 const TAXI_ICON = {
-  url: "data:image/svg+xml;charset=UTF-8," + encodeURIComponent(TAXI_SVG),
-  scaledSize: new google.maps.Size(64, 76),
-  anchor: new google.maps.Point(32, 55),
+  url: window.location.origin + "/logo.png",
+  scaledSize: new google.maps.Size(60, 60),
+  anchor: new google.maps.Point(30, 30),
 };
 
 let dirRenderer = null;

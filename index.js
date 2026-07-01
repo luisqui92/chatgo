@@ -102,6 +102,14 @@ iniciarIntervals(allDeps);
 // ─── HEALTH CHECK ─────────────────────────────────────────────────────────────
 app.get("/", (_req, res) => res.send("ChatGo v6.0 Modular - RastreoPlus - Operativo ✅"));
 
+// Servir logo público
+app.get("/logo.png", (req, res) => {
+  const path = require("path");
+  const file = path.join(__dirname, "public", "logo.png");
+  res.setHeader("Cache-Control", "public, max-age=86400");
+  res.sendFile(file);
+});
+
 // Servir fotos de choferes
 app.get("/fotos/:filename", (req, res) => {
   const path = require("path");
