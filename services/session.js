@@ -65,7 +65,7 @@ async function addListaEspera(userPhone, session) {
     destinoLng: session.destino?.lng ?? null,
     destinoNombre: session.destino?.nombre ?? null,
     distancia: session.distancia ?? null,
-    precio: session.precio ?? null,
+    precio: session.precio ?? session.precioFinal ?? session.precioAuto ?? null,
     precioPorKm: session.precioPorKm ?? null,
     tipoVehiculoSolicitado: tipoSolicitado,
     ofertaActivaWialonId: null,
