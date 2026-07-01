@@ -1344,8 +1344,13 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
       }
 
       // Caso: tiene ambos
-      const result1 = await resolverUbicacionVoz(ubicaciones.origen, "origen");
-      const result2 = await resolverUbicacionVoz(ubicaciones.destino, "destino");
+      // Si el lugar ya fue resuelto como alias personal (session._personal*), usar esas coords directamente
+      const result1 = session._personalOrigen
+        ? { coords: session._personalOrigen, aprender: false, referencia: session._personalOrigen.nombre }
+        : await resolverUbicacionVoz(ubicaciones.origen, "origen");
+      const result2 = session._personalDestino
+        ? { coords: session._personalDestino, aprender: false, referencia: session._personalDestino.nombre }
+        : await resolverUbicacionVoz(ubicaciones.destino, "destino");
       const { coords: origenCoords, aprender: aprenderOrigen, referencia: refOrigen } = result1;
       const { coords: destinoCoords, aprender: aprenderDestino, referencia: refDestino } = result2;
 
