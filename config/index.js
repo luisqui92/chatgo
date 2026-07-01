@@ -14,7 +14,7 @@ const CONFIG = {
   ADMIN_PHONE: process.env.ADMIN_PHONE || "59162741818",
   QR_IMAGE_URL: process.env.QR_IMAGE_URL || (process.env.APP_URL ? `${process.env.APP_URL}/qr/pago.jpg` : null),
 
-  TIMEOUT_OPENAI: 45000,
+  TIMEOUT_OPENAI: 20000,
   TIMEOUT_GOOGLE: 10000,
   TIMEOUT_META: 15000,
 

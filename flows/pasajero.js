@@ -1102,8 +1102,10 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
         return null;
       }
       
-      const personalOrigen = await resolverPersonal(detOrigen, true);
-      const personalDestino = await resolverPersonal(detDestino, false);
+      const [personalOrigen, personalDestino] = await Promise.all([
+        resolverPersonal(detOrigen, true),
+        resolverPersonal(detDestino, false),
+      ]);
       
       // Si tiene personal NO guardado, pedirle el pin
       if (personalOrigen?.necesitaGuardar || personalDestino?.necesitaGuardar) {
@@ -1145,8 +1147,10 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
 
       // Si el lugar YA está en la memoria (pre-cargado o aprendido antes), tiene
       // coordenadas exactas → NO es vago, no hay que pedir más referencias.
-      const memOrigen = ubicaciones.origen ? await buscarReferenciaEnMemoria(ubicaciones.origen, ciudadParaAudio) : null;
-      const memDestino = ubicaciones.destino ? await buscarReferenciaEnMemoria(ubicaciones.destino, ciudadParaAudio) : null;
+      const [memOrigen, memDestino] = await Promise.all([
+        ubicaciones.origen ? buscarReferenciaEnMemoria(ubicaciones.origen, ciudadParaAudio) : null,
+        ubicaciones.destino ? buscarReferenciaEnMemoria(ubicaciones.destino, ciudadParaAudio) : null,
+      ]);
 
       // Solo intervenir si AL MENOS UNO es vago Y no está resuelto por memoria ni coords personales
       const origenVago = evalOrigenVoz.vaga && !personalOrigen?.coords && !memOrigen;
@@ -1343,14 +1347,15 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
         return;
       }
 
-      // Caso: tiene ambos
-      // Si el lugar ya fue resuelto como alias personal (session._personal*), usar esas coords directamente
-      const result1 = session._personalOrigen
-        ? { coords: session._personalOrigen, aprender: false, referencia: session._personalOrigen.nombre }
-        : await resolverUbicacionVoz(ubicaciones.origen, "origen");
-      const result2 = session._personalDestino
-        ? { coords: session._personalDestino, aprender: false, referencia: session._personalDestino.nombre }
-        : await resolverUbicacionVoz(ubicaciones.destino, "destino");
+      // Caso: tiene ambos — resolver origen y destino en paralelo
+      const [result1, result2] = await Promise.all([
+        session._personalOrigen
+          ? Promise.resolve({ coords: session._personalOrigen, aprender: false, referencia: session._personalOrigen.nombre })
+          : resolverUbicacionVoz(ubicaciones.origen, "origen"),
+        session._personalDestino
+          ? Promise.resolve({ coords: session._personalDestino, aprender: false, referencia: session._personalDestino.nombre })
+          : resolverUbicacionVoz(ubicaciones.destino, "destino"),
+      ]);
       const { coords: origenCoords, aprender: aprenderOrigen, referencia: refOrigen } = result1;
       const { coords: destinoCoords, aprender: aprenderDestino, referencia: refDestino } = result2;
 
