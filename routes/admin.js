@@ -1043,11 +1043,38 @@ function initMap() {
   else showFin();
 }
 
+const TAXI_SVG = \`<svg xmlns="http://www.w3.org/2000/svg" width="64" height="76">
+  <rect x="1" y="1" width="62" height="26" rx="13" fill="white" stroke="#1D9E75" stroke-width="2.5"/>
+  <text x="32" y="19" text-anchor="middle" font-size="13" font-weight="700" font-family="-apple-system,BlinkMacSystemFont,sans-serif" fill="#1D9E75">ChatGo 🚖</text>
+  <polygon points="25,27 39,27 32,36" fill="white" stroke="#1D9E75" stroke-width="1.5" stroke-linejoin="round"/>
+  <circle cx="32" cy="55" r="19" fill="#1D9E75" stroke="white" stroke-width="2.5"/>
+  <text x="32" y="63" text-anchor="middle" font-size="22">🚗</text>
+</svg>\`;
+
 const TAXI_ICON = {
-  url: "data:image/svg+xml;charset=UTF-8," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="42" height="42"><circle cx="21" cy="21" r="21" fill="#1D9E75"/><text x="21" y="28" text-anchor="middle" font-size="22">🚖</text></svg>'),
-  scaledSize: new google.maps.Size(42, 42),
-  anchor: new google.maps.Point(21, 21),
+  url: "data:image/svg+xml;charset=UTF-8," + encodeURIComponent(TAXI_SVG),
+  scaledSize: new google.maps.Size(64, 76),
+  anchor: new google.maps.Point(32, 55),
 };
+
+let dirRenderer = null;
+
+function dibujarRuta() {
+  if (!ORIGEN.lat || !DESTINO.lat) return;
+  const svc = new google.maps.DirectionsService();
+  dirRenderer = new google.maps.DirectionsRenderer({
+    suppressMarkers: true,
+    polylineOptions: { strokeColor: "#FF3B30", strokeWeight: 5, strokeOpacity: 0.85 },
+  });
+  dirRenderer.setMap(map);
+  svc.route({
+    origin: { lat: ORIGEN.lat, lng: ORIGEN.lng },
+    destination: { lat: DESTINO.lat, lng: DESTINO.lng },
+    travelMode: google.maps.TravelMode.DRIVING,
+  }, (result, status) => {
+    if (status === "OK") dirRenderer.setDirections(result);
+  });
+}
 
 async function poll() {
   if (terminado) return;
@@ -1061,6 +1088,7 @@ async function poll() {
     if (!taxiMarker) {
       taxiMarker = new google.maps.Marker({ position: pos, map, icon: TAXI_ICON, title: d.choferNombre, zIndex: 10 });
       map.setCenter(pos);
+      dibujarRuta();
     } else {
       taxiMarker.setPosition(pos);
     }
