@@ -159,11 +159,11 @@ async function agregarLugarFamiliar(adultoPhone, familiarPhone, alias, lat, lng,
   const norm = alias.toLowerCase().trim();
   if (_ALIAS_CASA.includes(norm)) {
     await guardarLugarPersonal(adultoPhone, "casa", lat, lng, nombre);
-    // limpiar si estaba en otros con ese alias
-    await eliminarLugarOtros(adultoPhone, alias);
+    // limpiar TODOS los alias de casa que pudieran estar en otros[]
+    for (const a of _ALIAS_CASA) await eliminarLugarOtros(adultoPhone, a);
   } else if (_ALIAS_TRABAJO.includes(norm)) {
     await guardarLugarPersonal(adultoPhone, "trabajo", lat, lng, nombre);
-    await eliminarLugarOtros(adultoPhone, alias);
+    for (const a of _ALIAS_TRABAJO) await eliminarLugarOtros(adultoPhone, a);
   } else {
     await guardarLugarOtros(adultoPhone, alias, lat, lng, nombre);
   }

@@ -42,6 +42,8 @@ async function esMensajeFamiliar(phone, texto, buttonId, session) {
 
 // ─── HANDLER PRINCIPAL ────────────────────────────────────────────────────────
 
+const FAMILIAR_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutos
+
 async function manejarFlujoFamiliar(phone, mensaje, buttonId) {
   const texto = mensaje?.text?.body?.trim() || "";
   const location = mensaje?.location || null;
@@ -49,6 +51,20 @@ async function manejarFlujoFamiliar(phone, mensaje, buttonId) {
   const session = await getSession(phone) || {};
   const step = session.step || "";
   const t = texto.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").trim();
+
+  // ── Timeout de 5 min en steps de menú familiar (no en vinculación) ────────
+  const stepsConTimeout = ["familiar_gestionando", "familiar_esperando_alias", "familiar_esperando_pin", "familiar_eliminando"];
+  if (stepsConTimeout.includes(step) && session.familiarTs) {
+    if (Date.now() - session.familiarTs > FAMILIAR_TIMEOUT_MS) {
+      await deleteSession(phone);
+      await enviarMensaje(phone, "⏱️ La sesión familiar expiró por inactividad.\n\nEscribí tu 📍 ubicación para pedir un viaje, o *\"mis cuentas\"* para volver al menú familiar.");
+      return;
+    }
+  }
+  // Actualizar timestamp en cada interacción dentro del flujo familiar
+  if (step.startsWith("familiar_")) {
+    await updateSession(phone, { ...session, familiarTs: Date.now() });
+  }
 
   // ── Contacto compartido (en cualquier step de vinculación) ───────────────
   if (contacto && (!step || step === "familiar_inicio" || step === "familiar_esperando_telefono")) {
