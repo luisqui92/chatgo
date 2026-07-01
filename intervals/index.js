@@ -124,15 +124,13 @@ setInterval(async () => {
             await updateSession(espera.userPhone, { ...sesionActual1, step: "sin_chofer" });
             await enviarBotones(
               espera.userPhone,
-              `🚖 *¡Encontramos un chofer cerca tuyo!*\n\n` +
-                `👤 ${chofer.nombre}\n` +
-                `📌 A ${Math.round(chofer.distanciaAlUsuario * 10) / 10} km de ti\n` +
-                `📏 ${espera.distancia} km de viaje\n` +
-                `💰 Bs ${espera.precio}\n\n` +
-                `¿Lo asignamos? _(tienes ${CONFIG.ESPERA_OFERTA_VIGENCIA}s para decidir)_`,
+              `🚖 *Taxi disponible*\n\n` +
+                `📍 ${espera.origenNombre || "Tu origen"}\n` +
+                `🏁 ${espera.destinoNombre || "Tu destino"}\n` +
+                `💰 *Bs ${espera.precio}*`,
               [
-                { id: "confirmar_viaje_recordatorio", title: "✅ Sí, taxi" },
-                { id: "cancelar_viaje", title: "❌ Ya no" },
+                { id: "confirmar_viaje_recordatorio", title: "✅ Confirmar" },
+                { id: "cancelar_viaje", title: "❌ Cancelar" },
               ]
             );
           } else {
