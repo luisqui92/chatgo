@@ -861,7 +861,7 @@ app.get("/admin/viaje-coords/:viajeId", requireAuth(), async (req, res) => {
   }
 });
 
-// API de posición — consultada por chatgo.ia.bo cada 15s
+// API de posición — consultada por la página de rastreo cada 5s
 app.get("/track/:viajeId/pos", async (req, res) => {
   // CORS para chatgo.ia.bo (página estática externa)
   res.setHeader("Access-Control-Allow-Origin", "https://chatgo.ia.bo");
@@ -1050,6 +1050,30 @@ const TAXI_ICON = {
 };
 
 let dirRenderer = null;
+let animFrame = null;
+
+// Desliza el marcador desde su posición actual hasta la nueva (efecto tiempo real)
+function moverSuave(marker, destino) {
+  const inicio = marker.getPosition();
+  if (!inicio) { marker.setPosition(destino); return; }
+  const dLat = destino.lat - inicio.lat();
+  const dLng = destino.lng - inicio.lng();
+  if (dLat === 0 && dLng === 0) return;
+  // Salto muy grande (>~2 km): reposicionar directo, animarlo se vería irreal
+  if (Math.abs(dLat) > 0.02 || Math.abs(dLng) > 0.02) { marker.setPosition(destino); return; }
+  if (animFrame) cancelAnimationFrame(animFrame);
+  const lat0 = inicio.lat(), lng0 = inicio.lng();
+  const dur = 4000; // un poco menos que el intervalo de poll (5s)
+  const t0 = performance.now();
+  function paso(t) {
+    const p = Math.min((t - t0) / dur, 1);
+    const e = p * (2 - p); // ease-out
+    marker.setPosition({ lat: lat0 + dLat * e, lng: lng0 + dLng * e });
+    if (p < 1) animFrame = requestAnimationFrame(paso);
+    else animFrame = null;
+  }
+  animFrame = requestAnimationFrame(paso);
+}
 
 function dibujarRuta() {
   if (!ORIGEN.lat || !DESTINO.lat) return;
@@ -1082,7 +1106,7 @@ async function poll() {
       map.setCenter(pos);
       dibujarRuta();
     } else {
-      taxiMarker.setPosition(pos);
+      moverSuave(taxiMarker, pos);
     }
 
     const stxt = document.getElementById("stxt");
@@ -1103,7 +1127,7 @@ async function poll() {
     }, 1000);
 
   } catch(e) { console.error(e); }
-  setTimeout(poll, 15000);
+  setTimeout(poll, 5000);
 }
 
 function showFin(msg) {
