@@ -369,3 +369,29 @@ model NotificacionPago {
   @@index([usado, createdAt])
   @@map("notificacionespago")
 }
+
+// ─── PLATAFORMA MODULAR ──────────────────────────────────────────────────────
+// Solicitudes de servicios no-taxi (favor, delivery, school, empresas, rastreo,
+// salud, reporte). Tabla genérica: lo específico de cada módulo va en `detalle`.
+model Solicitud {
+  id            String   @id @default(uuid())
+  tipo          String   // favor | delivery | school | empresa | rastreo | salud | reporte
+  usuarioPhone  String
+  estado        String   @default("nueva") // nueva | cotizada | confirmada | asignada | en_curso | completada | cancelada
+  detalle       Json?
+  origenLat     Float?
+  origenLng     Float?
+  origenNombre  String?
+  destinoLat    Float?
+  destinoLng    Float?
+  destinoNombre String?
+  precioBs      Float?
+  asignadoPhone String?
+  viajeId       String?  // si el módulo generó un viaje del motor taxi (ej: favor)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([tipo, estado])
+  @@index([usuarioPhone])
+  @@map("solicitudes")
+}

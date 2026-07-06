@@ -10,10 +10,27 @@ const path = require("path");
 const FormData = require("form-data");
 const { CONFIG, log } = require("../config");
 
+// ─── MULTI-NÚMERO ────────────────────────────────────────────────────────────
+// Soporta varios números de WhatsApp contra el mismo backend. El webhook registra
+// por cuál número escribió cada usuario (metadata.phone_number_id) y las respuestas
+// salen por ese mismo número. Sin registro (choferes, admin, mensajes iniciados por
+// el bot) se usa el número padre (WHATSAPP_PHONE_ID) — el comportamiento de siempre.
+const numeroEntradaPorUsuario = new Map();
+
+function registrarNumeroEntrada(userPhone, phoneNumberId) {
+  if (!userPhone || !phoneNumberId) return;
+  if (phoneNumberId !== CONFIG.WHATSAPP_PHONE_ID) numeroEntradaPorUsuario.set(userPhone, phoneNumberId);
+  else numeroEntradaPorUsuario.delete(userPhone);
+}
+
+function phoneIdPara(to) {
+  return numeroEntradaPorUsuario.get(to) || CONFIG.WHATSAPP_PHONE_ID;
+}
+
 async function enviarMensaje(to, texto) {
   try {
     await axios.post(
-      `https://graph.facebook.com/v19.0/${CONFIG.WHATSAPP_PHONE_ID}/messages`,
+      `https://graph.facebook.com/v19.0/${phoneIdPara(to)}/messages`,
       { messaging_product: "whatsapp", to, type: "text", text: { body: texto } },
       { headers: { Authorization: `Bearer ${CONFIG.WHATSAPP_TOKEN}` }, timeout: CONFIG.TIMEOUT_META }
     );
@@ -25,7 +42,7 @@ async function enviarMensaje(to, texto) {
 async function enviarBotones(to, texto, botones) {
   try {
     await axios.post(
-      `https://graph.facebook.com/v19.0/${CONFIG.WHATSAPP_PHONE_ID}/messages`,
+      `https://graph.facebook.com/v19.0/${phoneIdPara(to)}/messages`,
       {
         messaging_product: "whatsapp",
         to,
@@ -51,7 +68,7 @@ async function enviarBotones(to, texto, botones) {
 async function enviarImagen(to, imageUrl, caption = "") {
   try {
     await axios.post(
-      `https://graph.facebook.com/v19.0/${CONFIG.WHATSAPP_PHONE_ID}/messages`,
+      `https://graph.facebook.com/v19.0/${phoneIdPara(to)}/messages`,
       { messaging_product: "whatsapp", to, type: "image", image: { link: imageUrl, caption } },
       { headers: { Authorization: `Bearer ${CONFIG.WHATSAPP_TOKEN}` }, timeout: CONFIG.TIMEOUT_META }
     );
@@ -63,7 +80,7 @@ async function enviarImagen(to, imageUrl, caption = "") {
 async function reenviarImagenPorId(to, imageId, caption = "") {
   try {
     await axios.post(
-      `https://graph.facebook.com/v19.0/${CONFIG.WHATSAPP_PHONE_ID}/messages`,
+      `https://graph.facebook.com/v19.0/${phoneIdPara(to)}/messages`,
       { messaging_product: "whatsapp", to, type: "image", image: { id: imageId, caption } },
       { headers: { Authorization: `Bearer ${CONFIG.WHATSAPP_TOKEN}` }, timeout: CONFIG.TIMEOUT_META }
     );
@@ -75,7 +92,7 @@ async function reenviarImagenPorId(to, imageId, caption = "") {
 async function reenviarAudioPorId(to, audioId) {
   try {
     await axios.post(
-      `https://graph.facebook.com/v19.0/${CONFIG.WHATSAPP_PHONE_ID}/messages`,
+      `https://graph.facebook.com/v19.0/${phoneIdPara(to)}/messages`,
       { messaging_product: "whatsapp", to, type: "audio", audio: { id: audioId } },
       { headers: { Authorization: `Bearer ${CONFIG.WHATSAPP_TOKEN}` }, timeout: CONFIG.TIMEOUT_META }
     );
@@ -107,7 +124,7 @@ async function enviarVoz(to, audioBuffer) {
     });
 
     const upload = await axios.post(
-      `https://graph.facebook.com/v19.0/${CONFIG.WHATSAPP_PHONE_ID}/media`,
+      `https://graph.facebook.com/v19.0/${phoneIdPara(to)}/media`,
       form,
       {
         headers: { Authorization: `Bearer ${CONFIG.WHATSAPP_TOKEN}`, ...form.getHeaders() },
@@ -125,7 +142,7 @@ async function enviarVoz(to, audioBuffer) {
 
     // 3) Enviar el audio con el media_id
     await axios.post(
-      `https://graph.facebook.com/v19.0/${CONFIG.WHATSAPP_PHONE_ID}/messages`,
+      `https://graph.facebook.com/v19.0/${phoneIdPara(to)}/messages`,
       { messaging_product: "whatsapp", recipient_type: "individual", to, type: "audio", audio: { id: mediaId } },
       { headers: { "Content-Type": "application/json", Authorization: `Bearer ${CONFIG.WHATSAPP_TOKEN}` }, timeout: CONFIG.TIMEOUT_META }
     );
@@ -144,7 +161,7 @@ async function enviarVoz(to, audioBuffer) {
 async function reenviarVideoPorId(to, videoId, caption = "") {
   try {
     await axios.post(
-      `https://graph.facebook.com/v19.0/${CONFIG.WHATSAPP_PHONE_ID}/messages`,
+      `https://graph.facebook.com/v19.0/${phoneIdPara(to)}/messages`,
       { messaging_product: "whatsapp", to, type: "video", video: { id: videoId, caption } },
       { headers: { Authorization: `Bearer ${CONFIG.WHATSAPP_TOKEN}` }, timeout: CONFIG.TIMEOUT_META }
     );
@@ -156,7 +173,7 @@ async function reenviarVideoPorId(to, videoId, caption = "") {
 async function reenviarUbicacion(to, lat, lng, name = "", address = "") {
   try {
     await axios.post(
-      `https://graph.facebook.com/v19.0/${CONFIG.WHATSAPP_PHONE_ID}/messages`,
+      `https://graph.facebook.com/v19.0/${phoneIdPara(to)}/messages`,
       { messaging_product: "whatsapp", to, type: "location", location: { latitude: lat, longitude: lng, name, address } },
       { headers: { Authorization: `Bearer ${CONFIG.WHATSAPP_TOKEN}` }, timeout: CONFIG.TIMEOUT_META }
     );
@@ -168,7 +185,7 @@ async function reenviarUbicacion(to, lat, lng, name = "", address = "") {
 async function reenviarDocumentoPorId(to, docId, filename = "", caption = "") {
   try {
     await axios.post(
-      `https://graph.facebook.com/v19.0/${CONFIG.WHATSAPP_PHONE_ID}/messages`,
+      `https://graph.facebook.com/v19.0/${phoneIdPara(to)}/messages`,
       { messaging_product: "whatsapp", to, type: "document", document: { id: docId, filename, caption } },
       { headers: { Authorization: `Bearer ${CONFIG.WHATSAPP_TOKEN}` }, timeout: CONFIG.TIMEOUT_META }
     );
@@ -258,7 +275,7 @@ function verificarFirmaMeta(req) {
 async function enviarPlantillaVincular(adultoPhone, nombreFamiliar) {
   try {
     await axios.post(
-      `https://graph.facebook.com/v19.0/${CONFIG.WHATSAPP_PHONE_ID}/messages`,
+      `https://graph.facebook.com/v19.0/${phoneIdPara(adultoPhone)}/messages`,
       {
         messaging_product: "whatsapp",
         to: adultoPhone,
@@ -298,4 +315,4 @@ async function enviarPlantillaVincular(adultoPhone, nombreFamiliar) {
   }
 }
 
-module.exports = { enviarMensaje, enviarBotones, enviarImagen, enviarVoz, reenviarImagenPorId, reenviarAudioPorId, reenviarVideoPorId, reenviarUbicacion, reenviarDocumentoPorId, relayMensajeChat, descargarImagenMeta, obtenerUrlMedia, verificarFirmaMeta, enviarPlantillaVincular };
+module.exports = { enviarMensaje, enviarBotones, enviarImagen, enviarVoz, reenviarImagenPorId, reenviarAudioPorId, reenviarVideoPorId, reenviarUbicacion, reenviarDocumentoPorId, relayMensajeChat, descargarImagenMeta, obtenerUrlMedia, verificarFirmaMeta, enviarPlantillaVincular, registrarNumeroEntrada };

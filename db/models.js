@@ -24,4 +24,5 @@ module.exports = {
   PreRegistroFlota: prisma.preRegistroFlota,
   Flota: prisma.flota,
   NotificacionPago: prisma.notificacionPago,
+  Solicitud: prisma.solicitud,
 };

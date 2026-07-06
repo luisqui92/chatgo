@@ -50,6 +50,14 @@ const CONFIG = {
   // Secreto compartido para validar notificaciones de pago bancario (MacroDroid → webhook).
   // Si no está configurado, el endpoint rechaza todas las llamadas.
   PAGO_WEBHOOK_SECRET: process.env.PAGO_WEBHOOK_SECRET || null,
+
+  // ─── PLATAFORMA MODULAR ────────────────────────────────────────────────
+  // Módulos activos además del taxi, separados por coma.
+  // Ej: MODULOS_ACTIVOS="favor,delivery,school,empresas,rastreo"
+  // Vacío (default) = solo taxi; el comportamiento actual no cambia en nada.
+  MODULOS_ACTIVOS: (process.env.MODULOS_ACTIVOS || "").split(",").map(s => s.trim().toLowerCase()).filter(Boolean),
+  // Tarifa base que se suma al costo por km en mandados (módulo favor)
+  FAVOR_TARIFA_BASE_BS: Number(process.env.FAVOR_TARIFA_BASE_BS || 5),
 };
 
 // ═══════════════════════════════════════════════════════════════════════════

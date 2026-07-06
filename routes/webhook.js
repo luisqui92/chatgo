@@ -7,7 +7,8 @@ const os = require("os");
 const { CONFIG, log } = require("../config");
 const { Usuario, Chofer, Viaje, ListaEspera, CodigoPromo, LocationReference } = require("../db/models");
 const { getSession, updateSession, checkRateLimit, sessionCache, yaProcesoMensaje } = require("../services/session");
-const { enviarMensaje, enviarBotones, verificarFirmaMeta } = require("../services/whatsapp");
+const { enviarMensaje, enviarBotones, verificarFirmaMeta, registrarNumeroEntrada } = require("../services/whatsapp");
+const { procesarModulos } = require("../modules");
 const { procesarMensajeUsuario } = require("../flows/pasajero");
 const { procesarMensajeChofer } = require("../flows/chofer");
 const { enPromoGratis, fechaStrBolivia, formatearFechaPromo, promoCodigosActiva } = require("../services/utils");
@@ -37,6 +38,11 @@ app.post("/webhook", limitWebhook, async (req, res) => {
     const messages = req.body.entry?.[0]?.changes?.[0]?.value?.messages;
     if (!messages?.length) return;
 
+    // MULTI-NÚMERO: por cuál número de WhatsApp entró este mensaje.
+    // Las respuestas al usuario salen por ese mismo número (latente hasta
+    // que se agreguen números extra en Meta; hoy siempre es el número padre).
+    const phoneNumberId = req.body.entry?.[0]?.changes?.[0]?.value?.metadata?.phone_number_id;
+
     for (const msg of messages) {
       try {
         // FIX BUG#9 — deduplicar por msg.id (WhatsApp puede entregar el mismo mensaje dos veces)
@@ -46,6 +52,7 @@ app.post("/webhook", limitWebhook, async (req, res) => {
         }
 
         const phone = msg.from;
+        registrarNumeroEntrada(phone, phoneNumberId);
         const buttonId = msg.interactive?.button_reply?.id || msg.button?.payload || null;
         const textoUpper = msg.text?.body?.trim().toUpperCase() || "";
         const mediaId = msg.image?.id || null;
@@ -133,8 +140,14 @@ app.post("/webhook", limitWebhook, async (req, res) => {
         } else if (esChofer || esRegistroChofer) {
           await procesarMensajeChofer(phone, msg.text?.body || "", buttonId, mediaId, msg);
         } else {
-          // Todos los demás (incluido pasajero con step "chofer_*" legítimo) van a pasajero
-          await procesarMensajeUsuario(phone, msg, buttonId);
+          // PLATAFORMA MODULAR: si hay módulos activos (MODULOS_ACTIVOS) y el
+          // mensaje corresponde a uno (favor/delivery/school/etc.), lo toma el
+          // módulo. Con la flag vacía (default) esto devuelve false sin costo
+          // y todo sigue al flujo pasajero de siempre.
+          const manejadoPorModulo = await procesarModulos(phone, msg, buttonId, session);
+          if (!manejadoPorModulo) {
+            await procesarMensajeUsuario(phone, msg, buttonId);
+          }
         }
       } catch (eInner) {
         log.error("[WEBHOOK_MSG]", eInner.message, eInner.stack);
