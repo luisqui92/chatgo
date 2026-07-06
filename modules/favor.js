@@ -15,10 +15,7 @@ const { enviarMensaje, enviarBotones } = require("../services/whatsapp");
 const { geocodificarConMemoria, obtenerDireccion, calcularDistancia } = require("../services/google");
 const { calcularPrecio } = require("../services/utils");
 const { asignarChofer } = require("../flows/viaje");
-
-function textoDe(msg) {
-  return msg?.text?.body?.trim() || "";
-}
+const { textoDeMensaje } = require("./util");
 
 // Extrae un punto {lat,lng,nombre} de un pin de WhatsApp o de texto geocodificado
 async function resolverPunto(msg, texto, ciudadUsuario) {
@@ -47,7 +44,8 @@ async function iniciar(phone, msg, session) {
 }
 
 async function procesar(phone, msg, buttonId, session) {
-  const texto = textoDe(msg);
+  // Acepta texto o nota de voz (se transcribe una sola vez por mensaje)
+  const { texto } = await textoDeMensaje(msg);
 
   if (/^cancelar$/i.test(texto) || buttonId === "mod_favor_cancelar") {
     await deleteSession(phone);

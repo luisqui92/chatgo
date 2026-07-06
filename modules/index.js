@@ -18,6 +18,7 @@
 const { CONFIG, log } = require("../config");
 const { deleteSession } = require("../services/session");
 const { enviarMensaje } = require("../services/whatsapp");
+const { esAudio, textoDeMensaje } = require("./util");
 
 const favor = require("./favor");
 const ambulancia = require("./ambulancia");
@@ -67,7 +68,7 @@ const rastreo = crearModuloCaptura({
 
 const MODULOS = { favor, ambulancia, delivery, school, empresas, rastreo };
 
-// Palabras que abren cada módulo (solo con el usuario en reposo)
+// Palabras que abren cada módulo por TEXTO (solo con el usuario en reposo)
 const ENTRADAS = [
   // Ambulancia primero: en emergencia, cada segundo cuenta
   { modulo: "ambulancia", regex: /^(ambulancia|emergencia medica|emergencia médica|accidente|herido)s?\b/i },
@@ -76,6 +77,20 @@ const ENTRADAS = [
   { modulo: "school", regex: /^(school|colegio|transporte escolar|escolar)\b/i },
   { modulo: "empresas", regex: /^(empresa|empresas|corporativo|logistica|logística)\b/i },
   { modulo: "rastreo", regex: /^(rastreo|rastrear|rastreoplus|gps)\b/i },
+];
+
+// Frases que abren cada módulo por VOZ (transcripción de nota de voz).
+// Deliberadamente MÁS estrictas que las de texto: en el habla natural muchas
+// palabras aparecen de pasada ("por favor", "cerca del colegio", "hubo un
+// accidente en la América") y un falso positivo rompe un pedido de taxi.
+// Ante la duda, NO se intercepta y el audio sigue al flujo taxi de siempre.
+const ENTRADAS_VOZ = [
+  { modulo: "ambulancia", regex: /\bambulancia\b|\bemergencia m[ée]dica\b/i },
+  { modulo: "favor", regex: /\b(un mandado|mandadito|un encargo|hazme un favor|necesito un favor)\b/i },
+  { modulo: "delivery", regex: /\bdelivery\b|\bcomida a domicilio\b|\bpedir comida\b/i },
+  { modulo: "school", regex: /\btransporte escolar\b/i },
+  { modulo: "empresas", regex: /\bchatgo empresas\b|\blog[íi]stica empresarial\b/i },
+  { modulo: "rastreo", regex: /\brastrear\b|\brastreo\b|\brastreoplus\b/i },
 ];
 
 function moduloActivo(id) {
@@ -121,19 +136,37 @@ async function procesarModulos(phone, msg, buttonId, session) {
   // 2) Entrada por palabra clave — solo en reposo
   if (!enReposo(session)) return false;
 
+  // 2a) Texto
   const texto = textoDe(msg);
-  if (!texto) return false;
-
-  if (/^servicios?$/i.test(texto)) {
-    await mostrarMenuServicios(phone);
-    return true;
+  if (texto) {
+    if (/^servicios?$/i.test(texto)) {
+      await mostrarMenuServicios(phone);
+      return true;
+    }
+    for (const { modulo, regex } of ENTRADAS) {
+      if (moduloActivo(modulo) && regex.test(texto)) {
+        log.info(`[MODULOS] ${phone} entra al módulo "${modulo}" con: "${texto}"`);
+        return await MODULOS[modulo].iniciar(phone, msg, session);
+      }
+    }
+    return false;
   }
 
-  for (const { modulo, regex } of ENTRADAS) {
-    if (moduloActivo(modulo) && regex.test(texto)) {
-      log.info(`[MODULOS] ${phone} entra al módulo "${modulo}" con: "${texto}"`);
-      return await MODULOS[modulo].iniciar(phone, msg, session);
+  // 2b) Nota de voz: transcribir y buscar frases de módulo (matching estricto).
+  // Si no coincide ninguna, devolvemos false y el flujo taxi procesa el audio
+  // como siempre (ubicaciones por voz, viaje rápido, etc.).
+  if (esAudio(msg)) {
+    const hayModuloConVoz = ENTRADAS_VOZ.some(e => moduloActivo(e.modulo));
+    if (!hayModuloConVoz) return false;
+    const { texto: transcripcion } = await textoDeMensaje(msg);
+    if (!transcripcion) return false;
+    for (const { modulo, regex } of ENTRADAS_VOZ) {
+      if (moduloActivo(modulo) && regex.test(transcripcion)) {
+        log.info(`[MODULOS] ${phone} entra por VOZ al módulo "${modulo}": "${transcripcion.substring(0, 60)}"`);
+        return await MODULOS[modulo].iniciar(phone, msg, session);
+      }
     }
+    return false;
   }
 
   return false;

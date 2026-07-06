@@ -11,11 +11,7 @@ const { CONFIG, log } = require("../config");
 const { Solicitud } = require("../db/models");
 const { updateSession, deleteSession } = require("../services/session");
 const { enviarMensaje } = require("../services/whatsapp");
-
-function textoDe(msg) {
-  if (msg?.text?.body?.trim()) return msg.text.body.trim();
-  return "";
-}
+const { textoDeMensaje } = require("./util");
 
 function crearModuloCaptura({ id, titulo, preguntas, cierre }) {
   const stepDe = (i) => `mod_${id}_p${i}`;
@@ -32,7 +28,8 @@ function crearModuloCaptura({ id, titulo, preguntas, cierre }) {
   }
 
   async function procesar(phone, msg, buttonId, session) {
-    const texto = textoDe(msg);
+    // Acepta texto o nota de voz (se transcribe una sola vez por mensaje)
+    const { texto } = await textoDeMensaje(msg);
 
     if (/^cancelar$/i.test(texto)) {
       await deleteSession(phone);

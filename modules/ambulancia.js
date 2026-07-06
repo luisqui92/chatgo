@@ -17,10 +17,7 @@ const { updateSession, deleteSession } = require("../services/session");
 const { enviarMensaje, enviarBotones } = require("../services/whatsapp");
 const { obtenerDireccion, geocodificarConMemoria } = require("../services/google");
 const { buscarChoferDisponibleTraccar, reservarChoferTraccar } = require("../services/traccar");
-
-function textoDe(msg) {
-  return msg?.text?.body?.trim() || "";
-}
+const { textoDeMensaje } = require("./util");
 
 // Clasificación de prioridad por palabras clave (determinista y sin latencia —
 // en una emergencia no hay tiempo para esperar a un modelo)
@@ -43,7 +40,8 @@ async function iniciar(phone, msg, session) {
 }
 
 async function procesar(phone, msg, buttonId, session) {
-  const texto = textoDe(msg);
+  // Acepta texto o nota de voz — en una emergencia, hablar es más rápido que escribir
+  const { texto } = await textoDeMensaje(msg);
 
   if (/^cancelar$/i.test(texto)) {
     await deleteSession(phone);
