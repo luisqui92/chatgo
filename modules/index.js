@@ -20,6 +20,7 @@ const { deleteSession } = require("../services/session");
 const { enviarMensaje } = require("../services/whatsapp");
 
 const favor = require("./favor");
+const ambulancia = require("./ambulancia");
 const { crearModuloCaptura } = require("./captura");
 
 // Módulos de captura (operación manual detrás de escena mientras no exista
@@ -64,10 +65,12 @@ const rastreo = crearModuloCaptura({
   cierre: "🛰️ ¡Anotado! Te contactaremos para activar el rastreo por WhatsApp: ubicación al instante, alertas y geocercas.",
 });
 
-const MODULOS = { favor, delivery, school, empresas, rastreo };
+const MODULOS = { favor, ambulancia, delivery, school, empresas, rastreo };
 
 // Palabras que abren cada módulo (solo con el usuario en reposo)
 const ENTRADAS = [
+  // Ambulancia primero: en emergencia, cada segundo cuenta
+  { modulo: "ambulancia", regex: /^(ambulancia|emergencia medica|emergencia médica|accidente|herido)s?\b/i },
   { modulo: "favor", regex: /^(favor|mandado|mandadito|tramite|trámite|encargo)s?\b/i },
   { modulo: "delivery", regex: /^(delivery|comida|pedido de comida|restaurante)s?\b/i },
   { modulo: "school", regex: /^(school|colegio|transporte escolar|escolar)\b/i },
@@ -86,6 +89,7 @@ function textoDe(msg) {
 // Menú de servicios (se muestra con la palabra "servicios" si hay módulos activos)
 async function mostrarMenuServicios(phone) {
   const lineas = ["🐒 *ChatGo — Servicios disponibles*\n", "🚖 Escribe *taxi* o pide directo tu viaje"];
+  if (moduloActivo("ambulancia")) lineas.push("🚑 Escribe *ambulancia* — emergencias médicas");
   if (moduloActivo("favor")) lineas.push("🛍️ Escribe *favor* — mandados y encargos");
   if (moduloActivo("delivery")) lineas.push("🍔 Escribe *delivery* — comida a domicilio");
   if (moduloActivo("school")) lineas.push("🎒 Escribe *colegio* — transporte escolar");
