@@ -10,7 +10,7 @@ const os = require("os");
 const { getUsuarios, hashPassword, generarToken, verificarToken, requireAuth, tienePermiso } =  require("../services/auth");
 
 const { CONFIG, log } = require("../config");
-const { Chofer, CodigoPromo, ListaEspera, LocationReference, Usuario, Viaje, ViajeDemo, PreRegistroFlota, Flota } = require("../db/models");
+const { Chofer, CodigoPromo, ListaEspera, LocationReference, Usuario, Viaje, ViajeDemo, PreRegistroFlota, Flota, EventoChofer } = require("../db/models");
 const { obtenerUbicacionChofer } = require("../services/traccar");
 const { geocodificarDireccion } = require("../services/google");
 
@@ -812,6 +812,196 @@ app.get("/admin/me", requireAuth(), (req, res) => {
   res.json({ usuario: req.adminUser.usuario, rol: req.adminUser.rol });
 });
 
+// ═══════════════════════════════════════════════════════════════════════════
+// PERFIL COMPLETO DE CHOFER — fotos (ver/descargar), datos, rating, historial
+// ═══════════════════════════════════════════════════════════════════════════
+
+app.get("/admin/chofer/:phone", requireAuth(), async (req, res) => {
+  try {
+    const chofer = await Chofer.findUnique({ where: { phone: req.params.phone } });
+    if (!chofer) return res.status(404).send("Chofer no encontrado");
+
+    const [viajes, ratingsAgg, eventosAgg, gps] = await Promise.all([
+      Viaje.findMany({
+        where: { choferPhone: chofer.phone },
+        orderBy: { createdAt: "desc" },
+        take: 30,
+      }),
+      Viaje.groupBy({
+        by: ["ratingPasajero"],
+        where: { choferPhone: chofer.phone, ratingPasajero: { not: null } },
+        _count: { ratingPasajero: true },
+      }).catch(() => []),
+      EventoChofer.groupBy({
+        by: ["tipo"],
+        where: { choferPhone: chofer.phone },
+        _count: { tipo: true },
+        _avg: { tiempoRespuesta: true },
+      }).catch(() => []),
+      chofer.traccarId ? obtenerUbicacionChofer(chofer.traccarId).catch(() => null) : null,
+    ]);
+
+    const completados = viajes.filter(v => v.estado === "completado");
+    const totalCobradoAgg = await Viaje.aggregate({
+      where: { choferPhone: chofer.phone, estado: "completado" },
+      _sum: { precioTotal: true },
+      _count: { id: true },
+    }).catch(() => ({ _sum: { precioTotal: 0 }, _count: { id: 0 } }));
+
+    const distRating = { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 };
+    let totalRatings = 0;
+    for (const r of ratingsAgg) {
+      const val = Math.round(r.ratingPasajero);
+      if (distRating[val] !== undefined) distRating[val] += r._count.ratingPasajero;
+      totalRatings += r._count.ratingPasajero;
+    }
+    const ev = {};
+    for (const e of eventosAgg) ev[e.tipo] = { count: e._count.tipo, tiempoProm: e._avg.tiempoRespuesta };
+    const aceptados = ev.aceptado?.count || 0;
+    const rechazados = ev.rechazado?.count || 0;
+    const tasaAceptacion = (aceptados + rechazados) > 0 ? Math.round(aceptados / (aceptados + rechazados) * 100) : null;
+    const tiempoRespProm = ev.aceptado?.tiempoProm ? Math.round(ev.aceptado.tiempoProm) : null;
+
+    const hoy = fechaStrBolivia();
+    const pagoHoy = chofer.pagoDiarioPagado && chofer.pagoDiarioAprobado && chofer.pagoDiarioFechaStr === hoy;
+    const estrellas = n => "★".repeat(Math.round(n)) + "☆".repeat(5 - Math.round(n));
+    const emoji = chofer.tipoVehiculo === "moto" ? "🏍️" : chofer.tipoVehiculo === "van" ? "🚐" : chofer.tipoVehiculo === "ambulancia" ? "🚑" : "🚗";
+
+    const fotoCard = (urlFoto, titulo, archivo) => {
+      if (!urlFoto) return `<div class="foto-card"><div class="foto-vacia">Sin foto</div><div class="foto-titulo">${titulo}</div></div>`;
+      return `<div class="foto-card">
+        <a href="${escapeHtml(urlFoto)}" target="_blank"><img src="${escapeHtml(urlFoto)}" alt="${titulo}" loading="lazy"></a>
+        <div class="foto-titulo">${titulo}</div>
+        <a class="btn-descargar" href="${escapeHtml(urlFoto)}" download="${archivo}">⬇️ Descargar</a>
+      </div>`;
+    };
+
+    const barraRating = (n, cant) => {
+      const pct = totalRatings > 0 ? Math.round(cant / totalRatings * 100) : 0;
+      return `<div class="rbar-row"><span class="rbar-label">${n}★</span><div class="rbar"><div class="rbar-fill" style="width:${pct}%"></div></div><span class="rbar-num">${cant}</span></div>`;
+    };
+
+    const filasViajes = viajes.map(v => {
+      const fecha = v.createdAt ? new Date(v.createdAt).toLocaleString("es-BO", { timeZone: "America/La_Paz", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—";
+      const clE = v.estado === "completado" ? "ok" : ["en_curso","en_camino","esperando_pasajero","pendiente"].includes(v.estado) ? "warn" : "bad";
+      const rating = v.ratingPasajero ? "⭐" + v.ratingPasajero : "—";
+      const comentario = v.comentarioPasajero ? escapeHtml(v.comentarioPasajero) : "";
+      return `<tr><td>${fecha}</td><td><span class="pill pill-${clE}">${v.estado}</span></td>` +
+        `<td class="truncate">${escapeHtml(v.origenNombre || "📍")}</td><td class="truncate">${escapeHtml(v.destinoNombre || "🏁")}</td>` +
+        `<td>${v.distanciaKm || "—"} km</td><td>Bs ${v.precioTotal ?? "—"}</td><td>${rating}${comentario ? `<br><small class="coment">"${comentario}"</small>` : ""}</td>` +
+        `<td><a class="link" href="/admin/viaje/${v.id}${req.query.token ? "?token=" + encodeURIComponent(req.query.token) : ""}" target="_blank">🗺️</a></td></tr>`;
+    }).join("");
+
+    const gpsBadge = !gps ? '<span class="pill pill-bad">❌ Sin GPS</span>'
+      : gps.minutos <= 5 ? `<span class="pill pill-ok">📡 hace ${gps.minutos} min</span>`
+      : gps.minutos <= 15 ? `<span class="pill pill-warn">⚠️ hace ${gps.minutos} min</span>`
+      : `<span class="pill pill-bad">🔴 hace ${gps.minutos} min</span>`;
+
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.send(`<!DOCTYPE html>
+<html lang="es"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${escapeHtml(chofer.nombre || "Chofer")} · ChatGo Admin</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#0f1419;color:#e6e6e6;padding:14px;font-size:14px;max-width:1100px;margin:0 auto;}
+a.volver{color:#58a6ff;text-decoration:none;font-size:13px;}
+.header{display:flex;align-items:center;gap:14px;margin:14px 0 18px;flex-wrap:wrap;}
+.avatar{width:72px;height:72px;border-radius:50%;object-fit:cover;border:3px solid #00d97e;background:#161b22;}
+.avatar-placeholder{width:72px;height:72px;border-radius:50%;background:#161b22;border:3px solid #30363d;display:flex;align-items:center;justify-content:center;font-size:30px;}
+h1{color:#00d97e;font-size:22px;}
+.sub{color:#8b949e;font-size:13px;margin-top:2px;}
+.pill{padding:2px 10px;border-radius:10px;font-size:11px;display:inline-block;}
+.pill-ok{background:#0d3d20;color:#3fb950;}
+.pill-warn{background:#3d2c0d;color:#d29922;}
+.pill-bad{background:#3d0d0d;color:#f85149;}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:8px;margin-bottom:16px;}
+.stat{background:#161b22;padding:10px 12px;border-radius:8px;border:1px solid #30363d;}
+.stat-label{color:#8b949e;font-size:10px;text-transform:uppercase;letter-spacing:.5px;}
+.stat-value{font-size:17px;font-weight:600;margin-top:4px;word-break:break-all;}
+.section{background:#161b22;padding:14px;border-radius:8px;border:1px solid #30363d;margin-bottom:14px;}
+.section h2{font-size:15px;color:#58a6ff;margin-bottom:12px;}
+.fotos{display:flex;gap:14px;flex-wrap:wrap;}
+.foto-card{background:#0d1117;border:1px solid #30363d;border-radius:10px;padding:10px;text-align:center;width:230px;}
+.foto-card img{width:100%;height:200px;object-fit:cover;border-radius:8px;cursor:zoom-in;}
+.foto-vacia{width:100%;height:200px;border-radius:8px;background:#161b22;display:flex;align-items:center;justify-content:center;color:#8b949e;font-style:italic;}
+.foto-titulo{margin:8px 0 6px;font-size:12px;color:#8b949e;text-transform:uppercase;letter-spacing:.5px;}
+.btn-descargar{display:inline-block;padding:6px 14px;background:#1f6feb;color:#fff;border-radius:6px;text-decoration:none;font-size:12px;}
+.btn-descargar:hover{background:#388bfd;}
+.rating-box{display:flex;gap:24px;align-items:center;flex-wrap:wrap;}
+.rating-num{font-size:44px;font-weight:700;color:#d29922;}
+.rating-est{color:#d29922;font-size:18px;letter-spacing:2px;}
+.rating-cant{color:#8b949e;font-size:12px;margin-top:2px;}
+.rbar-row{display:flex;align-items:center;gap:8px;margin:3px 0;}
+.rbar-label{width:26px;font-size:11px;color:#8b949e;}
+.rbar{flex:1;min-width:140px;height:8px;background:#0d1117;border-radius:4px;overflow:hidden;}
+.rbar-fill{height:100%;background:#d29922;border-radius:4px;}
+.rbar-num{font-size:11px;color:#8b949e;width:26px;}
+table{width:100%;border-collapse:collapse;font-size:12px;}
+th,td{text-align:left;padding:8px 6px;border-bottom:1px solid #21262d;}
+th{color:#8b949e;font-weight:600;text-transform:uppercase;font-size:10px;letter-spacing:.5px;}
+tr:hover{background:#0d1117;}
+.truncate{max-width:150px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.coment{color:#8b949e;font-style:italic;}
+a.link{color:#58a6ff;text-decoration:none;}
+.wa{color:#3fb950;text-decoration:none;}
+@media(max-width:768px){.foto-card{width:calc(50% - 7px);}.foto-card img,.foto-vacia{height:150px;}}
+</style></head><body>
+<a class="volver" href="/admin${req.query.token ? "?token=" + encodeURIComponent(req.query.token) : ""}">← Volver al panel</a>
+<div class="header">
+  ${chofer.fotoChofer ? `<img class="avatar" src="${escapeHtml(chofer.fotoChofer)}" alt="foto">` : `<div class="avatar-placeholder">${emoji}</div>`}
+  <div>
+    <h1>${escapeHtml(chofer.nombre || "Sin nombre")}</h1>
+    <div class="sub">${emoji} ${chofer.tipoVehiculo.toUpperCase()} · ${escapeHtml(chofer.placa || "sin placa")}${chofer.colorVehiculo ? " · " + escapeHtml(chofer.colorVehiculo) : ""}${chofer.flota ? " · Flota: " + escapeHtml(chofer.flota) : ""}</div>
+  </div>
+  <span class="pill pill-${chofer.estado === "libre" ? "ok" : chofer.estado === "ocupado" ? "warn" : "bad"}" style="font-size:13px;padding:4px 14px;">${chofer.estado.toUpperCase()}</span>
+</div>
+
+<div class="section">
+  <h2>📸 Fotos y documentos</h2>
+  <div class="fotos">
+    ${fotoCard(chofer.fotoChofer, "Foto del chofer", `chofer_${chofer.phone}.jpg`)}
+    ${fotoCard(chofer.fotoVehiculo, "Foto del vehículo", `vehiculo_${chofer.phone}.jpg`)}
+  </div>
+</div>
+
+<div class="grid">
+  <div class="stat"><div class="stat-label">📞 Teléfono</div><div class="stat-value"><a class="wa" href="https://wa.me/${chofer.phone}" target="_blank">+${chofer.phone}</a></div></div>
+  <div class="stat"><div class="stat-label">📡 GPS</div><div class="stat-value">${gpsBadge}${gps ? ` <a class="link" href="https://maps.google.com/?q=${gps.lat},${gps.lng}" target="_blank" style="font-size:12px;">ver mapa</a>` : ""}</div></div>
+  <div class="stat"><div class="stat-label">💰 Pago de hoy</div><div class="stat-value">${pagoHoy ? '<span class="pill pill-ok">✅ Al día</span>' : chofer.pagoDiarioPagado && !chofer.pagoDiarioAprobado ? '<span class="pill pill-warn">⏳ Por aprobar</span>' : '<span class="pill pill-bad">❌ Sin pago</span>'}</div></div>
+  <div class="stat"><div class="stat-label">🚖 Viajes completados</div><div class="stat-value">${totalCobradoAgg._count?.id ?? completados.length}</div></div>
+  <div class="stat"><div class="stat-label">💵 Total cobrado</div><div class="stat-value">Bs ${Math.round(totalCobradoAgg._sum?.precioTotal || 0)}</div></div>
+  <div class="stat"><div class="stat-label">✅ Tasa de aceptación</div><div class="stat-value">${tasaAceptacion !== null ? tasaAceptacion + "%" : "—"}<small style="color:#8b949e;font-size:11px;"> (${aceptados}✓ ${rechazados}✗)</small></div></div>
+  <div class="stat"><div class="stat-label">⚡ Respuesta promedio</div><div class="stat-value">${tiempoRespProm !== null ? tiempoRespProm + " seg" : "—"}</div></div>
+  <div class="stat"><div class="stat-label">📅 Registrado</div><div class="stat-value" style="font-size:13px;">${chofer.fechaRegistro ? new Date(chofer.fechaRegistro).toLocaleDateString("es-BO", { timeZone: "America/La_Paz" }) : "—"}</div></div>
+  <div class="stat"><div class="stat-label">🛰️ Traccar ID</div><div class="stat-value" style="font-size:13px;">${escapeHtml(chofer.traccarId || "—")}</div></div>
+</div>
+
+<div class="section">
+  <h2>⭐ Calificación de los pasajeros</h2>
+  <div class="rating-box">
+    <div style="text-align:center;">
+      <div class="rating-num">${chofer.ratingCantidad > 0 ? chofer.ratingPromedio.toFixed(1) : "—"}</div>
+      <div class="rating-est">${chofer.ratingCantidad > 0 ? estrellas(chofer.ratingPromedio) : "☆☆☆☆☆"}</div>
+      <div class="rating-cant">${chofer.ratingCantidad} calificacion${chofer.ratingCantidad === 1 ? "" : "es"}</div>
+    </div>
+    <div style="flex:1;min-width:200px;">
+      ${barraRating(5, distRating[5])}${barraRating(4, distRating[4])}${barraRating(3, distRating[3])}${barraRating(2, distRating[2])}${barraRating(1, distRating[1])}
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h2>📜 Últimos ${viajes.length} viajes</h2>
+  ${viajes.length === 0 ? '<div style="color:#8b949e;font-style:italic;text-align:center;padding:16px;">Sin viajes todavía.</div>' :
+  `<div style="overflow-x:auto"><table><thead><tr><th>Fecha</th><th>Estado</th><th>Origen</th><th>Destino</th><th>Km</th><th>Precio</th><th>⭐ / Comentario</th><th>Mapa</th></tr></thead><tbody>${filasViajes}</tbody></table></div>`}
+</div>
+</body></html>`);
+  } catch (e) {
+    log.error("[ADMIN_CHOFER]", e.message);
+    res.status(500).send("Error: " + e.message);
+  }
+});
+
 app.get("/admin/geocod", requireAuth(), async (req, res) => {
   const { q } = req.query;
   if (!q) return res.json({ error: "Falta ?q=direccion" });
@@ -1168,6 +1358,9 @@ app.get("/admin", requireAuth(), (req, res) => {
 <div id="content"><div class="loading">⏳ Cargando datos...</div></div>
 <script>
 let autoRefresh=false,intervaloRefresh=null;
+const TOKEN=new URLSearchParams(location.search).get("token")||"";
+const QS=TOKEN?"?token="+encodeURIComponent(TOKEN):"";
+if(QS){const ml=document.querySelector('a[href="/admin/mapa"]');if(ml)ml.href+=QS;}
 document.getElementById("btnAuto").onclick=()=>{autoRefresh=!autoRefresh;const btn=document.getElementById("btnAuto");if(autoRefresh){btn.textContent="⏸️ Auto-refresh ON (15s)";btn.style.background="#0d3d20";intervaloRefresh=setInterval(cargar,15000);}else{btn.textContent="▶️ Auto-refresh OFF";btn.style.background="#30363d";if(intervaloRefresh)clearInterval(intervaloRefresh);}};
 function fmtHora(d){if(!d)return"—";return new Date(d).toLocaleString("es-BO",{timeZone:"America/La_Paz",hour:"2-digit",minute:"2-digit",day:"2-digit",month:"2-digit"});}
 function fmtTel(p){return p?"+"+p:"—";}
@@ -1175,7 +1368,7 @@ function gpsBadge(pos){if(!pos)return'<span class="gps-no">❌ Sin GPS</span>';i
 function estadoBadge(estado){return'<span class="estado estado-'+estado+'">'+estado.toUpperCase()+'</span>';}
 function tipoVehBadge(t){const e=t==="moto"?"🏍️":"🚗";return'<span class="vehiculo-'+t+'">'+e+' '+t.toUpperCase()+'</span>';}
 function pagoBadge(c){if(c.pagoAlDia)return'<span class="pago-ok">✅ Pagado hoy</span>';if(c.pagoDiario?.pagado&&!c.pagoDiario?.aprobado)return'<span class="gps-old">⏳ Pendiente</span>';return'<span class="pago-no">❌ Sin pago</span>';}
-async function cargar(){try{const r=await fetch("/admin/data");const d=await r.json();if(d.error){document.getElementById("content").innerHTML='<div class="section">❌ Error: '+d.error+'</div>';return;}renderizar(d);document.getElementById("updated").textContent="Actualizado: "+new Date().toLocaleTimeString("es-BO");}catch(e){document.getElementById("content").innerHTML='<div class="section">❌ Error de red: '+e.message+'</div>';}}
+async function cargar(){try{const r=await fetch("/admin/data"+QS);const d=await r.json();if(d.error){document.getElementById("content").innerHTML='<div class="section">❌ Error: '+d.error+'</div>';return;}renderizar(d);document.getElementById("updated").textContent="Actualizado: "+new Date().toLocaleTimeString("es-BO");}catch(e){document.getElementById("content").innerHTML='<div class="section">❌ Error de red: '+e.message+'</div>';}}
 function renderizar(d){const s=d.stats;let html='';
 html+='<div class="stats-grid">';
 html+='<div class="stat"><div class="stat-label">Choferes</div><div class="stat-value blue">'+s.choferesTotal+'</div></div>';
@@ -1195,13 +1388,13 @@ html+='<div class="stat"><div class="stat-label">🎁 Códigos</div><div class="
 html+='</div>';
 html+='<div class="section"><h2>👥 Choferes <span class="badge">'+d.choferes.length+'</span> <select class="filter" id="filtroChofer" onchange="filtrarChoferes()"><option value="todos">Todos</option><option value="libre">Libres</option><option value="ocupado">Ocupados</option><option value="offline">Offline</option><option value="con-gps">Con GPS</option><option value="sin-gps">Sin GPS</option><option value="pagado">Pagados</option><option value="impago">Sin pagar</option></select></h2>';
 if(d.choferes.length===0){html+='<div class="empty">No hay choferes registrados.</div>';}else{html+='<div style="overflow-x:auto"><table id="tablaChoferes"><thead><tr><th>Estado</th><th>Nombre</th><th>Placa</th><th>Tipo</th><th>Teléfono</th><th>Traccar ID</th><th>GPS</th><th>Pago</th><th>Viajes</th><th>⭐</th><th>Mapa</th></tr></thead><tbody>';
-d.choferes.forEach(c=>{let mapaLink="—";if(c.ultimaPos)mapaLink='<a class="maplink" href="https://www.google.com/maps?q='+c.ultimaPos.lat+','+c.ultimaPos.lng+'" target="_blank">🗺️ Ver</a>';const rating=c.ratingCantidad>0?c.ratingPromedio.toFixed(1)+' ('+c.ratingCantidad+')':'—';let clase="chofer";clase+=" estado-"+c.estado;clase+=c.ultimaPos&&c.ultimaPos.hace_min<=15?" con-gps":" sin-gps";clase+=c.pagoAlDia?" pagado":" impago";html+='<tr class="'+clase+'"><td>'+estadoBadge(c.estado)+'</td><td class="truncate" title="'+(c.nombre||"")+'">'+(c.nombre||"—")+'</td><td>'+(c.placa||"—")+'</td><td>'+tipoVehBadge(c.tipoVehiculo)+'</td><td>'+fmtTel(c.phone)+'</td><td>'+(c.wialonId||"—")+'</td><td>'+gpsBadge(c.ultimaPos)+'</td><td>'+pagoBadge(c)+'</td><td>'+c.viajesTotal+'</td><td>'+rating+'</td><td>'+mapaLink+'</td></tr>';});
+d.choferes.forEach(c=>{let mapaLink="—";if(c.ultimaPos)mapaLink='<a class="maplink" href="https://www.google.com/maps?q='+c.ultimaPos.lat+','+c.ultimaPos.lng+'" target="_blank">🗺️ Ver</a>';const rating=c.ratingCantidad>0?c.ratingPromedio.toFixed(1)+' ('+c.ratingCantidad+')':'—';let clase="chofer";clase+=" estado-"+c.estado;clase+=c.ultimaPos&&c.ultimaPos.hace_min<=15?" con-gps":" sin-gps";clase+=c.pagoAlDia?" pagado":" impago";html+='<tr class="'+clase+'"><td>'+estadoBadge(c.estado)+'</td><td class="truncate" title="'+(c.nombre||"")+'"><a class="maplink" href="/admin/chofer/'+c.phone+QS+'">👤 '+(c.nombre||"—")+'</a></td><td>'+(c.placa||"—")+'</td><td>'+tipoVehBadge(c.tipoVehiculo)+'</td><td>'+fmtTel(c.phone)+'</td><td>'+(c.wialonId||"—")+'</td><td>'+gpsBadge(c.ultimaPos)+'</td><td>'+pagoBadge(c)+'</td><td>'+c.viajesTotal+'</td><td>'+rating+'</td><td>'+mapaLink+'</td></tr>';});
 html+='</tbody></table></div>';}html+='</div>';
 html+='<div class="section"><h2>🚖 Viajes activos <span class="badge">'+d.viajesActivos.length+'</span></h2>';
-if(d.viajesActivos.length===0){html+='<div class="empty">No hay viajes activos.</div>';}else{html+='<div style="overflow-x:auto"><table><thead><tr><th>Estado</th><th>Tipo</th><th>Pasajero</th><th>Chofer</th><th>Origen</th><th>Destino</th><th>Km</th><th>Precio</th><th>Inicio</th><th>Mapa</th></tr></thead><tbody>';d.viajesActivos.forEach(v=>{html+='<tr><td><span class="estado estado-'+(v.estado==="en_curso"?"libre":"ocupado")+'">'+v.estado+'</span></td><td>'+tipoVehBadge(v.tipoVehiculo||"auto")+'</td><td>'+fmtTel(v.usuarioPhone)+'</td><td>'+(v.choferNombre||"—")+'<br><small>'+(v.choferPlaca||"")+'</small></td><td class="truncate">'+(v.origenNombre||"📍")+'</td><td class="truncate">'+(v.destinoNombre||"🏁")+'</td><td>'+(v.distanciaKm||"—")+' km</td><td>Bs '+(v.precioTotal||"—")+'</td><td>'+fmtHora(v.fechaInicio)+'</td><td><a class="maplink" href="/admin/viaje/'+v.id+'" target="_blank">🗺️</a></td></tr>';});html+='</tbody></table></div>';}html+='</div>';
+if(d.viajesActivos.length===0){html+='<div class="empty">No hay viajes activos.</div>';}else{html+='<div style="overflow-x:auto"><table><thead><tr><th>Estado</th><th>Tipo</th><th>Pasajero</th><th>Chofer</th><th>Origen</th><th>Destino</th><th>Km</th><th>Precio</th><th>Inicio</th><th>Mapa</th></tr></thead><tbody>';d.viajesActivos.forEach(v=>{html+='<tr><td><span class="estado estado-'+(v.estado==="en_curso"?"libre":"ocupado")+'">'+v.estado+'</span></td><td>'+tipoVehBadge(v.tipoVehiculo||"auto")+'</td><td>'+fmtTel(v.usuarioPhone)+'</td><td>'+(v.choferNombre||"—")+'<br><small>'+(v.choferPlaca||"")+'</small></td><td class="truncate">'+(v.origenNombre||"📍")+'</td><td class="truncate">'+(v.destinoNombre||"🏁")+'</td><td>'+(v.distanciaKm||"—")+' km</td><td>Bs '+(v.precioTotal||"—")+'</td><td>'+fmtHora(v.fechaInicio)+'</td><td><a class="maplink" href="/admin/viaje/'+v.id+QS+'" target="_blank">🗺️</a></td></tr>';});html+='</tbody></table></div>';}html+='</div>';
 if(d.listaEspera.length>0){html+='<div class="section"><h2>⏳ Lista de espera <span class="badge">'+d.listaEspera.length+'</span></h2><div style="overflow-x:auto"><table><thead><tr><th>Pasajero</th><th>Tipo</th><th>Origen</th><th>Destino</th><th>Precio</th><th>Esperando desde</th><th>Notificado</th></tr></thead><tbody>';d.listaEspera.forEach(e=>{html+='<tr><td>'+fmtTel(e.userPhone)+'</td><td>'+(e.tipoVehiculoSolicitado?tipoVehBadge(e.tipoVehiculoSolicitado):"—")+'</td><td class="truncate">'+(e.origenNombre||"—")+'</td><td class="truncate">'+(e.destinoNombre||"—")+'</td><td>Bs '+(e.precio||"—")+'</td><td>'+fmtHora(e.timestamp)+'</td><td>'+(e.notificado?"✅":"⏳")+'</td></tr>';});html+='</tbody></table></div></div>';}
 html+='<div class="section"><h2>📜 Últimos 20 viajes</h2><div style="overflow-x:auto"><table><thead><tr><th>Fecha</th><th>Estado</th><th>Tipo</th><th>Pasajero</th><th>Chofer</th><th>Km</th><th>Precio</th><th>⭐</th><th>Mapa</th></tr></thead><tbody>';
-d.viajesRecientes.forEach(v=>{const rTxt=v.ratingPasajero?"⭐"+v.ratingPasajero:"—";let clE="offline";if(v.estado==="completado")clE="libre";else if(["en_curso","en_camino","esperando_pasajero","pendiente"].includes(v.estado))clE="ocupado";html+='<tr><td>'+fmtHora(v.createdAt||v.fechaInicio)+'</td><td><span class="estado estado-'+clE+'">'+v.estado+'</span></td><td>'+tipoVehBadge(v.tipoVehiculo||"auto")+'</td><td>'+fmtTel(v.usuarioPhone)+'</td><td>'+(v.choferNombre||"—")+'</td><td>'+(v.distanciaKm||"—")+' km</td><td>Bs '+(v.precioTotal||"—")+'</td><td>'+rTxt+'</td><td><a class="maplink" href="/admin/viaje/'+v.id+'" target="_blank">🗺️</a></td></tr>';});
+d.viajesRecientes.forEach(v=>{const rTxt=v.ratingPasajero?"⭐"+v.ratingPasajero:"—";let clE="offline";if(v.estado==="completado")clE="libre";else if(["en_curso","en_camino","esperando_pasajero","pendiente"].includes(v.estado))clE="ocupado";html+='<tr><td>'+fmtHora(v.createdAt||v.fechaInicio)+'</td><td><span class="estado estado-'+clE+'">'+v.estado+'</span></td><td>'+tipoVehBadge(v.tipoVehiculo||"auto")+'</td><td>'+fmtTel(v.usuarioPhone)+'</td><td>'+(v.choferNombre||"—")+'</td><td>'+(v.distanciaKm||"—")+' km</td><td>Bs '+(v.precioTotal||"—")+'</td><td>'+rTxt+'</td><td><a class="maplink" href="/admin/viaje/'+v.id+QS+'" target="_blank">🗺️</a></td></tr>';});
 html+='</tbody></table></div></div>';
 document.getElementById("content").innerHTML=html;}
 function filtrarChoferes(){const filtro=document.getElementById("filtroChofer").value;const filas=document.querySelectorAll("#tablaChoferes tbody tr");filas.forEach(f=>{let m=true;if(filtro==="libre")m=f.classList.contains("estado-libre");else if(filtro==="ocupado")m=f.classList.contains("estado-ocupado");else if(filtro==="offline")m=f.classList.contains("estado-offline");else if(filtro==="con-gps")m=f.classList.contains("con-gps");else if(filtro==="sin-gps")m=f.classList.contains("sin-gps");else if(filtro==="pagado")m=f.classList.contains("pagado");else if(filtro==="impago")m=f.classList.contains("impago");f.style.display=m?"":"none";});}
