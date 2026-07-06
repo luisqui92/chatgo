@@ -52,7 +52,8 @@ app.post("/webhook", limitWebhook, async (req, res) => {
         }
 
         const phone = msg.from;
-        registrarNumeroEntrada(phone, phoneNumberId);
+        // El admin siempre se atiende por el número padre
+        registrarNumeroEntrada(phone, phone === CONFIG.ADMIN_PHONE ? CONFIG.WHATSAPP_PHONE_ID : phoneNumberId);
         const buttonId = msg.interactive?.button_reply?.id || msg.button?.payload || null;
         const textoUpper = msg.text?.body?.trim().toUpperCase() || "";
         const mediaId = msg.image?.id || null;
@@ -103,6 +104,9 @@ app.post("/webhook", limitWebhook, async (req, res) => {
 
         // ROUTING chofer/pasajero
         const esChofer = !!(await Chofer.findUnique({ where: { phone } }));
+        // Los CHOFERES siempre se atienden por el número padre: las órdenes de
+        // trabajo, botones y chat les llegan de UN solo número, escriban donde escriban
+        if (esChofer) registrarNumeroEntrada(phone, CONFIG.WHATSAPP_PHONE_ID);
         const session = await getSession(phone);
 
         // Si es chofer registrado, NUNCA lo tratamos como pasajero por sesión residual.
