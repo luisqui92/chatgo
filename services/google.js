@@ -744,4 +744,43 @@ async function verificarTraficoEnRuta(origen, destino) {
 }
 
 
-module.exports = { distanciaEntrePuntos, calcularTiempoConTrafico, obtenerRutaCompleta, distanciaARuta, decodificarPolyline, evaluarPrecisionReferencia, extraerCoordsDeUrlGmaps, resolverUrlCorta, extraerNombreLugarDeUrl, detectarYExtrarCoordsMaps, normalizarReferencia, generarTrigramas, similitudTexto, buscarReferenciaEnMemoria, guardarReferenciaVoz, dentroDeCocha, geocodificarConMemoria, calcularDistancia, calcularDistanciaConParadas, generarLinkRutaConParadas, generarLinkMapaPropio, geocodificarDireccion, obtenerDireccion, verificarTraficoEnRuta };
+
+// ─── ROUTES API (reemplazo moderno de Directions, obligatorio en proyectos
+// nuevos de Google Cloud donde la Directions legacy da REQUEST_DENIED) ───────
+// Devuelve rutas con tráfico: [{duracionSeg, duracionSinTraficoSeg, distanciaM, via, puntos[]}]
+// ordenadas como las entrega Google (la primera es la recomendada).
+async function calcularRutasConTrafico(origen, destino, paradas = []) {
+  const body = {
+    origin: { location: { latLng: { latitude: origen.lat, longitude: origen.lng } } },
+    destination: { location: { latLng: { latitude: destino.lat, longitude: destino.lng } } },
+    travelMode: "DRIVE",
+    routingPreference: "TRAFFIC_AWARE",
+    computeAlternativeRoutes: paradas.length === 0, // Google no da alternativas con paradas
+    languageCode: "es",
+    units: "METRIC",
+  };
+  if (paradas.length > 0) {
+    body.intermediates = paradas.map(p => ({ location: { latLng: { latitude: p.lat, longitude: p.lng } } }));
+  }
+  const res = await axios.post(
+    "https://routes.googleapis.com/directions/v2:computeRoutes",
+    body,
+    {
+      headers: {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": CONFIG.GOOGLE_MAPS_KEY,
+        "X-Goog-FieldMask": "routes.duration,routes.staticDuration,routes.distanceMeters,routes.polyline.encodedPolyline,routes.description",
+      },
+      timeout: CONFIG.TIMEOUT_GOOGLE,
+    }
+  );
+  return (res.data.routes || []).map(r => ({
+    duracionSeg: parseInt(r.duration) || 0,                 // viene como "1234s"
+    duracionSinTraficoSeg: parseInt(r.staticDuration) || parseInt(r.duration) || 0,
+    distanciaM: r.distanceMeters || 0,
+    via: r.description || "",
+    puntos: r.polyline?.encodedPolyline ? decodificarPolyline(r.polyline.encodedPolyline) : [],
+  }));
+}
+
+module.exports = { calcularRutasConTrafico, distanciaEntrePuntos, calcularTiempoConTrafico, obtenerRutaCompleta, distanciaARuta, decodificarPolyline, evaluarPrecisionReferencia, extraerCoordsDeUrlGmaps, resolverUrlCorta, extraerNombreLugarDeUrl, detectarYExtrarCoordsMaps, normalizarReferencia, generarTrigramas, similitudTexto, buscarReferenciaEnMemoria, guardarReferenciaVoz, dentroDeCocha, geocodificarConMemoria, calcularDistancia, calcularDistanciaConParadas, generarLinkRutaConParadas, generarLinkMapaPropio, geocodificarDireccion, obtenerDireccion, verificarTraficoEnRuta };

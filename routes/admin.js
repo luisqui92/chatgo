@@ -12,7 +12,7 @@ const { getUsuarios, hashPassword, generarToken, verificarToken, requireAuth, ti
 const { CONFIG, log } = require("../config");
 const { Chofer, CodigoPromo, ListaEspera, LocationReference, Usuario, Viaje, ViajeDemo, PreRegistroFlota, Flota, EventoChofer } = require("../db/models");
 const { obtenerUbicacionChofer } = require("../services/traccar");
-const { geocodificarDireccion } = require("../services/google");
+const { geocodificarDireccion, calcularRutasConTrafico } = require("../services/google");
 
 // ─── HELPERS DE SEGURIDAD ────────────────────────────────────────────────────
 
@@ -1088,6 +1088,25 @@ app.get("/track/:viajeId/pos", async (req, res) => {
   }
 });
 
+// Ruta del viaje para la página de rastreo (Routes API server-side; la
+// Directions legacy del navegador da REQUEST_DENIED en proyectos nuevos)
+app.get("/track/:viajeId/ruta", async (req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "https://chatgo.ia.bo");
+  try {
+    const viaje = await Viaje.findUnique({ where: { id: req.params.viajeId } });
+    if (!viaje || !viaje.origenLat || !viaje.destinoLat) return res.json({ error: "not_found" });
+    const rutas = await calcularRutasConTrafico(
+      { lat: viaje.origenLat, lng: viaje.origenLng },
+      { lat: viaje.destinoLat, lng: viaje.destinoLng },
+      Array.isArray(viaje.paradas) ? viaje.paradas : []
+    );
+    res.json({ puntos: rutas[0]?.puntos || [] });
+  } catch (e) {
+    log.error("[TRACK_RUTA]", e.response?.data?.error?.message || e.message);
+    res.json({ error: e.message });
+  }
+});
+
 // Página de rastreo HTML con Google Maps
 app.get("/track/:viajeId", async (req, res) => {
   try {
@@ -1267,19 +1286,20 @@ function moverSuave(marker, destino) {
 
 function dibujarRuta() {
   if (!ORIGEN.lat || !DESTINO.lat) return;
-  const svc = new google.maps.DirectionsService();
-  dirRenderer = new google.maps.DirectionsRenderer({
-    suppressMarkers: true,
-    polylineOptions: { strokeColor: "#FF3B30", strokeWeight: 5, strokeOpacity: 0.85 },
-  });
-  dirRenderer.setMap(map);
-  svc.route({
-    origin: { lat: ORIGEN.lat, lng: ORIGEN.lng },
-    destination: { lat: DESTINO.lat, lng: DESTINO.lng },
-    travelMode: google.maps.TravelMode.DRIVING,
-  }, (result, status) => {
-    if (status === "OK") dirRenderer.setDirections(result);
-  });
+  // Routes API vía backend (la Directions legacy da REQUEST_DENIED en proyectos nuevos)
+  fetch("/track/" + VID + "/ruta")
+    .then(r => r.json())
+    .then(d => {
+      if (!d.puntos || !d.puntos.length) return;
+      dirRenderer = new google.maps.Polyline({
+        map,
+        path: d.puntos,
+        strokeColor: "#FF3B30",
+        strokeWeight: 5,
+        strokeOpacity: 0.85,
+      });
+    })
+    .catch(() => {});
 }
 
 async function poll() {

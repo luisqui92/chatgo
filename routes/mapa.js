@@ -4,9 +4,32 @@
 // GET /mapa/:viajeId
 
 const { Viaje } = require("../db/models");
-const { CONFIG } = require("../config");
+const { CONFIG, log } = require("../config");
+const { calcularRutasConTrafico } = require("../services/google");
 
 module.exports = function (app) {
+  // Rutas con tráfico vía Routes API (server-side: la Directions legacy del
+  // navegador da REQUEST_DENIED en proyectos nuevos de Google Cloud)
+  app.get("/mapa/:viajeId/ruta", async (req, res) => {
+    try {
+      const viaje = await Viaje.findUnique({ where: { id: req.params.viajeId } });
+      if (!viaje || !viaje.origenLat || !viaje.destinoLat) {
+        return res.json({ error: "not_found" });
+      }
+      const paradas = Array.isArray(viaje.paradas) ? viaje.paradas : [];
+      const rutas = await calcularRutasConTrafico(
+        { lat: viaje.origenLat, lng: viaje.origenLng },
+        { lat: viaje.destinoLat, lng: viaje.destinoLng },
+        paradas
+      );
+      res.json({ rutas });
+    } catch (e) {
+      const detalle = e.response?.data?.error?.message || e.message;
+      log.error("[MAPA_RUTA]", detalle);
+      res.json({ error: detalle });
+    }
+  });
+
   app.get("/mapa/:viajeId", async (req, res) => {
     try {
       const viaje = await Viaje.findUnique({ where: { id: req.params.viajeId } });
@@ -25,6 +48,7 @@ module.exports = function (app) {
       }
 
       const html = generarHTML({
+        viajeId: viaje.id,
         origenLat: viaje.origenLat,
         origenLng: viaje.origenLng,
         origenNombre,
@@ -45,7 +69,7 @@ module.exports = function (app) {
   });
 };
 
-function generarHTML({ origenLat, origenLng, origenNombre, destinoLat, destinoLng, destinoNombre, paradas, linkGmaps, apiKey }) {
+function generarHTML({ viajeId, origenLat, origenLng, origenNombre, destinoLat, destinoLng, destinoNombre, paradas, linkGmaps, apiKey }) {
   const paradasJson = JSON.stringify(paradas);
 
   return `<!DOCTYPE html>
@@ -189,6 +213,7 @@ function generarHTML({ origenLat, origenLng, origenNombre, destinoLat, destinoLn
 
   <script>
     const VIAJE = {
+      id:         "${viajeId}",
       origenLat:  ${origenLat},
       origenLng:  ${origenLng},
       destinoLat: ${destinoLat},
@@ -271,29 +296,27 @@ function generarHTML({ origenLat, origenLng, origenNombre, destinoLat, destinoLn
     function calcularRuta(esPrimeraVez) {
       const origen  = { lat: VIAJE.origenLat,  lng: VIAJE.origenLng  };
       const destino = { lat: VIAJE.destinoLat, lng: VIAJE.destinoLng };
-      const waypoints = (VIAJE.paradas || []).map(p => ({
-        location: new google.maps.LatLng(p.lat, p.lng),
-        stopover: true
-      }));
 
-      new google.maps.DirectionsService().route({
-        origin: origen,
-        destination: destino,
-        waypoints,
-        travelMode: google.maps.TravelMode.DRIVING,
-        provideRouteAlternatives: waypoints.length === 0, // Google no da alternativas con paradas
-        drivingOptions: { departureTime: new Date(), trafficModel: "bestguess" }
-      }, function(result, status) {
-        if (status !== "OK") {
-          console.error("Directions falló:", status);
-          document.getElementById("eta-value").textContent = "—";
-          document.getElementById("eta-value").style.color = "#64748b";
-          mostrarAviso("amarillo", "⚠️ No se pudo calcular la ruta con tráfico (" + status + "). Se muestra la ruta directa; usá el botón Navegar.");
+      // Routes API vía nuestro backend (la Directions legacy del navegador
+      // da REQUEST_DENIED en proyectos nuevos de Google Cloud)
+      fetch("/mapa/" + VIAJE.id + "/ruta")
+        .then(r => r.json())
+        .then(d => {
+          if (d.error || !d.rutas || !d.rutas.length) {
+            console.error("Ruta falló:", d.error);
+            document.getElementById("eta-value").textContent = "—";
+            document.getElementById("eta-value").style.color = "#64748b";
+            mostrarAviso("amarillo", "⚠️ No se pudo calcular la ruta con tráfico" + (d.error ? " (" + d.error + ")" : "") + ". Se muestra la ruta directa; usá el botón Navegar.");
+            dibujarLineaRespaldo(origen, destino);
+            return;
+          }
+          pintarRutas(d.rutas, esPrimeraVez);
+        })
+        .catch(e => {
+          console.error("Ruta falló:", e);
+          mostrarAviso("amarillo", "⚠️ Error de red calculando la ruta. Se muestra la ruta directa.");
           dibujarLineaRespaldo(origen, destino);
-          return;
-        }
-        pintarRutas(result, esPrimeraVez);
-      });
+        });
     }
 
     // Si Directions falla (API deshabilitada, sin cuota, etc.) igual se ve una línea A→B
@@ -309,13 +332,11 @@ function generarHTML({ origenLat, origenLng, origenNombre, destinoLat, destinoLn
       map.fitBounds(b, 60);
     }
 
-    function pintarRutas(result, esPrimeraVez) {
-      // Elegir la ruta MÁS RÁPIDA con tráfico (Google no siempre pone la mejor primero)
-      const rutas = result.routes;
+    function pintarRutas(rutas, esPrimeraVez) {
+      // Elegir la ruta MÁS RÁPIDA con tráfico
       let mejorIdx = 0, mejorSeg = Infinity;
       rutas.forEach((r, i) => {
-        const seg = r.legs.reduce((s, l) => s + (l.duration_in_traffic || l.duration).value, 0);
-        if (seg < mejorSeg) { mejorSeg = seg; mejorIdx = i; }
+        if (r.duracionSeg < mejorSeg) { mejorSeg = r.duracionSeg; mejorIdx = i; }
       });
 
       // Limpiar dibujos anteriores (refrescos)
@@ -327,30 +348,33 @@ function generarHTML({ origenLat, origenLng, origenNombre, destinoLat, destinoLn
       rutas.forEach((r, i) => {
         if (i === mejorIdx) return;
         const poly = new google.maps.Polyline({
-          map, path: r.overview_path,
+          map, path: r.puntos,
           strokeColor: "#64748b", strokeOpacity: 0.55, strokeWeight: 4, zIndex: 1
         });
         polysAlternativas.push(poly);
       });
 
       // Ruta recomendada en azul (encima)
-      rendererPrincipal = new google.maps.DirectionsRenderer({
-        map,
-        directions: result,
-        routeIndex: mejorIdx,
-        suppressMarkers: true,
-        preserveViewport: !esPrimeraVez,
-        polylineOptions: { strokeColor: "#3b82f6", strokeWeight: 6, strokeOpacity: 0.9, zIndex: 2 }
+      rendererPrincipal = new google.maps.Polyline({
+        map, path: rutas[mejorIdx].puntos,
+        strokeColor: "#3b82f6", strokeWeight: 6, strokeOpacity: 0.9, zIndex: 2
       });
+
+      // Encuadrar el mapa a la ruta (solo la primera vez)
+      if (esPrimeraVez && rutas[mejorIdx].puntos.length) {
+        const b = new google.maps.LatLngBounds();
+        rutas[mejorIdx].puntos.forEach(p => b.extend(p));
+        map.fitBounds(b, 60);
+      }
 
       // ── ETA y análisis de tráfico ──
       const mejor = rutas[mejorIdx];
-      const segCon = mejor.legs.reduce((s, l) => s + (l.duration_in_traffic || l.duration).value, 0);
-      const segSin = mejor.legs.reduce((s, l) => s + l.duration.value, 0);
-      const distM  = mejor.legs.reduce((s, l) => s + l.distance.value, 0);
+      const segCon = mejor.duracionSeg;
+      const segSin = mejor.duracionSinTraficoSeg;
+      const distM  = mejor.distanciaM;
       const minCon = Math.round(segCon / 60);
       const demoraMin = Math.max(0, Math.round((segCon - segSin) / 60));
-      const via = mejor.summary || "la ruta marcada";
+      const via = mejor.via || "la ruta marcada";
 
       const etaEl = document.getElementById("eta-value");
       etaEl.textContent = minCon + " min";
@@ -375,8 +399,8 @@ function generarHTML({ origenLat, origenLng, origenNombre, destinoLat, destinoLn
       // Si Google trae una alternativa apenas más lenta, mencionarla como plan B
       if (rutas.length > 1) {
         const otra = rutas.find((r, i) => i !== mejorIdx);
-        if (otra && otra.summary && otra.summary !== via) {
-          textoAviso += " Alternativa: " + otra.summary + " (gris en el mapa).";
+        if (otra && otra.via && otra.via !== via) {
+          textoAviso += " Alternativa: " + otra.via + " (gris en el mapa).";
         }
       }
       mostrarAviso(nivel, textoAviso);
