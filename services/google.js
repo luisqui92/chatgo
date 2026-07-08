@@ -424,26 +424,16 @@ async function geocodificarConMemoria(referencia, ciudadUsuario) {
   return coords;
 }
 
+// Distancia real por calles vía Routes API (la Distance Matrix legacy está
+// bloqueada en proyectos nuevos de Google Cloud — daba fallback Haversine siempre)
 async function calcularDistancia(origen, destino) {
   try {
-    const res = await axios.get(
-      "https://maps.googleapis.com/maps/api/distancematrix/json",
-      {
-        params: {
-          origins: `${origen.lat},${origen.lng}`,
-          destinations: `${destino.lat},${destino.lng}`,
-          key: CONFIG.GOOGLE_MAPS_KEY,
-          mode: "driving",
-        },
-        timeout: CONFIG.TIMEOUT_GOOGLE,
-      }
-    );
-    if (res.data.status !== "OK") throw new Error("fallback");
-    const element = res.data.rows?.[0]?.elements?.[0];
-    if (!element || element.status !== "OK") throw new Error("fallback");
+    const rutas = await calcularRutasConTrafico(origen, destino);
+    if (!rutas.length) throw new Error("fallback");
+    const r = rutas[0];
     return {
-      km: Math.round((element.distance.value / 1000) * 10) / 10,
-      duracion: element.duration.text,
+      km: Math.round((r.distanciaM / 1000) * 10) / 10,
+      duracion: `${Math.round(r.duracionSeg / 60)} min`,
       esAproximado: false,
     };
   } catch {
@@ -473,32 +463,20 @@ function decodificarPolyline(encoded) {
 // Obtiene la ruta recomendada: polilínea, distancia, tiempo. Para guardar al aceptar el viaje.
 async function obtenerRutaCompleta(origenLat, origenLng, destinoLat, destinoLng) {
   try {
-    const res = await axios.get(
-      "https://maps.googleapis.com/maps/api/directions/json",
-      {
-        params: {
-          origin: `${origenLat},${origenLng}`,
-          destination: `${destinoLat},${destinoLng}`,
-          key: CONFIG.GOOGLE_MAPS_KEY,
-          mode: "driving",
-          departure_time: "now",
-          traffic_model: "best_guess",
-        },
-        timeout: CONFIG.TIMEOUT_GOOGLE,
-      }
+    const rutas = await calcularRutasConTrafico(
+      { lat: origenLat, lng: origenLng },
+      { lat: destinoLat, lng: destinoLng }
     );
-    if (res.data.status !== "OK" || !res.data.routes?.length) return null;
-    const route = res.data.routes[0];
-    const leg = route.legs?.[0];
-    const encoded = route.overview_polyline?.points || null;
+    if (!rutas.length) return null;
+    const r = rutas[0];
     return {
-      polilinea: encoded,
-      puntos: encoded ? decodificarPolyline(encoded) : [],
-      distanciaKm: leg ? Math.round((leg.distance?.value || 0) / 100) / 10 : null,
-      minutosEstimados: leg ? Math.round((leg.duration_in_traffic?.value || leg.duration?.value || 0) / 60) : null,
+      polilinea: r.polilineaCodificada,
+      puntos: r.puntos,
+      distanciaKm: Math.round(r.distanciaM / 100) / 10,
+      minutosEstimados: Math.round(r.duracionSeg / 60),
     };
   } catch (e) {
-    log.error("[RUTA_COMPLETA]", e.message);
+    log.error("[RUTA_COMPLETA]", e.response?.data?.error?.message || e.message);
     return null;
   }
 }
@@ -516,77 +494,53 @@ function distanciaARuta(lat, lng, puntosRuta) {
 
 async function calcularTiempoConTrafico(origenLat, origenLng, destinoLat, destinoLng) {
   try {
-    const res = await axios.get(
-      "https://maps.googleapis.com/maps/api/distancematrix/json",
-      {
-        params: {
-          origins: `${origenLat},${origenLng}`,
-          destinations: `${destinoLat},${destinoLng}`,
-          key: CONFIG.GOOGLE_MAPS_KEY,
-          mode: "driving",
-          departure_time: "now",
-          traffic_model: "best_guess",
-        },
-        timeout: CONFIG.TIMEOUT_GOOGLE,
-      }
+    const rutas = await calcularRutasConTrafico(
+      { lat: origenLat, lng: origenLng },
+      { lat: destinoLat, lng: destinoLng }
     );
-    if (res.data.status !== "OK") return null;
-    const element = res.data.rows?.[0]?.elements?.[0];
-    if (!element || element.status !== "OK") return null;
-
-    const duracionNormal = element.duration?.value || 0;       // segundos sin tráfico
-    const duracionTrafico = element.duration_in_traffic?.value || duracionNormal; // segundos con tráfico
-    const factorTrafico = duracionNormal > 0 ? duracionTrafico / duracionNormal : 1;
+    if (!rutas.length) return null;
+    const r = rutas[0];
+    const factorTrafico = r.duracionSinTraficoSeg > 0 ? r.duracionSeg / r.duracionSinTraficoSeg : 1;
 
     return {
-      minutosSinTrafico: Math.round(duracionNormal / 60),
-      minutosConTrafico: Math.round(duracionTrafico / 60),
+      minutosSinTrafico: Math.round(r.duracionSinTraficoSeg / 60),
+      minutosConTrafico: Math.round(r.duracionSeg / 60),
       factorTrafico: Math.round(factorTrafico * 100) / 100,
       hayTrafico: factorTrafico > 1.3, // más de 30% de demora = tráfico significativo
-      distanciaKm: Math.round((element.distance?.value || 0) / 100) / 10,
+      distanciaKm: Math.round(r.distanciaM / 100) / 10,
     };
   } catch (e) {
-    log.error("[TRAFICO]", e.message);
+    log.error("[TRAFICO]", e.response?.data?.error?.message || e.message);
     return null;
   }
 }
 
 async function calcularDistanciaConParadas(origen, paradas, destino) {
-  const puntos = [origen, ...(paradas || []), destino];
-  let kmTotal = 0, minTotal = 0, huboFallback = false;
-
-  for (let i = 0; i < puntos.length - 1; i++) {
-    try {
-      const res = await axios.get(
-        "https://maps.googleapis.com/maps/api/distancematrix/json",
-        {
-          params: {
-            origins: `${puntos[i].lat},${puntos[i].lng}`,
-            destinations: `${puntos[i + 1].lat},${puntos[i + 1].lng}`,
-            key: CONFIG.GOOGLE_MAPS_KEY,
-            mode: "driving",
-          },
-          timeout: CONFIG.TIMEOUT_GOOGLE,
-        }
-      );
-      const elem = res.data.rows?.[0]?.elements?.[0];
-      if (res.data.status === "OK" && elem?.status === "OK") {
-        kmTotal += elem.distance.value / 1000;
-        minTotal += elem.duration.value / 60;
-      } else throw new Error("fallback");
-    } catch {
-      const km = distanciaEntrePuntos(puntos[i].lat, puntos[i].lng, puntos[i+1].lat, puntos[i+1].lng);
+  // Una sola llamada a Routes API con las paradas como intermedias
+  try {
+    const rutas = await calcularRutasConTrafico(origen, destino, paradas || []);
+    if (!rutas.length) throw new Error("fallback");
+    const r = rutas[0];
+    return {
+      km: Math.round((r.distanciaM / 1000) * 10) / 10,
+      duracion: `${Math.round(r.duracionSeg / 60)} min`,
+      esAproximado: false,
+    };
+  } catch {
+    // Respaldo local: Haversine por tramo × 1.3
+    const puntos = [origen, ...(paradas || []), destino];
+    let kmTotal = 0, minTotal = 0;
+    for (let i = 0; i < puntos.length - 1; i++) {
+      const km = distanciaEntrePuntos(puntos[i].lat, puntos[i].lng, puntos[i + 1].lat, puntos[i + 1].lng);
       kmTotal += km * 1.3;
       minTotal += km * 3;
-      huboFallback = true;
     }
+    return {
+      km: Math.round(kmTotal * 10) / 10,
+      duracion: `${Math.round(minTotal)} min`,
+      esAproximado: true,
+    };
   }
-
-  return {
-    km: Math.round(kmTotal * 10) / 10,
-    duracion: `${Math.round(minTotal)} min`,
-    esAproximado: huboFallback,
-  };
 }
 
 function generarLinkMapaPropio(viajeId) {
@@ -715,14 +669,11 @@ async function obtenerDireccion(lat, lng) {
 // con tráfico real. Compara con el tiempo "sin tráfico" para detectar bloqueos.
 async function verificarTraficoEnRuta(origen, destino) {
   try {
-    const o = `${origen.lat},${origen.lng}`;
-    const d = `${destino.lat},${destino.lng}`;
-    const url = `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${o}&destinations=${d}&departure_time=now&traffic_model=best_guess&key=${CONFIG.GOOGLE_MAPS_KEY}`;
-    const res = await axios.get(url, { timeout: 8000 });
-    const elem = res.data?.rows?.[0]?.elements?.[0];
-    if (!elem || elem.status !== "OK") return null;
-    const sinTrafico = elem.duration?.value || 0;       // segundos sin tráfico
-    const conTrafico = elem.duration_in_traffic?.value || sinTrafico;
+    const rutas = await calcularRutasConTrafico(origen, destino);
+    if (!rutas.length) return null;
+    const r = rutas[0];
+    const sinTrafico = r.duracionSinTraficoSeg;
+    const conTrafico = r.duracionSeg;
     const minutosSinTraf = Math.round(sinTrafico / 60);
     const minutosConTraf = Math.round(conTrafico / 60);
     const factorRetraso = sinTrafico > 0 ? conTrafico / sinTrafico : 1;
@@ -735,7 +686,7 @@ async function verificarTraficoEnRuta(origen, destino) {
       minutosSinTraf, minutosConTraf, factorRetraso,
       retrasoMin: minutosConTraf - minutosSinTraf,
       severidad,
-      distanciaMetros: elem.distance?.value || 0,
+      distanciaMetros: r.distanciaM || 0,
     };
   } catch (e) {
     log.warn("[TRAFICO]", e.message);
@@ -779,6 +730,7 @@ async function calcularRutasConTrafico(origen, destino, paradas = []) {
     duracionSinTraficoSeg: parseInt(r.staticDuration) || parseInt(r.duration) || 0,
     distanciaM: r.distanceMeters || 0,
     via: r.description || "",
+    polilineaCodificada: r.polyline?.encodedPolyline || null,
     puntos: r.polyline?.encodedPolyline ? decodificarPolyline(r.polyline.encodedPolyline) : [],
   }));
 }
