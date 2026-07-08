@@ -56,7 +56,8 @@ app.post("/webhook", limitWebhook, async (req, res) => {
         registrarNumeroEntrada(phone, phone === CONFIG.ADMIN_PHONE ? CONFIG.WHATSAPP_PHONE_ID : phoneNumberId);
         const buttonId = msg.interactive?.button_reply?.id || msg.button?.payload || null;
         const textoUpper = msg.text?.body?.trim().toUpperCase() || "";
-        const mediaId = msg.image?.id || null;
+        // Imagen normal, o imagen enviada como archivo/documento (comprobantes de pago)
+        const mediaId = msg.image?.id || (msg.document?.mime_type?.startsWith("image/") ? msg.document.id : null);
 
         log.info(`[WEBHOOK] From: ${phone}, Type: ${msg.type}, Text: "${msg.text?.body || ""}", Button: ${buttonId || "-"}`);
 

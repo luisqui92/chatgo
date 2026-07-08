@@ -34,8 +34,10 @@ async function enviarMensaje(to, texto) {
       { messaging_product: "whatsapp", to, type: "text", text: { body: texto } },
       { headers: { Authorization: `Bearer ${CONFIG.WHATSAPP_TOKEN}` }, timeout: CONFIG.TIMEOUT_META }
     );
+    return true;
   } catch (e) {
-    log.error("[WSP] enviarMensaje:", e.response?.data?.error?.message || e.message);
+    log.error("[WSP] enviarMensaje a", to, ":", e.response?.data?.error?.message || e.message);
+    return false;
   }
 }
 
@@ -60,8 +62,10 @@ async function enviarBotones(to, texto, botones) {
       },
       { headers: { Authorization: `Bearer ${CONFIG.WHATSAPP_TOKEN}` }, timeout: CONFIG.TIMEOUT_META }
     );
+    return true;
   } catch (e) {
-    log.error("[WSP] enviarBotones:", e.response?.data?.error?.message || e.message);
+    log.error("[WSP] enviarBotones a", to, ":", e.response?.data?.error?.message || e.message);
+    return false;
   }
 }
 
@@ -84,8 +88,10 @@ async function reenviarImagenPorId(to, imageId, caption = "") {
       { messaging_product: "whatsapp", to, type: "image", image: { id: imageId, caption } },
       { headers: { Authorization: `Bearer ${CONFIG.WHATSAPP_TOKEN}` }, timeout: CONFIG.TIMEOUT_META }
     );
+    return true;
   } catch (e) {
-    log.error("[WSP] reenviarImagen:", e.response?.data?.error?.message || e.message);
+    log.error("[WSP] reenviarImagen a", to, ":", e.response?.data?.error?.message || e.message);
+    return false;
   }
 }
 

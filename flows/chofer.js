@@ -618,12 +618,20 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
       return;
     }
 
-    await reenviarImagenPorId(`${CONFIG.ADMIN_PHONE}`, mediaId, `💰 Comprobante recibido de ${chofer.nombre}\n📞 +${phone}\n🚗 ${chofer.placa}`);
-    await enviarBotones(CONFIG.ADMIN_PHONE, `¿Apruebas el pago de ${chofer.nombre}?`, [
+    const okImg = await reenviarImagenPorId(`${CONFIG.ADMIN_PHONE}`, mediaId, `💰 Comprobante recibido de ${chofer.nombre}\n📞 +${phone}\n🚗 ${chofer.placa}`);
+    const okBtn = await enviarBotones(CONFIG.ADMIN_PHONE, `¿Apruebas el pago de ${chofer.nombre}?`, [
       { id: `aprobar_pago_${phone}`, title: "✅ Aprobar" },
       { id: `rechazar_pago_${phone}`, title: "❌ Rechazar" },
     ]);
-    await enviarMensaje(phone, "⏳ Comprobante recibido. Esperando aprobación del administrador...");
+    if (!okImg && !okBtn) {
+      // Falla típica: ventana de 24h de Meta cerrada con el admin (error 131047).
+      // El pago YA quedó registrado como pendiente; el admin puede aprobarlo desde
+      // el panel (/admin/pendientes-aprobacion o /admin/aprobar-chofer/:phone).
+      log.error(`[COMPROBANTE] No se pudo notificar al admin +${CONFIG.ADMIN_PHONE} (¿ventana 24h de Meta cerrada?). Chofer: ${chofer.nombre} +${phone}. Aprobar desde el panel.`);
+      await enviarMensaje(phone, "⏳ Comprobante recibido y registrado. Si en unos minutos no recibes confirmación, avísale al administrador: +591 62741818");
+    } else {
+      await enviarMensaje(phone, "⏳ Comprobante recibido. Esperando aprobación del administrador...");
+    }
     return;
   }
 
