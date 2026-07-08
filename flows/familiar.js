@@ -76,6 +76,33 @@ async function manejarFlujoFamiliar(phone, mensaje, buttonId) {
     return;
   }
 
+  // ── Mis cuentas (ANTES de vincular: con sesión expirada step queda vacío
+  // y el catch-all de vinculación se tragaba "mis cuentas" — bug real) ──────
+  if (t === "mis cuentas" || t === "cuentas que gestiono" || t === "gestionar familiar" || buttonId === "familiar_mis_cuentas") {
+    const cuentas = await cuentasQueGestiona(phone);
+    if (!cuentas.length) {
+      await enviarMensaje(phone,
+        "📋 No gestionás ninguna cuenta todavía.\n\n" +
+        'Escribe *"vincular"* para vincularte con un familiar.'
+      );
+      return;
+    }
+    if (cuentas.length === 1) {
+      return await _mostrarMenuCuenta(phone, cuentas[0].phone, session);
+    }
+    // Más de una cuenta → mostrar lista para elegir
+    const botones = cuentas.slice(0, 3).map(u => ({
+      id: `familiar_cuenta_${u.phone}`,
+      title: `👤 ${u.nombre || u.phone}`,
+    }));
+    await updateSession(phone, { step: "familiar_eligiendo_cuenta" });
+    await enviarBotones(phone,
+      "👥 *Tus cuentas vinculadas*\n\n¿Cuál querés gestionar?",
+      botones
+    );
+    return;
+  }
+
   // ── Iniciar vinculación ──────────────────────────────────────────────────
   if (!step || step === "familiar_inicio" || t === "vincular" || t.startsWith("vincular con")) {
     // Si viene el teléfono directo en el mensaje ("vincular con 71234567")
@@ -148,32 +175,6 @@ async function manejarFlujoFamiliar(phone, mensaje, buttonId) {
       }
       return;
     }
-  }
-
-  // ── Mis cuentas (familiar ve qué adultos gestiona) ───────────────────────
-  if (t === "mis cuentas" || t === "cuentas que gestiono" || buttonId === "familiar_mis_cuentas") {
-    const cuentas = await cuentasQueGestiona(phone);
-    if (!cuentas.length) {
-      await enviarMensaje(phone,
-        "📋 No gestionás ninguna cuenta todavía.\n\n" +
-        'Escribe *"vincular"* para vincularte con un familiar.'
-      );
-      return;
-    }
-    if (cuentas.length === 1) {
-      return await _mostrarMenuCuenta(phone, cuentas[0].phone, session);
-    }
-    // Más de una cuenta → mostrar lista para elegir
-    const botones = cuentas.slice(0, 3).map(u => ({
-      id: `familiar_cuenta_${u.phone}`,
-      title: `👤 ${u.nombre || u.phone}`,
-    }));
-    await updateSession(phone, { step: "familiar_eligiendo_cuenta" });
-    await enviarBotones(phone,
-      "👥 *Tus cuentas vinculadas*\n\n¿Cuál querés gestionar?",
-      botones
-    );
-    return;
   }
 
   // ── Selección de cuenta desde lista ──────────────────────────────────────
