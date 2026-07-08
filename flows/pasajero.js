@@ -1085,19 +1085,30 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
       // Primero verifica casa/trabajo; si no, busca en otros[] por alias.
       async function resolverPersonal(det, esOrigen) {
         if (!det) return null;
-        if (det.tipo === "personal" && det.lugar_personal) {
-          const guardado = await obtenerLugarPersonal(phone, det.lugar_personal);
-          if (guardado && guardado.lat && guardado.lng) {
-            return { coords: { lat: guardado.lat, lng: guardado.lng, nombre: guardado.nombre || det.lugar_personal } };
-          }
-          return { necesitaGuardar: true, tipo: det.lugar_personal };
-        }
-        // Alias personalizado (iglesia, casa de Ana, hospital, etc.)
+        const textoNorm = (det.texto || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").trim();
+
+        // 1) SIEMPRE probar primero los alias guardados con el texto completo.
+        //    "casa de ana" es un alias de otros[], NO la casa del usuario — el
+        //    extractor a veces lo colapsa a lugar_personal="casa" (bug real:
+        //    "de mi casa a casa de Ana" ponía la casa propia en ambos puntos).
         if (det.texto) {
           const alias = await obtenerLugarOtros(phone, det.texto);
           if (alias && alias.lat && alias.lng) {
             return { coords: { lat: alias.lat, lng: alias.lng, nombre: alias.nombre || alias.alias } };
           }
+        }
+
+        if (det.tipo === "personal" && det.lugar_personal) {
+          // Guard anti "casa de X": si menciona la casa DE OTRA persona y no
+          // hay alias guardado, NO resolver a la casa propia — que siga el
+          // flujo normal (referencia/pin).
+          const esCasaAjena = det.lugar_personal === "casa" && /\bcasa\s+de\b/.test(textoNorm) && !/\bmi\s+casa\b/.test(textoNorm);
+          if (esCasaAjena) return null;
+          const guardado = await obtenerLugarPersonal(phone, det.lugar_personal);
+          if (guardado && guardado.lat && guardado.lng) {
+            return { coords: { lat: guardado.lat, lng: guardado.lng, nombre: guardado.nombre || det.lugar_personal } };
+          }
+          return { necesitaGuardar: true, tipo: det.lugar_personal };
         }
         return null;
       }

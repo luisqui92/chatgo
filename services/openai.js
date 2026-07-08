@@ -86,6 +86,9 @@ REGLAS:
 3. **tipo="personal"** cuando el usuario dice algo propio:
    - "mi casa", "casa", "a casa", "estoy en casa" → lugar_personal="casa"
    - "mi trabajo", "al trabajo", "la oficina", "mi oficina" → lugar_personal="trabajo"
+   - ⚠️ CASA DE OTRA PERSONA: "casa de Ana", "donde mi tía", "la casa de mi hermano"
+     NO es la casa del usuario. Usar tipo="personal", lugar_personal=null,
+     texto=frase completa en minúsculas (ej: "casa de ana") — es un lugar con alias propio.
 
 4. **tipo="vago"** cuando es una zona/calle SIN suficiente especificidad:
    - "Cala Cala" sola (zona muy grande)
@@ -121,6 +124,9 @@ JSON: {"origen": {"tipo":"esquina","texto":"Heroínas y San Martín","calle1":"H
 
 Texto: "quiero ir al estadio"
 JSON: {"origen": null, "destino": {"tipo":"vago","texto":"Estadio","calle1":null,"calle2":null,"zona":null,"lugar_personal":null}}
+
+Texto: "quiero ir de mi casa a la casa de Ana"
+JSON: {"origen": {"tipo":"personal","texto":"mi casa","calle1":null,"calle2":null,"zona":null,"lugar_personal":"casa"}, "destino": {"tipo":"personal","texto":"casa de ana","calle1":null,"calle2":null,"zona":null,"lugar_personal":null}}
 
 (Estadio Capriles es grande, varias entradas — vago)
 
