@@ -267,13 +267,26 @@ async function manejarFlujoFamiliar(phone, mensaje, buttonId) {
   }
 
   // ── Salir del flujo familiar ──────────────────────────────────────────────
-  if (t === "salir" || t === "volver" || t === "menu" || t === "menú" || buttonId === "familiar_salir") {
+  // Además de "salir", también liberan el modo familiar: saludos, pedir taxi,
+  // mandar un pin de ubicación, o dos mensajes seguidos sin entender — nadie
+  // debe quedar atrapado aquí (pasó en producción con el fallback infinito).
+  const esSaludo = /^(hola|buenas|buen[oa]s?\s*(d[ií]as?|tardes?|noches?)?|hey|hola\s*chatgo)\b/i.test(t);
+  const pideTaxi = /\b(taxi|viaje|ll[eé]vame|quiero ir|necesito ir)\b/i.test(t);
+  if (t === "salir" || t === "volver" || t === "menu" || t === "menú" || buttonId === "familiar_salir" ||
+      esSaludo || pideTaxi || location?.latitude) {
+    await deleteSession(phone);
+    await enviarMensaje(phone, "✅ Saliste del modo familiar.\n\nEnviá tu ubicación o escribí a dónde querés ir para pedir un viaje 🚖\n\n_Para volver al menú familiar escribí \"mis cuentas\"._");
+    return;
+  }
+
+  // ── Fallback (máximo 2 veces; a la tercera se sale solo) ─────────────────
+  const fallbacks = (session.familiarFallbacks || 0) + 1;
+  if (fallbacks >= 3) {
     await deleteSession(phone);
     await enviarMensaje(phone, "✅ Saliste del modo familiar.\n\nEnviá tu ubicación o escribí a dónde querés ir para pedir un viaje 🚖");
     return;
   }
-
-  // ── Fallback ──────────────────────────────────────────────────────────────
+  await updateSession(phone, { ...session, familiarFallbacks: fallbacks });
   await enviarMensaje(phone,
     '⚠️ No entendí. Escribe *"mis cuentas"* para ver tus familiares vinculados,\no *"vincular"* para agregar uno nuevo.\n\nEscribí *"salir"* para volver a pedir viajes.'
   );
