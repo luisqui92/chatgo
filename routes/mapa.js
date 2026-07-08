@@ -1,5 +1,6 @@
-// ChatGo — Mapa de ruta para choferes
-// Sirve una página HTML con Google Maps, tráfico en tiempo real y ETA.
+// ChatGo — Mapa de ruta para choferes (copiloto con voz)
+// Sirve una página HTML con Google Maps, tráfico en tiempo real, ETA,
+// rutas alternativas y avisos hablados de trancadera/desvíos.
 // GET /mapa/:viajeId
 
 const { Viaje } = require("../db/models");
@@ -66,6 +67,11 @@ function generarHTML({ origenLat, origenLng, origenNombre, destinoLat, destinoLn
     }
     #brand { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
     #brand-name { color: #22d3ee; font-size: 15px; font-weight: 700; letter-spacing: .5px; }
+    #btn-voz {
+      margin-left: auto; background: #1e293b; border: 1px solid #334155; color: #e2e8f0;
+      border-radius: 8px; padding: 5px 12px; font-size: 12px; font-weight: 600; cursor: pointer;
+    }
+    #btn-voz.on { background: #164e63; border-color: #22d3ee; color: #22d3ee; }
 
     #eta-row {
       display: flex;
@@ -81,6 +87,20 @@ function generarHTML({ origenLat, origenLng, origenNombre, destinoLat, destinoLn
     #eta-label { font-size: 10px; color: #64748b; text-transform: uppercase; letter-spacing: .8px; }
     #eta-value { font-size: 20px; font-weight: 700; color: #22d3ee; line-height: 1.1; }
     #eta-dist { font-size: 11px; color: #94a3b8; text-align: right; line-height: 1.5; }
+
+    /* Banner de tráfico / avisos del copiloto */
+    #aviso {
+      display: none;
+      border-radius: 10px;
+      padding: 8px 12px;
+      margin-bottom: 8px;
+      font-size: 12px;
+      line-height: 1.45;
+      font-weight: 500;
+    }
+    #aviso.verde   { display: block; background: #052e1b; color: #4ade80; border: 1px solid #14532d; }
+    #aviso.amarillo{ display: block; background: #3a2c07; color: #fbbf24; border: 1px solid #713f12; }
+    #aviso.rojo    { display: block; background: #3a0a0a; color: #f87171; border: 1px solid #7f1d1d; }
 
     #puntos { display: flex; flex-direction: column; gap: 0; }
     .punto { display: flex; align-items: flex-start; gap: 8px; padding: 2px 0; }
@@ -121,6 +141,7 @@ function generarHTML({ origenLat, origenLng, origenNombre, destinoLat, destinoLn
     <div id="brand">
       <span>🚖</span>
       <span id="brand-name">ChatGo</span>
+      <button id="btn-voz" class="on" onclick="toggleVoz()">🔊 Voz ON</button>
     </div>
     <div id="eta-row">
       <div id="eta-icon">⏱️</div>
@@ -133,6 +154,7 @@ function generarHTML({ origenLat, origenLng, origenNombre, destinoLat, destinoLn
         <div style="font-size:9px;color:#475569">con tráfico</div>
       </div>
     </div>
+    <div id="aviso"></div>
     <div id="puntos">
       <div class="punto">
         <div class="punto-dot dot-origen"></div>
@@ -174,6 +196,44 @@ function generarHTML({ origenLat, origenLng, origenNombre, destinoLat, destinoLn
       paradas:    ${paradasJson}
     };
 
+    // ── COPILOTO DE VOZ (speechSynthesis del navegador: gratis y sin red) ──
+    let vozActiva = true;
+    let ultimoAviso = "";
+
+    function toggleVoz() {
+      vozActiva = !vozActiva;
+      const b = document.getElementById("btn-voz");
+      b.textContent = vozActiva ? "🔊 Voz ON" : "🔇 Voz OFF";
+      b.classList.toggle("on", vozActiva);
+      if (vozActiva && ultimoAviso) hablar(ultimoAviso);
+      else speechSynthesis.cancel();
+    }
+
+    function hablar(texto) {
+      if (!vozActiva || !("speechSynthesis" in window)) return;
+      try {
+        speechSynthesis.cancel();
+        const u = new SpeechSynthesisUtterance(texto);
+        u.lang = "es-US";
+        const voces = speechSynthesis.getVoices();
+        const vozEs = voces.find(v => /^es[-_]/i.test(v.lang));
+        if (vozEs) u.voice = vozEs;
+        u.rate = 1.0;
+        speechSynthesis.speak(u);
+      } catch (e) { /* sin soporte de voz: seguimos en silencio */ }
+    }
+    // Algunos navegadores cargan las voces async
+    if ("speechSynthesis" in window) speechSynthesis.onvoiceschanged = () => {};
+
+    function mostrarAviso(nivel, texto) {
+      const el = document.getElementById("aviso");
+      el.className = nivel;
+      el.textContent = texto;
+    }
+
+    // ── MAPA + RUTAS ──────────────────────────────────────────────────────
+    let map, rendererPrincipal, polysAlternativas = [], etaAnteriorMin = null;
+
     function initMap() {
       const loading = document.getElementById("map-loading");
       const mapEl   = document.getElementById("map");
@@ -181,7 +241,7 @@ function generarHTML({ origenLat, origenLng, origenNombre, destinoLat, destinoLn
       const origen  = { lat: VIAJE.origenLat,  lng: VIAJE.origenLng  };
       const destino = { lat: VIAJE.destinoLat, lng: VIAJE.destinoLng };
 
-      const map = new google.maps.Map(mapEl, {
+      map = new google.maps.Map(mapEl, {
         center: origen,
         zoom: 14,
         mapTypeControl: false,
@@ -200,21 +260,17 @@ function generarHTML({ origenLat, origenLng, origenNombre, destinoLat, destinoLn
 
       if (loading) loading.remove();
 
-      // Marcador origen — pin verde
-      new google.maps.Marker({
-        position: origen, map, zIndex: 3,
-        title: "Origen",
-        icon: svgPin("#22c55e", "A")
-      });
+      new google.maps.Marker({ position: origen, map, zIndex: 3, title: "Origen", icon: svgPin("#22c55e", "A") });
+      new google.maps.Marker({ position: destino, map, zIndex: 3, title: "Destino", icon: svgPin("#ef4444", "B") });
 
-      // Marcador destino — pin rojo
-      new google.maps.Marker({
-        position: destino, map, zIndex: 3,
-        title: "Destino",
-        icon: svgPin("#ef4444", "B")
-      });
+      calcularRuta(true);
+      // Re-chequear el tráfico cada 2 minutos: si empeora, el copiloto avisa
+      setInterval(() => calcularRuta(false), 120000);
+    }
 
-      // Ruta + ETA con tráfico real
+    function calcularRuta(esPrimeraVez) {
+      const origen  = { lat: VIAJE.origenLat,  lng: VIAJE.origenLng  };
+      const destino = { lat: VIAJE.destinoLat, lng: VIAJE.destinoLng };
       const waypoints = (VIAJE.paradas || []).map(p => ({
         location: new google.maps.LatLng(p.lat, p.lng),
         stopover: true
@@ -225,27 +281,111 @@ function generarHTML({ origenLat, origenLng, origenNombre, destinoLat, destinoLn
         destination: destino,
         waypoints,
         travelMode: google.maps.TravelMode.DRIVING,
-        drivingOptions: {
-          departureTime: new Date(),
-          trafficModel: "bestguess"
-        }
+        provideRouteAlternatives: waypoints.length === 0, // Google no da alternativas con paradas
+        drivingOptions: { departureTime: new Date(), trafficModel: "bestguess" }
       }, function(result, status) {
-        if (status === "OK") {
-          new google.maps.DirectionsRenderer({
-            map,
-            suppressMarkers: true,
-            polylineOptions: { strokeColor: "#3b82f6", strokeWeight: 5, strokeOpacity: 0.85 }
-          }).setDirections(result);
-
-          const leg = result.routes[0].legs[0];
-          const dur = leg.duration_in_traffic || leg.duration;
-          document.getElementById("eta-value").textContent = dur.text;
-          document.getElementById("dist-value").textContent  = leg.distance.text;
-        } else {
+        if (status !== "OK") {
+          console.error("Directions falló:", status);
           document.getElementById("eta-value").textContent = "—";
           document.getElementById("eta-value").style.color = "#64748b";
+          mostrarAviso("amarillo", "⚠️ No se pudo calcular la ruta con tráfico (" + status + "). Se muestra la ruta directa; usá el botón Navegar.");
+          dibujarLineaRespaldo(origen, destino);
+          return;
         }
+        pintarRutas(result, esPrimeraVez);
       });
+    }
+
+    // Si Directions falla (API deshabilitada, sin cuota, etc.) igual se ve una línea A→B
+    function dibujarLineaRespaldo(origen, destino) {
+      const puntos = [origen, ...(VIAJE.paradas || []).map(p => ({ lat: p.lat, lng: p.lng })), destino];
+      new google.maps.Polyline({
+        map, path: puntos, geodesic: true,
+        strokeColor: "#3b82f6", strokeOpacity: 0.6, strokeWeight: 4,
+        icons: [{ icon: { path: "M 0,-1 0,1", strokeOpacity: 1, scale: 3 }, offset: "0", repeat: "14px" }]
+      });
+      const b = new google.maps.LatLngBounds();
+      puntos.forEach(p => b.extend(p));
+      map.fitBounds(b, 60);
+    }
+
+    function pintarRutas(result, esPrimeraVez) {
+      // Elegir la ruta MÁS RÁPIDA con tráfico (Google no siempre pone la mejor primero)
+      const rutas = result.routes;
+      let mejorIdx = 0, mejorSeg = Infinity;
+      rutas.forEach((r, i) => {
+        const seg = r.legs.reduce((s, l) => s + (l.duration_in_traffic || l.duration).value, 0);
+        if (seg < mejorSeg) { mejorSeg = seg; mejorIdx = i; }
+      });
+
+      // Limpiar dibujos anteriores (refrescos)
+      if (rendererPrincipal) rendererPrincipal.setMap(null);
+      polysAlternativas.forEach(p => p.setMap(null));
+      polysAlternativas = [];
+
+      // Alternativas en gris (debajo)
+      rutas.forEach((r, i) => {
+        if (i === mejorIdx) return;
+        const poly = new google.maps.Polyline({
+          map, path: r.overview_path,
+          strokeColor: "#64748b", strokeOpacity: 0.55, strokeWeight: 4, zIndex: 1
+        });
+        polysAlternativas.push(poly);
+      });
+
+      // Ruta recomendada en azul (encima)
+      rendererPrincipal = new google.maps.DirectionsRenderer({
+        map,
+        directions: result,
+        routeIndex: mejorIdx,
+        suppressMarkers: true,
+        preserveViewport: !esPrimeraVez,
+        polylineOptions: { strokeColor: "#3b82f6", strokeWeight: 6, strokeOpacity: 0.9, zIndex: 2 }
+      });
+
+      // ── ETA y análisis de tráfico ──
+      const mejor = rutas[mejorIdx];
+      const segCon = mejor.legs.reduce((s, l) => s + (l.duration_in_traffic || l.duration).value, 0);
+      const segSin = mejor.legs.reduce((s, l) => s + l.duration.value, 0);
+      const distM  = mejor.legs.reduce((s, l) => s + l.distance.value, 0);
+      const minCon = Math.round(segCon / 60);
+      const demoraMin = Math.max(0, Math.round((segCon - segSin) / 60));
+      const via = mejor.summary || "la ruta marcada";
+
+      const etaEl = document.getElementById("eta-value");
+      etaEl.textContent = minCon + " min";
+      etaEl.style.color = demoraMin >= 10 ? "#f87171" : demoraMin >= 4 ? "#fbbf24" : "#22d3ee";
+      document.getElementById("dist-value").textContent = (distM / 1000).toFixed(1) + " km";
+
+      // ── Mensaje del copiloto ──
+      let nivel, textoAviso, textoVoz;
+      if (demoraMin >= 10) {
+        nivel = "rojo";
+        textoAviso = "🚨 Trancadera fuerte: +" + demoraMin + " min de demora. Ruta recomendada: " + via + ".";
+        textoVoz = "Atención. Hay trancadera fuerte, " + demoraMin + " minutos más de lo normal. Te recomiendo ir por " + via + ". Llegás en " + minCon + " minutos.";
+      } else if (demoraMin >= 4) {
+        nivel = "amarillo";
+        textoAviso = "⚠️ Tráfico moderado: +" + demoraMin + " min. Mejor ruta: " + via + ".";
+        textoVoz = "Ojo, hay algo de tráfico, " + demoraMin + " minutos extra. La mejor ruta es por " + via + ". Llegás en " + minCon + " minutos.";
+      } else {
+        nivel = "verde";
+        textoAviso = "✅ Ruta despejada por " + via + ".";
+        textoVoz = "Ruta despejada. Andá por " + via + ". Llegás en " + minCon + " minutos.";
+      }
+      // Si Google trae una alternativa apenas más lenta, mencionarla como plan B
+      if (rutas.length > 1) {
+        const otra = rutas.find((r, i) => i !== mejorIdx);
+        if (otra && otra.summary && otra.summary !== via) {
+          textoAviso += " Alternativa: " + otra.summary + " (gris en el mapa).";
+        }
+      }
+      mostrarAviso(nivel, textoAviso);
+
+      // Hablar: siempre en la primera carga; en refrescos solo si el tráfico CAMBIÓ (±4 min)
+      const cambio = etaAnteriorMin === null || Math.abs(minCon - etaAnteriorMin) >= 4;
+      etaAnteriorMin = minCon;
+      ultimoAviso = textoVoz;
+      if (esPrimeraVez || cambio) hablar(textoVoz);
     }
 
     function svgPin(color, letra) {
