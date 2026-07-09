@@ -412,6 +412,26 @@ async function geocodificarConMemoria(referencia, ciudadUsuario) {
     return null;
   }
 
+  // Resultado a nivel CIUDAD/PROVINCIA: inservible como punto de viaje.
+  // Caso real: destino "Encañada y Ejército" geocodificó al centro genérico de
+  // "Cochabamba" (locality) y se cotizó un viaje de 11.8 km a ninguna parte.
+  const esNivelCiudad =
+    !esConfiable && !esAceptable &&
+    tipos.some(t => ["locality","administrative_area_level_1","administrative_area_level_2","administrative_area_level_3","country"].includes(t));
+  if (esNivelCiudad) {
+    log.warn(`[GEOCOD] "${referencia}" → resultado a nivel ciudad (${tipos.join(",")}) — descartado`);
+    return null;
+  }
+
+  // Resultado a nivel BARRIO/ZONA: demasiado impreciso para recoger a alguien
+  const esBarrio =
+    !esConfiable && !esAceptable &&
+    tipos.some(t => ["neighborhood","sublocality","sublocality_level_1","sublocality_level_2"].includes(t));
+  if (esBarrio) {
+    log.warn(`[GEOCOD] "${referencia}" → resultado a nivel barrio (${tipos.join(",")}) — requiere confirmación`);
+    return { ...coords, _incierto: true };
+  }
+
   // Ruta genérica sin intersección
   const esRutaGenerica = tipos.includes("route") && !tipos.includes("intersection") && !esConfiable;
   if (esRutaGenerica) {
