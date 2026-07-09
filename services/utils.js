@@ -374,6 +374,42 @@ function llaveEsquina(calle1, calle2, zona) {
   return z ? `${a}|${b}|${z}` : `${a}|${b}`;
 }
 
+// ─── Similitud de nombres de calles (distancia de edición) ───────────────────
+// La transcripción de voz varía ("Apurímac" → "Apurimakk", "Urpi" → "Urpy"):
+// el match exacto de llave falla y el geocoding de Google puede mandar el
+// punto a kilómetros. Levenshtein tolera esos errores de 1-2 letras; los
+// trigramas no sirven aquí porque castigan demasiado los nombres cortos.
+function _levenshtein(a, b) {
+  const m = a.length, n = b.length;
+  if (!m) return n;
+  if (!n) return m;
+  let prev = Array.from({ length: n + 1 }, (_, j) => j);
+  for (let i = 1; i <= m; i++) {
+    const curr = [i];
+    for (let j = 1; j <= n; j++) {
+      curr[j] = Math.min(
+        prev[j] + 1,
+        curr[j - 1] + 1,
+        prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)
+      );
+    }
+    prev = curr;
+  }
+  return prev[n];
+}
+
+// Devuelve un score 0..1; se considera "la misma calle" si el score es ≥ 0.75
+// (equivale a: 1 error de dicción en nombres cortos, 2 en nombres largos).
+function _similitudCalle(a, b) {
+  if (!a || !b) return 0;
+  if (a === b) return 1;
+  const dist = _levenshtein(a, b);
+  const maxLen = Math.max(a.length, b.length);
+  const tolerancia = maxLen <= 6 ? 1 : 2;
+  if (dist > tolerancia) return 0;
+  return 1 - dist / maxLen;
+}
+
 // Buscar una esquina ya mapeada en la BD
 // Retorna: { esquina, requiereConfirmacion } o null si no existe
 async function buscarEsquinaMapeada(calle1, calle2, zona = null) {
@@ -394,10 +430,37 @@ async function buscarEsquinaMapeada(calle1, calle2, zona = null) {
       orderBy: { usos: "desc" },
       take: 20,
     });
-    const candidatas = candidatasRaw
+    let candidatas = candidatasRaw
       .filter(c => c.llave === llaveBase || c.llave.startsWith(`${llaveBase}|`))
       .slice(0, 5);
-    
+
+    // FALLBACK DIFUSO: sin match exacto, comparar por similitud de trigramas
+    // contra las esquinas más usadas. Cada calle debe parecerse ≥ 0.8 a la
+    // guardada (probando ambos órdenes). Caso real: "Urpi y Apurimakk" (audio)
+    // no encontraba la esquina guardada "Urpi y Apurimac" y Google geocodificó
+    // un punto a 4 km.
+    if (candidatas.length === 0) {
+      const c1 = normalizarNombreCalle(calle1);
+      const c2 = normalizarNombreCalle(calle2);
+      if (c1 && c2) {
+        const todas = await EsquinaMapeada.findMany({ orderBy: { usos: "desc" }, take: 300 });
+        const puntuadas = [];
+        for (const cand of todas) {
+          const e1 = normalizarNombreCalle(cand.calle1);
+          const e2 = normalizarNombreCalle(cand.calle2);
+          const directo = Math.min(_similitudCalle(c1, e1), _similitudCalle(c2, e2));
+          const cruzado = Math.min(_similitudCalle(c1, e2), _similitudCalle(c2, e1));
+          const score = Math.max(directo, cruzado);
+          if (score >= 0.75) puntuadas.push({ cand, score });
+        }
+        puntuadas.sort((a, b) => b.score - a.score || (b.cand.usos || 0) - (a.cand.usos || 0));
+        if (puntuadas.length > 0) {
+          log.info(`[ESQUINA_FUZZY] "${calle1} y ${calle2}" ≈ "${puntuadas[0].cand.calle1} y ${puntuadas[0].cand.calle2}" (score ${puntuadas[0].score.toFixed(2)})`);
+          candidatas = puntuadas.slice(0, 5).map(p => p.cand);
+        }
+      }
+    }
+
     if (candidatas.length === 0) return null;
     
     // PROTECCIÓN 1: Si hay MÚLTIPLES esquinas con mismas calles pero diferente zona
