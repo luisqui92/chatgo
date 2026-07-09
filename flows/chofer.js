@@ -288,16 +288,32 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
         }
       } catch(e) { log.error("[INICIO_VIAJE_RUTA]", e.message); }
 
-      await Viaje.update({
-        where: { id: viaje.id },
-        data: {
-          estado: "en_curso",
-          tiempoEstimadoMin,
-          fechaInicioViaje: new Date(),
-          nivelAlerta: "verde",
-          ...rutaUpdate,
-        },
-      });
+      try {
+        await Viaje.update({
+          where: { id: viaje.id },
+          data: {
+            estado: "en_curso",
+            tiempoEstimadoMin,
+            fechaInicioViaje: new Date(),
+            nivelAlerta: "verde",
+            ...rutaUpdate,
+          },
+        });
+      } catch (e) {
+        // La metadata de ruta NUNCA debe trabar el viaje (pasó en producción:
+        // rutaPolilinea > VARCHAR(191) tumbaba el update completo y el chofer
+        // quedaba mudo). Reintentar sin los campos de ruta.
+        log.error("[INICIO_VIAJE_UPDATE]", e.message);
+        await Viaje.update({
+          where: { id: viaje.id },
+          data: {
+            estado: "en_curso",
+            tiempoEstimadoMin,
+            fechaInicioViaje: new Date(),
+            nivelAlerta: "verde",
+          },
+        });
+      }
       const session = await getSession(viaje.usuarioPhone);
       if (session) await updateSession(viaje.usuarioPhone, { ...session, step: "en_curso" });
       await enviarMensaje(viaje.usuarioPhone, `🚖 *Viaje iniciado*\n\n¡Disfruta tu viaje con ChatGo!`);

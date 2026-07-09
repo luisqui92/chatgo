@@ -94,7 +94,7 @@ model Viaje {
   destinoLng              Float?
   destinoNombre           String?
   paradas                 Json?     // [{lat,lng,nombre}]
-  observaciones           String?
+  observaciones           String?   @db.Text
   distanciaKm             Float?
   precioBase              Float?
   descuentoBs             Float     @default(0)
@@ -113,10 +113,10 @@ model Viaje {
   llegadaOrigenNotificada Boolean   @default(false)
   cancelacionMotivo       String?
   ratingPasajero          Float?
-  comentarioPasajero      String?
+  comentarioPasajero      String?   @db.Text
   ratingSolicitado        Boolean   @default(false)
   codigoPromoGenerado     String?
-  rutaPolilinea           String?
+  rutaPolilinea           String?   @db.Text
   rutaPuntos              Json?     // [{lat,lng}]
   nivelAlerta             String    @default("verde") // verde|amarillo|naranja|rojo
   eventosSeguridad        Json?     // [{tipo,nivel,detalle,lat,lng,timestamp}]
