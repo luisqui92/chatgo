@@ -170,14 +170,21 @@ async function flujoRapidoVoz(phone, session) {
     const minNum = typeof duracion === "number" ? duracion : parseInt(String(duracion)) || null;
     const tiempoTxt = minNum ? `unos ${minNum} minutos` : "pocos minutos";
 
-    // Mensaje de VOZ: el audio dice todo y pide confirmar hablando
+    // Mensaje de VOZ: el audio dice todo (origen, destino, precio) y pide confirmar hablando
+    const nombreOrigen = session.origen?.nombre || "su ubicación";
+    const nombreDestino = session.destino?.nombre || "su destino";
     const mensajeVoz =
-      `${infoChofer}El viaje a ${session.destino?.nombre || "su destino"} ` +
+      `${infoChofer}El viaje desde ${nombreOrigen} hasta ${nombreDestino} ` +
       `dura ${tiempoTxt} y le cuesta ${precioAuto} bolivianos. ` +
       `Si está de acuerdo, respóndame con un sí.`;
 
-    // Texto VISUAL mínimo de referencia (el audio ya dice todo, incluyendo "responda sí")
-    const mensajeTexto = `🚗 ${session.destino?.nombre || "Tu viaje"} — *Bs ${precioAuto}*`;
+    // Texto VISUAL de referencia: SIEMPRE mostrar de dónde a dónde para que el
+    // usuario detecte al instante si el bot entendió mal una ubicación
+    const mensajeTexto =
+      `🚗 *Resumen del viaje*\n` +
+      `📍 De: ${nombreOrigen}\n` +
+      `🏁 A: ${nombreDestino}\n` +
+      `📏 ${km} km · ⏱️ ${tiempoTxt} · 💰 *Bs ${precioAuto}*`;
 
     // Como la IA entendió todo con claridad, vamos por VOZ PURA (sin botones).
     // El usuario confirma diciendo "sí" por audio. El step confirmando_viaje_voz
@@ -188,7 +195,7 @@ async function flujoRapidoVoz(phone, session) {
       await enviarMensajeRaw(phone, mensajeTexto); // referencia visual corta
     } else {
       // Respaldo (no debería pasar en flujo voz, pero por seguridad): botones
-      await enviarBotonesRaw(phone, `🚗 ${session.destino?.nombre || "Tu viaje"} — Bs ${precioAuto}\n\n¿Confirmo el viaje?`, [
+      await enviarBotonesRaw(phone, `${mensajeTexto}\n\n¿Confirmo el viaje?`, [
         { id: "confirmar_viaje_voz_si", title: "✅ Sí, confirmar" },
         { id: "confirmar_viaje_voz_no", title: "❌ No" },
       ]);
