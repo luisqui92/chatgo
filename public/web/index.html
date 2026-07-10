@@ -1,0 +1,579 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#1D9E75">
+<title>ChatGo — Pedí tu taxi</title>
+<link rel="icon" href="/logo.png">
+<style>
+  :root {
+    --verde: #1D9E75;
+    --verde-oscuro: #157a5a;
+    --fondo: #f6f8f7;
+    --texto: #16241f;
+    --gris: #7a8a84;
+    --borde: #e3e9e6;
+    --rojo: #e5484d;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--fondo); color: var(--texto);
+    display: flex; flex-direction: column;
+    height: 100dvh; overflow: hidden;
+  }
+
+  /* ── Pantallas ── */
+  .screen { display: none; flex: 1; flex-direction: column; overflow-y: auto; }
+  .screen.activa { display: flex; }
+  .centrada { justify-content: center; align-items: center; padding: 28px; text-align: center; }
+
+  .logo { width: 92px; height: 92px; margin-bottom: 18px; }
+  h1 { font-size: 26px; font-weight: 800; letter-spacing: -.5px; }
+  h1 .marca { color: var(--verde); }
+  .sub { color: var(--gris); font-size: 14px; margin: 8px 0 26px; line-height: 1.5; max-width: 300px; }
+
+  .campo {
+    width: 100%; max-width: 340px;
+    display: flex; align-items: center; gap: 8px;
+    background: #fff; border: 1.5px solid var(--borde); border-radius: 14px;
+    padding: 14px 16px; font-size: 17px;
+  }
+  .campo:focus-within { border-color: var(--verde); }
+  .campo .prefijo { color: var(--gris); font-weight: 600; white-space: nowrap; }
+  .campo input {
+    border: none; outline: none; flex: 1; font-size: 17px; min-width: 0;
+    background: transparent; color: var(--texto); letter-spacing: .5px;
+  }
+
+  .btn {
+    width: 100%; max-width: 340px;
+    background: var(--verde); color: #fff; border: none; border-radius: 14px;
+    padding: 16px; font-size: 16px; font-weight: 700; cursor: pointer;
+    margin-top: 14px; transition: background .15s;
+  }
+  .btn:active { background: var(--verde-oscuro); }
+  .btn:disabled { opacity: .5; }
+  .btn.secundario { background: #fff; color: var(--verde); border: 1.5px solid var(--verde); }
+  .link { color: var(--verde); font-size: 13px; margin-top: 16px; background: none; border: none; cursor: pointer; text-decoration: underline; }
+
+  /* ── Pantalla mapa ── */
+  #barra-mapa {
+    background: #fff; padding: 12px 14px; border-bottom: 1px solid var(--borde);
+    display: flex; flex-direction: column; gap: 8px; flex-shrink: 0; z-index: 5;
+  }
+  #titulo-paso { font-size: 15px; font-weight: 800; display: flex; align-items: center; gap: 8px; }
+  #titulo-paso .num {
+    background: var(--verde); color: #fff; width: 22px; height: 22px; border-radius: 50%;
+    display: inline-flex; align-items: center; justify-content: center; font-size: 12px;
+  }
+  .fila-buscar { display: flex; gap: 8px; }
+  .fila-buscar .campo { padding: 10px 14px; font-size: 15px; border-radius: 12px; }
+  .btn-mini {
+    background: var(--verde); color: #fff; border: none; border-radius: 12px;
+    padding: 0 16px; font-size: 14px; font-weight: 700; cursor: pointer; flex-shrink: 0;
+  }
+  .btn-gps {
+    background: #fff; border: 1.5px solid var(--borde); border-radius: 12px;
+    padding: 0 12px; font-size: 18px; cursor: pointer; flex-shrink: 0;
+  }
+
+  #zona-mapa { flex: 1; position: relative; min-height: 200px; }
+  #map { position: absolute; inset: 0; }
+  /* Pin central fijo (patrón "mover el mapa bajo el pin") */
+  #pin-central {
+    position: absolute; left: 50%; top: 50%;
+    transform: translate(-50%, -100%);
+    pointer-events: none; z-index: 4;
+    filter: drop-shadow(0 3px 4px rgba(0,0,0,.3));
+    transition: transform .15s;
+  }
+  #zona-mapa.moviendo #pin-central { transform: translate(-50%, -115%); }
+  #sombra-pin {
+    position: absolute; left: 50%; top: 50%;
+    width: 10px; height: 4px; border-radius: 50%;
+    background: rgba(0,0,0,.35); transform: translate(-50%, -50%);
+    z-index: 3; pointer-events: none;
+  }
+
+  #pie-mapa {
+    background: #fff; border-top: 1px solid var(--borde);
+    padding: 12px 14px; padding-bottom: max(12px, env(safe-area-inset-bottom));
+    flex-shrink: 0; z-index: 5;
+  }
+  #direccion-actual {
+    font-size: 13px; color: var(--texto); font-weight: 600;
+    margin-bottom: 10px; min-height: 18px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  #direccion-actual .cargando { color: var(--gris); font-weight: 400; }
+  #pie-mapa .btn { max-width: none; margin-top: 0; }
+
+  /* ── Cotización ── */
+  .panel {
+    background: #fff; border-radius: 18px 18px 0 0;
+    padding: 18px 16px; padding-bottom: max(16px, env(safe-area-inset-bottom));
+    box-shadow: 0 -6px 24px rgba(0,0,0,.08); flex-shrink: 0;
+  }
+  .ruta-resumen { font-size: 13px; line-height: 1.7; margin-bottom: 14px; }
+  .ruta-resumen b { font-weight: 700; }
+  .punto-ico { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 8px; }
+  .tipos { display: flex; gap: 10px; margin-bottom: 14px; }
+  .tipo {
+    flex: 1; border: 2px solid var(--borde); border-radius: 14px;
+    padding: 12px; text-align: center; cursor: pointer; background: #fff;
+  }
+  .tipo.activo { border-color: var(--verde); background: #f0faf6; }
+  .tipo .emoji { font-size: 26px; }
+  .tipo .nombre { font-size: 13px; font-weight: 700; margin-top: 2px; }
+  .tipo .detalle { font-size: 10px; color: var(--gris); }
+  .tipo .precio { font-size: 18px; font-weight: 800; color: var(--verde); margin-top: 4px; }
+  .meta-viaje { text-align: center; color: var(--gris); font-size: 12px; margin-bottom: 4px; }
+  .aviso-surge { text-align: center; color: #b8860b; font-size: 11px; margin-bottom: 6px; }
+
+  /* ── Estado ── */
+  .spinner {
+    width: 46px; height: 46px; border: 4px solid var(--borde);
+    border-top-color: var(--verde); border-radius: 50%;
+    animation: girar .8s linear infinite; margin-bottom: 18px;
+  }
+  @keyframes girar { to { transform: rotate(360deg); } }
+  .card-chofer {
+    background: #fff; border-radius: 18px; padding: 18px; width: 100%; max-width: 340px;
+    box-shadow: 0 4px 18px rgba(0,0,0,.07); text-align: left;
+    display: flex; gap: 14px; align-items: center; margin-bottom: 14px;
+  }
+  .card-chofer img.foto {
+    width: 62px; height: 62px; border-radius: 50%; object-fit: cover;
+    border: 3px solid var(--verde); flex-shrink: 0;
+  }
+  .card-chofer .nombre { font-weight: 800; font-size: 16px; }
+  .card-chofer .datos { font-size: 13px; color: var(--gris); margin-top: 2px; }
+  .card-chofer .rating { font-size: 13px; color: #d29922; margin-top: 2px; }
+  .estado-txt { font-weight: 700; font-size: 17px; margin-bottom: 4px; }
+  .estado-sub { color: var(--gris); font-size: 13px; margin-bottom: 18px; max-width: 300px; line-height: 1.5; }
+
+  /* ── Toast de error ── */
+  #toast {
+    position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%) translateY(120%);
+    background: #2a1215; color: #ffd9dc; border: 1px solid var(--rojo);
+    padding: 12px 18px; border-radius: 12px; font-size: 13px; max-width: 90vw;
+    transition: transform .25s; z-index: 99; text-align: center;
+  }
+  #toast.visible { transform: translateX(-50%) translateY(0); }
+</style>
+</head>
+<body>
+
+<!-- ── 1. Teléfono ── -->
+<div class="screen centrada activa" id="s-telefono">
+  <img class="logo" src="/logo.png" alt="ChatGo">
+  <h1>Chat<span class="marca">Go</span></h1>
+  <p class="sub">Tu taxi en Cochabamba.<br>Verificamos tu número por WhatsApp — sin registro, sin contraseñas.</p>
+  <div class="campo">
+    <span class="prefijo">🇧🇴 +591</span>
+    <input id="in-telefono" type="tel" inputmode="numeric" maxlength="8" placeholder="71234567" autocomplete="tel">
+  </div>
+  <button class="btn" id="btn-codigo">Recibir código por WhatsApp</button>
+</div>
+
+<!-- ── 2. Código ── -->
+<div class="screen centrada" id="s-codigo">
+  <img class="logo" src="/logo.png" alt="ChatGo">
+  <h1>Revisá tu <span class="marca">WhatsApp</span></h1>
+  <p class="sub">Te mandamos un código de 4 dígitos al <b id="tel-mostrado"></b></p>
+  <div class="campo" style="max-width:200px;justify-content:center;">
+    <input id="in-codigo" type="tel" inputmode="numeric" maxlength="4" placeholder="• • • •" style="text-align:center;font-size:26px;letter-spacing:10px;font-weight:800;">
+  </div>
+  <button class="btn" id="btn-verificar">Verificar</button>
+  <button class="link" id="btn-reenviar">Cambiar número o reenviar código</button>
+</div>
+
+<!-- ── 3. Mapa (origen y destino con pin central) ── -->
+<div class="screen" id="s-mapa">
+  <div id="barra-mapa">
+    <div id="titulo-paso"><span class="num">1</span> <span id="titulo-paso-txt">¿Dónde te recogemos?</span></div>
+    <div class="fila-buscar">
+      <div class="campo"><input id="in-buscar" type="text" placeholder="Buscar calle, esquina o lugar…"></div>
+      <button class="btn-mini" id="btn-buscar">Buscar</button>
+      <button class="btn-gps" id="btn-gps" title="Usar mi ubicación">📍</button>
+    </div>
+  </div>
+  <div id="zona-mapa">
+    <div id="map"></div>
+    <div id="sombra-pin"></div>
+    <svg id="pin-central" width="38" height="50" viewBox="0 0 38 50">
+      <path id="pin-cuerpo" d="M19 0C8.5 0 0 8.5 0 19c0 14 19 31 19 31s19-17 19-31C38 8.5 29.5 0 19 0z" fill="#1D9E75"/>
+      <circle cx="19" cy="19" r="8.5" fill="#fff"/>
+    </svg>
+  </div>
+  <div id="pie-mapa">
+    <div id="direccion-actual"><span class="cargando">Movė el mapa para ubicar el pin…</span></div>
+    <button class="btn" id="btn-confirmar-punto">Confirmar recogida</button>
+  </div>
+</div>
+
+<!-- ── 4. Cotización ── -->
+<div class="screen" id="s-cotizar">
+  <div id="zona-mapa-cotizar" style="flex:1;position:relative;min-height:180px;">
+    <div id="map-cotizar" style="position:absolute;inset:0;"></div>
+  </div>
+  <div class="panel">
+    <div class="ruta-resumen">
+      <div><span class="punto-ico" style="background:#1D9E75"></span><b id="res-origen"></b></div>
+      <div><span class="punto-ico" style="background:#e5484d"></span><b id="res-destino"></b></div>
+    </div>
+    <div class="meta-viaje" id="res-meta"></div>
+    <div class="aviso-surge" id="res-surge" style="display:none"></div>
+    <div class="tipos">
+      <div class="tipo activo" id="tipo-auto" data-tipo="auto">
+        <div class="emoji">🚗</div>
+        <div class="nombre">Auto</div>
+        <div class="detalle">1 a 4 personas</div>
+        <div class="precio" id="precio-auto">—</div>
+      </div>
+      <div class="tipo" id="tipo-van" data-tipo="van">
+        <div class="emoji">🚐</div>
+        <div class="nombre">Van</div>
+        <div class="detalle">8 a 14 personas</div>
+        <div class="precio" id="precio-van">—</div>
+      </div>
+    </div>
+    <button class="btn" id="btn-pedir">Pedir ChatGo 🚖</button>
+    <button class="link" id="btn-volver-mapa" style="display:block;margin:10px auto 0;">← Cambiar ubicaciones</button>
+  </div>
+</div>
+
+<!-- ── 5. Estado ── -->
+<div class="screen centrada" id="s-estado">
+  <div id="estado-buscando">
+    <div class="spinner" style="margin-left:auto;margin-right:auto;"></div>
+    <div class="estado-txt">Buscando tu ChatGo…</div>
+    <p class="estado-sub">Estamos ubicando el móvil más cercano por GPS. También te avisaremos por WhatsApp.</p>
+  </div>
+  <div id="estado-chofer" style="display:none;width:100%;max-width:340px;">
+    <div class="estado-txt" id="estado-chofer-titulo">🚖 ¡Chofer en camino!</div>
+    <p class="estado-sub" id="estado-chofer-sub"></p>
+    <div class="card-chofer">
+      <img class="foto" id="chofer-foto" src="/logo.png" alt="chofer">
+      <div>
+        <div class="nombre" id="chofer-nombre">—</div>
+        <div class="datos" id="chofer-datos">—</div>
+        <div class="rating" id="chofer-rating"></div>
+      </div>
+    </div>
+    <a class="btn" id="btn-tracking" href="#" target="_blank" style="display:block;text-align:center;text-decoration:none;">🗺️ Ver llegada en el mapa</a>
+  </div>
+  <div id="estado-fin" style="display:none;">
+    <div class="estado-txt" id="fin-titulo">✅ Viaje finalizado</div>
+    <p class="estado-sub">Gracias por usar ChatGo.</p>
+    <button class="btn" id="btn-otro">Pedir otro viaje</button>
+  </div>
+  <button class="link" id="btn-cancelar-info">¿Cómo cancelo? Escribí CANCELAR a nuestro WhatsApp</button>
+</div>
+
+<div id="toast"></div>
+
+<script>
+// ═══════════════ Estado global ═══════════════
+const API = ""; // mismo origen
+let token = localStorage.getItem("chatgo_token") || null;
+let miPhone = localStorage.getItem("chatgo_phone") || null;
+let map = null, mapCotizar = null;
+let paso = "origen"; // origen | destino
+let puntoOrigen = null, puntoDestino = null; // {lat,lng,nombre}
+let cotizacion = null, tipoElegido = "auto";
+let timerDireccion = null, pollTimer = null;
+
+const $ = id => document.getElementById(id);
+
+function mostrar(id) {
+  document.querySelectorAll(".screen").forEach(s => s.classList.remove("activa"));
+  $(id).classList.add("activa");
+}
+
+function toast(msg) {
+  const t = $("toast");
+  t.textContent = msg;
+  t.classList.add("visible");
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => t.classList.remove("visible"), 4200);
+}
+
+async function api(ruta, opts = {}) {
+  const res = await fetch(API + ruta, {
+    method: opts.method || (opts.body ? "POST" : "GET"),
+    headers: { "Content-Type": "application/json" },
+    body: opts.body ? JSON.stringify({ ...opts.body, token }) : undefined,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Error de conexión");
+  return data;
+}
+
+// ═══════════════ 1-2. Verificación ═══════════════
+$("btn-codigo").onclick = async () => {
+  const num = $("in-telefono").value.replace(/\D/g, "");
+  if (!/^[67]\d{7}$/.test(num)) return toast("Escribí tu celular de 8 dígitos (empieza con 6 o 7).");
+  $("btn-codigo").disabled = true;
+  try {
+    await api("/api/web/enviar-codigo", { body: { phone: num } });
+    miPhone = "591" + num;
+    $("tel-mostrado").textContent = "+591 " + num;
+    mostrar("s-codigo");
+    setTimeout(() => $("in-codigo").focus(), 200);
+  } catch (e) { toast(e.message); }
+  $("btn-codigo").disabled = false;
+};
+
+$("btn-verificar").onclick = async () => {
+  const cod = $("in-codigo").value.trim();
+  if (!/^\d{4}$/.test(cod)) return toast("El código tiene 4 dígitos.");
+  $("btn-verificar").disabled = true;
+  try {
+    const num = miPhone.replace(/^591/, "");
+    const r = await api("/api/web/verificar-codigo", { body: { phone: num, codigo: cod } });
+    token = r.token;
+    localStorage.setItem("chatgo_token", token);
+    localStorage.setItem("chatgo_phone", r.phone);
+    entrarAlMapa();
+  } catch (e) { toast(e.message); }
+  $("btn-verificar").disabled = false;
+};
+
+$("btn-reenviar").onclick = () => { $("in-codigo").value = ""; mostrar("s-telefono"); };
+
+// ═══════════════ 3. Mapa con pin central ═══════════════
+const CENTRO_CBBA = { lat: -17.3935, lng: -66.157 };
+
+function entrarAlMapa() {
+  mostrar("s-mapa");
+  paso = "origen";
+  actualizarPaso();
+  if (!map) initMapa();
+}
+
+function initMapa() {
+  map = new google.maps.Map($("map"), {
+    center: CENTRO_CBBA, zoom: 15,
+    disableDefaultUI: true, zoomControl: false,
+    gestureHandling: "greedy", clickableIcons: false,
+    styles: [{ featureType: "poi.business", stylers: [{ visibility: "off" }] }],
+  });
+  map.addListener("dragstart", () => $("zona-mapa").classList.add("moviendo"));
+  map.addListener("idle", () => {
+    $("zona-mapa").classList.remove("moviendo");
+    // Resolver la dirección del centro (con debounce para no quemar geocoding)
+    clearTimeout(timerDireccion);
+    $("direccion-actual").innerHTML = '<span class="cargando">Buscando dirección…</span>';
+    timerDireccion = setTimeout(resolverCentro, 600);
+  });
+  // Intentar arrancar en la ubicación del usuario
+  usarGPS(true);
+}
+
+async function resolverCentro() {
+  try {
+    const c = map.getCenter();
+    const r = await api(`/api/web/direccion?lat=${c.lat()}&lng=${c.lng()}&token=${encodeURIComponent(token)}`);
+    $("direccion-actual").textContent = "📍 " + r.nombre;
+  } catch {
+    $("direccion-actual").textContent = "📍 Punto en el mapa";
+  }
+}
+
+function usarGPS(silencioso) {
+  if (!navigator.geolocation) { if (!silencioso) toast("Tu navegador no tiene GPS."); return; }
+  navigator.geolocation.getCurrentPosition(
+    pos => map && map.panTo({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+    () => { if (!silencioso) toast("No pudimos leer tu ubicación. Activá el GPS y dale permiso al navegador."); },
+    { enableHighAccuracy: true, timeout: 8000 }
+  );
+}
+$("btn-gps").onclick = () => usarGPS(false);
+
+$("btn-buscar").onclick = buscarDireccion;
+$("in-buscar").addEventListener("keydown", e => { if (e.key === "Enter") buscarDireccion(); });
+async function buscarDireccion() {
+  const q = $("in-buscar").value.trim();
+  if (q.length < 3) return toast("Escribí una calle, esquina o lugar.");
+  $("btn-buscar").disabled = true;
+  try {
+    const r = await api("/api/web/geocodificar", { body: { direccion: q } });
+    map.panTo({ lat: r.lat, lng: r.lng });
+    map.setZoom(17);
+  } catch (e) { toast(e.message); }
+  $("btn-buscar").disabled = false;
+}
+
+function actualizarPaso() {
+  const esOrigen = paso === "origen";
+  $("titulo-paso").querySelector(".num").textContent = esOrigen ? "1" : "2";
+  $("titulo-paso-txt").textContent = esOrigen ? "¿Dónde te recogemos?" : "¿A dónde vas?";
+  $("btn-confirmar-punto").textContent = esOrigen ? "Confirmar recogida" : "Confirmar destino";
+  $("pin-cuerpo").setAttribute("fill", esOrigen ? "#1D9E75" : "#e5484d");
+  $("in-buscar").value = "";
+}
+
+$("btn-confirmar-punto").onclick = async () => {
+  const c = map.getCenter();
+  const nombre = $("direccion-actual").textContent.replace(/^📍\s*/, "") || "Punto en el mapa";
+  const punto = { lat: c.lat(), lng: c.lng(), nombre };
+  if (paso === "origen") {
+    puntoOrigen = punto;
+    paso = "destino";
+    actualizarPaso();
+  } else {
+    puntoDestino = punto;
+    await cotizar();
+  }
+};
+
+// ═══════════════ 4. Cotización ═══════════════
+async function cotizar() {
+  $("btn-confirmar-punto").disabled = true;
+  try {
+    const r = await api("/api/web/cotizar", { body: { origen: puntoOrigen, destino: puntoDestino } });
+    cotizacion = r;
+    $("res-origen").textContent = puntoOrigen.nombre;
+    $("res-destino").textContent = puntoDestino.nombre;
+    $("res-meta").textContent = `📏 ${r.km} km · ⏱️ ${r.duracion}` + (r.esAproximado ? " (aprox.)" : "");
+    $("precio-auto").textContent = "Bs " + r.precios.auto;
+    $("precio-van").textContent = "Bs " + r.precios.van;
+    if (r.surge) {
+      $("res-surge").style.display = "block";
+      $("res-surge").textContent = `⚡ Precio ajustado +${Math.round((r.surge - 1) * 100)}% por alta demanda`;
+    } else $("res-surge").style.display = "none";
+    mostrar("s-cotizar");
+    dibujarMapaCotizar();
+  } catch (e) { toast(e.message); }
+  $("btn-confirmar-punto").disabled = false;
+};
+
+function dibujarMapaCotizar() {
+  mapCotizar = new google.maps.Map($("map-cotizar"), {
+    disableDefaultUI: true, gestureHandling: "greedy", clickableIcons: false,
+  });
+  const b = new google.maps.LatLngBounds();
+  const mk = (p, color) => {
+    new google.maps.Marker({
+      position: p, map: mapCotizar,
+      icon: { path: google.maps.SymbolPath.CIRCLE, scale: 9, fillColor: color, fillOpacity: 1, strokeColor: "#fff", strokeWeight: 3 },
+    });
+    b.extend(p);
+  };
+  mk(puntoOrigen, "#1D9E75");
+  mk(puntoDestino, "#e5484d");
+  new google.maps.Polyline({
+    map: mapCotizar, path: [puntoOrigen, puntoDestino],
+    strokeColor: "#1D9E75", strokeOpacity: .5, strokeWeight: 3,
+    icons: [{ icon: { path: "M 0,-1 0,1", strokeOpacity: 1, scale: 2.5 }, offset: "0", repeat: "12px" }],
+  });
+  mapCotizar.fitBounds(b, 60);
+}
+
+document.querySelectorAll(".tipo").forEach(el => {
+  el.onclick = () => {
+    document.querySelectorAll(".tipo").forEach(t => t.classList.remove("activo"));
+    el.classList.add("activo");
+    tipoElegido = el.dataset.tipo;
+  };
+});
+
+$("btn-volver-mapa").onclick = () => { paso = "origen"; actualizarPaso(); mostrar("s-mapa"); };
+
+// ═══════════════ 5. Pedir y estado ═══════════════
+$("btn-pedir").onclick = async () => {
+  $("btn-pedir").disabled = true;
+  try {
+    await api("/api/web/pedir", { body: { origen: puntoOrigen, destino: puntoDestino, tipoVehiculo: tipoElegido } });
+    irAEstado();
+  } catch (e) {
+    toast(e.message);
+    if (/en curso/.test(e.message)) irAEstado(); // ya tenía un viaje → mostrarlo
+  }
+  $("btn-pedir").disabled = false;
+};
+
+function irAEstado() {
+  mostrar("s-estado");
+  $("estado-buscando").style.display = "block";
+  $("estado-chofer").style.display = "none";
+  $("estado-fin").style.display = "none";
+  consultarEstado();
+  clearInterval(pollTimer);
+  pollTimer = setInterval(consultarEstado, 4000);
+}
+
+async function consultarEstado() {
+  try {
+    const r = await api(`/api/web/estado?token=${encodeURIComponent(token)}`);
+    if (r.estado === "buscando" || r.estado === "pendiente") return; // sigue el spinner
+    if (r.estado === "ninguno") { clearInterval(pollTimer); return; }
+
+    if (["completado", "cancelado"].includes(r.estado)) {
+      clearInterval(pollTimer);
+      $("estado-buscando").style.display = "none";
+      $("estado-chofer").style.display = "none";
+      $("estado-fin").style.display = "block";
+      $("fin-titulo").textContent = r.estado === "completado" ? "✅ Viaje finalizado" : "❌ Viaje cancelado";
+      return;
+    }
+
+    // en_camino | esperando_pasajero | en_curso → card del chofer
+    $("estado-buscando").style.display = "none";
+    $("estado-chofer").style.display = "block";
+    const titulos = {
+      en_camino: ["🚖 ¡Chofer en camino!", "Seguilo en tiempo real en el mapa."],
+      esperando_pasajero: ["📍 ¡Tu chofer llegó!", "Está esperándote en el punto de recogida."],
+      en_curso: ["🛣️ Viaje en curso", "¡Buen viaje!"],
+    };
+    const [tit, sub] = titulos[r.estado] || titulos.en_camino;
+    $("estado-chofer-titulo").textContent = tit;
+    $("estado-chofer-sub").textContent = sub;
+    if (r.chofer) {
+      $("chofer-nombre").textContent = r.chofer.nombre || "Tu chofer";
+      const emoji = r.chofer.tipoVehiculo === "van" ? "🚐" : "🚗";
+      $("chofer-datos").textContent = `${emoji} ${(r.chofer.tipoVehiculo || "auto").toUpperCase()}${r.chofer.colorVehiculo ? " " + r.chofer.colorVehiculo : ""} · ${r.chofer.placa || ""}`;
+      $("chofer-rating").textContent = r.chofer.rating ? "★ " + r.chofer.rating : "";
+      if (r.chofer.fotoChofer) $("chofer-foto").src = r.chofer.fotoChofer;
+    }
+    if (r.tracking) { $("btn-tracking").href = r.tracking; $("btn-tracking").style.display = "block"; }
+    else $("btn-tracking").style.display = "none";
+  } catch (e) {
+    // errores transitorios de red: seguir intentando en el próximo poll
+  }
+}
+
+$("btn-otro").onclick = () => {
+  puntoOrigen = puntoDestino = null;
+  paso = "origen";
+  entrarAlMapa();
+  actualizarPaso();
+};
+
+// ═══════════════ Arranque ═══════════════
+window.initMapaGoogle = async function () {
+  // ¿Sesión previa válida? → saltar la verificación
+  if (token) {
+    try {
+      const r = await api(`/api/web/estado?token=${encodeURIComponent(token)}`);
+      if (["pendiente", "buscando", "en_camino", "esperando_pasajero", "en_curso"].includes(r.estado)) {
+        irAEstado();
+        return;
+      }
+      entrarAlMapa();
+      return;
+    } catch {
+      token = null;
+      localStorage.removeItem("chatgo_token");
+    }
+  }
+  mostrar("s-telefono");
+};
+</script>
+<script async defer src="https://maps.googleapis.com/maps/api/js?key=__GMAPS_KEY__&callback=initMapaGoogle&language=es&v=weekly"></script>
+</body>
+</html>

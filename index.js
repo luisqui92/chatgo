@@ -94,6 +94,7 @@ require("./routes/webhook")(app, allDeps);
 require("./routes/admin")(app, allDeps);
 require("./routes/pagoNotificacion")(app, allDeps);
 require("./routes/mapa")(app);
+require("./routes/web")(app); // Canal web premium (Etapa 1) — GET /pedir
 
 // ─── INTERVALS ────────────────────────────────────────────────────────────────
 const { iniciarIntervals } = require("./intervals");

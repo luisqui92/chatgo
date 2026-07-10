@@ -5,6 +5,8 @@ const stores = {
   login: new Map(),    // IP → { count, resetAt }
   webhook: new Map(),
   admin: new Map(),
+  web: new Map(),        // canal web (cotizar/pedir/geocodificar)
+  webCodigo: new Map(),  // envío de códigos OTP por WhatsApp
 };
 
 // Limpieza periódica para no acumular IPs
