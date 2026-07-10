@@ -21,7 +21,11 @@ const fs = require("fs");
 const path = require("path");
 const { CONFIG, log, detectarCiudadPorCoords } = require("../config");
 const { Viaje, Chofer, ListaEspera } = require("../db/models");
-const { enviarMensaje } = require("../services/whatsapp");
+const { enviarMensaje, enviarPlantillaCodigo } = require("../services/whatsapp");
+
+// Número del bot en formato wa.me, para el botón "Abrir WhatsApp" cuando todo
+// lo demás falla (usuario sin ventana de 24h y plantilla no disponible aún)
+const WA_NUMERO_BOT = process.env.WA_NUMERO_BOT || "59177908529";
 const { rateLimit } = require("../services/ratelimit");
 const { calcularDistancia, geocodificarDireccion, obtenerDireccion } = require("../services/google");
 const { calcularPrecio } = require("../services/utils");
@@ -108,13 +112,21 @@ module.exports = function (app) {
       const codigo = String(crypto.randomInt(1000, 10000)); // 4 dígitos
       codigosPendientes.set(phone, { codigo, exp: now + 10 * 60 * 1000, intentos: 0 });
 
-      const ok = await enviarMensaje(phone,
+      // Cascada de envío:
+      // 1) Mensaje directo — funciona si el usuario habló con el bot en 24h (gratis)
+      // 2) Plantilla de autenticación — funciona SIEMPRE, incluso con usuarios
+      //    que jamás escribieron al bot (requiere la plantilla aprobada en Meta)
+      // 3) Si ambas fallan: la web muestra el botón "Abrir WhatsApp" (wa.me)
+      let ok = await enviarMensaje(phone,
         `🐒 *ChatGo Web*\n\nTu código de verificación es: *${codigo}*\n\n_Vence en 10 minutos. Si no fuiste vos, ignorá este mensaje._`);
       if (!ok) {
-        // Típico: el usuario nunca le escribió al bot (ventana de 24h cerrada)
+        log.info(`[WEB] Mensaje directo falló para ${phone} (ventana 24h) — intentando plantilla`);
+        ok = await enviarPlantillaCodigo(phone, codigo);
+      }
+      if (!ok) {
         return res.status(422).json({
-          error: "No pudimos enviarte el código. Mandá cualquier mensaje (ej: \"hola\") a nuestro WhatsApp y volvé a intentar.",
-          whatsapp: true,
+          error: "No pudimos enviarte el código. Tocá el botón para abrir nuestro WhatsApp, mandá \"hola\" y volvé acá a reintentar.",
+          waLink: `https://wa.me/${WA_NUMERO_BOT}?text=hola`,
         });
       }
       log.info(`[WEB] Código enviado a ${phone}`);

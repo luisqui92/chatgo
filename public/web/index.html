@@ -177,6 +177,8 @@
     <input id="in-telefono" type="tel" inputmode="numeric" maxlength="8" placeholder="71234567" autocomplete="tel">
   </div>
   <button class="btn" id="btn-codigo">Recibir código por WhatsApp</button>
+  <a class="btn secundario" id="btn-abrir-wa" href="#" target="_blank" style="display:none;text-align:center;text-decoration:none;">📲 Abrir WhatsApp y mandar "hola"</a>
+  <p id="ayuda-wa" style="display:none;color:var(--gris);font-size:12px;margin-top:10px;max-width:300px;line-height:1.5;">Después de mandar "hola", volvé acá y tocá <b>Recibir código</b> de nuevo.</p>
 </div>
 
 <!-- ── 2. Código ── -->
@@ -309,7 +311,11 @@ async function api(ruta, opts = {}) {
     body: opts.body ? JSON.stringify({ ...opts.body, token }) : undefined,
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || "Error de conexión");
+  if (!res.ok) {
+    const err = new Error(data.error || "Error de conexión");
+    err.data = data; // campos extra del backend (ej: waLink)
+    throw err;
+  }
   return data;
 }
 
@@ -324,7 +330,15 @@ $("btn-codigo").onclick = async () => {
     $("tel-mostrado").textContent = "+591 " + num;
     mostrar("s-codigo");
     setTimeout(() => $("in-codigo").focus(), 200);
-  } catch (e) { toast(e.message); }
+  } catch (e) {
+    toast(e.message);
+    // Sin ventana de 24h y sin plantilla: mostrar el botón para abrir WhatsApp
+    if (e.data?.waLink) {
+      $("btn-abrir-wa").href = e.data.waLink;
+      $("btn-abrir-wa").style.display = "block";
+      $("ayuda-wa").style.display = "block";
+    }
+  }
   $("btn-codigo").disabled = false;
 };
 

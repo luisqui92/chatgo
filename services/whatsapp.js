@@ -321,4 +321,37 @@ async function enviarPlantillaVincular(adultoPhone, nombreFamiliar) {
   }
 }
 
-module.exports = { enviarMensaje, enviarBotones, enviarImagen, enviarVoz, reenviarImagenPorId, reenviarAudioPorId, reenviarVideoPorId, reenviarUbicacion, reenviarDocumentoPorId, relayMensajeChat, descargarImagenMeta, obtenerUrlMedia, verificarFirmaMeta, enviarPlantillaVincular, registrarNumeroEntrada };
+// Plantilla de AUTENTICACIÓN (categoría Authentication en WhatsApp Manager):
+// las plantillas aprobadas se pueden enviar SIEMPRE, sin ventana de 24h —
+// clave para el código de la web con usuarios que nunca hablaron con el bot.
+// El formato de envío exige el código en el body Y en el botón copiar-código.
+async function enviarPlantillaCodigo(to, codigo) {
+  const nombre = process.env.WEB_OTP_TEMPLATE || "codigo_web";
+  const idioma = process.env.WEB_OTP_TEMPLATE_LANG || "es";
+  try {
+    await axios.post(
+      `https://graph.facebook.com/v19.0/${phoneIdPara(to)}/messages`,
+      {
+        messaging_product: "whatsapp",
+        to,
+        type: "template",
+        template: {
+          name: nombre,
+          language: { code: idioma },
+          components: [
+            { type: "body", parameters: [{ type: "text", text: String(codigo) }] },
+            { type: "button", sub_type: "url", index: "0", parameters: [{ type: "text", text: String(codigo) }] },
+          ],
+        },
+      },
+      { headers: { Authorization: `Bearer ${CONFIG.WHATSAPP_TOKEN}` }, timeout: CONFIG.TIMEOUT_META }
+    );
+    log.info(`[WSP] enviarPlantillaCodigo: enviado a ${to}`);
+    return true;
+  } catch (e) {
+    log.error("[WSP] enviarPlantillaCodigo:", e.response?.data?.error?.message || e.message);
+    return false;
+  }
+}
+
+module.exports = { enviarMensaje, enviarBotones, enviarImagen, enviarVoz, reenviarImagenPorId, reenviarAudioPorId, reenviarVideoPorId, reenviarUbicacion, reenviarDocumentoPorId, relayMensajeChat, descargarImagenMeta, obtenerUrlMedia, verificarFirmaMeta, enviarPlantillaVincular, enviarPlantillaCodigo, registrarNumeroEntrada };
