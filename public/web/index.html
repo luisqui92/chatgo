@@ -79,6 +79,18 @@
     background: #fff; border: 1.5px solid var(--borde); border-radius: 12px;
     padding: 0 12px; font-size: 18px; cursor: pointer; flex-shrink: 0;
   }
+  .btn-mic {
+    background: var(--verde); border: none; border-radius: 12px;
+    padding: 0 14px; font-size: 19px; cursor: pointer; flex-shrink: 0; color: #fff;
+  }
+  .btn-mic.grabando { background: var(--rojo); animation: pulso 1s infinite; }
+  @keyframes pulso { 0%,100% { opacity: 1; } 50% { opacity: .55; } }
+  .banner-voz {
+    background: #f0faf6; border: 1.5px solid var(--verde); border-radius: 10px;
+    padding: 8px 12px; font-size: 12px; color: var(--texto); margin-top: 8px;
+    display: none; line-height: 1.5;
+  }
+  .banner-voz b { color: var(--verde-oscuro); }
 
   #zona-mapa { flex: 1; position: relative; min-height: 200px; }
   #map { position: absolute; inset: 0; }
@@ -208,10 +220,12 @@
   <div id="barra-mapa">
     <div id="titulo-paso"><span class="num">1</span> <span id="titulo-paso-txt">¿Dónde te recogemos?</span></div>
     <div class="fila-buscar">
-      <div class="campo"><input id="in-buscar" type="text" placeholder="Buscar calle, esquina o lugar…"></div>
+      <div class="campo"><input id="in-buscar" type="text" placeholder="Buscar o decí el lugar…"></div>
       <button class="btn-mini" id="btn-buscar">Buscar</button>
+      <button class="btn-mic" id="btn-mic" title="Decir el lugar por voz">🎤</button>
       <button class="btn-gps" id="btn-gps" title="Usar mi ubicación">📍</button>
     </div>
+    <div class="banner-voz" id="banner-voz"></div>
   </div>
   <div id="zona-mapa">
     <div id="map"></div>
@@ -476,6 +490,63 @@ function actualizarPaso() {
   $("btn-confirmar-punto").textContent = esOrigen ? "Confirmar recogida" : "Confirmar destino";
   $("pin-cuerpo").setAttribute("fill", esOrigen ? "#1D9E75" : "#e5484d");
   $("in-buscar").value = "";
+  $("banner-voz").style.display = "none";
+}
+
+// ═══════════════ VOZ: hablá y el pin va solo al lugar ═══════════════
+// Toque 1 = grabar (botón rojo pulsando) · Toque 2 = enviar. Corta solo a los 12s.
+// El backend transcribe (gpt-4o-transcribe con diccionario de Cochabamba),
+// interpreta con IA y resuelve contra la memoria del sistema (lugares
+// personales, esquinas crowdsourced, referencias aprendidas). La confirmación
+// es visual: el pin queda en el lugar y se ajusta si hace falta.
+let mediaRec = null, chunksVoz = [], timerVoz = null;
+
+$("btn-mic").onclick = async () => {
+  const btn = $("btn-mic");
+  if (mediaRec && mediaRec.state === "recording") { mediaRec.stop(); return; }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const mime = MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm"
+      : MediaRecorder.isTypeSupported("audio/mp4") ? "audio/mp4" : "";
+    mediaRec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+    chunksVoz = [];
+    mediaRec.ondataavailable = e => { if (e.data.size) chunksVoz.push(e.data); };
+    mediaRec.onstop = async () => {
+      clearTimeout(timerVoz);
+      btn.classList.remove("grabando");
+      btn.textContent = "🎤";
+      stream.getTracks().forEach(t => t.stop());
+      const blob = new Blob(chunksVoz, { type: mediaRec.mimeType || "audio/webm" });
+      await enviarVozWeb(blob);
+    };
+    mediaRec.start();
+    btn.classList.add("grabando");
+    btn.textContent = "⏹";
+    toast('🎤 Hablá ahora… ej: "quiero ir al Correo Central". Tocá ⏹ al terminar.');
+    timerVoz = setTimeout(() => { if (mediaRec.state === "recording") mediaRec.stop(); }, 12000);
+  } catch {
+    toast("No pudimos usar el micrófono. Dale permiso al navegador o escribí el lugar.");
+  }
+};
+
+async function enviarVozWeb(blob) {
+  const banner = $("banner-voz");
+  banner.style.display = "block";
+  banner.innerHTML = "🎤 <i>Escuchando lo que dijiste…</i>";
+  try {
+    const base64 = await new Promise((ok, err) => {
+      const fr = new FileReader();
+      fr.onload = () => ok(fr.result.split(",")[1]);
+      fr.onerror = err;
+      fr.readAsDataURL(blob);
+    });
+    const r = await api("/api/web/interpretar-voz", { body: { audio: base64, mime: blob.type } });
+    map.panTo({ lat: r.lat, lng: r.lng });
+    map.setZoom(17);
+    banner.innerHTML = `🎤 Entendí: <b>${r.textoLugar}</b><br>¿Es aquí? Ajustá el pin si hace falta y tocá <b>${paso === "origen" ? "Confirmar recogida" : "Confirmar destino"}</b>.`;
+  } catch (e) {
+    banner.innerHTML = `⚠️ ${e.message}` + (e.data?.transcripcion ? `<br><i>Escuché: "${e.data.transcripcion}"</i>` : "");
+  }
 }
 
 $("btn-confirmar-punto").onclick = async () => {

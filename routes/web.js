@@ -27,8 +27,9 @@ const { enviarMensaje, enviarPlantillaCodigo } = require("../services/whatsapp")
 // lo demás falla (usuario sin ventana de 24h y plantilla no disponible aún)
 const WA_NUMERO_BOT = process.env.WA_NUMERO_BOT || "59177908529";
 const { rateLimit } = require("../services/ratelimit");
-const { calcularDistancia, geocodificarDireccion, obtenerDireccion } = require("../services/google");
-const { calcularPrecio } = require("../services/utils");
+const { calcularDistancia, geocodificarDireccion, geocodificarConMemoria, obtenerDireccion } = require("../services/google");
+const { calcularPrecio, buscarEsquinaMapeada, obtenerLugarPersonal, obtenerLugarOtros } = require("../services/utils");
+const { transcribirAudioWeb, extraerUbicaciones } = require("../services/openai");
 const { calcularMultiplierSurge, aplicarSurge } = require("../ai");
 const { asignarChofer, procesarCancelacionPasajero } = require("../flows/viaje");
 const { getSession, updateSession } = require("../services/session");
@@ -251,6 +252,75 @@ module.exports = function (app) {
       res.json({ nombre: nombre || "Punto en el mapa" });
     } catch (e) {
       res.json({ nombre: "Punto en el mapa" });
+    }
+  });
+
+  // ── 4b. VOZ: el usuario habla y el pin va solo al lugar ───────────────────
+  // Reusa TODA la inteligencia del bot: transcripción con diccionario de
+  // Cochabamba, extracción de lugares con IA, lugares personales del usuario
+  // (casa/trabajo/alias), esquinas crowdsourced con match difuso, y la memoria
+  // de referencias por voz (LocationReference). La confirmación es visual: el
+  // pin queda en el lugar entendido y el usuario lo ajusta si hace falta.
+  app.post("/api/web/interpretar-voz", limitWeb, requireTokenWeb, async (req, res) => {
+    try {
+      const { audio, mime } = req.body || {};
+      if (!audio || typeof audio !== "string") return res.status(400).json({ error: "No llegó el audio." });
+      const buffer = Buffer.from(audio, "base64");
+      if (buffer.length < 500) return res.status(400).json({ error: "Audio muy corto. Mantené presionado y hablá." });
+      if (buffer.length > 3 * 1024 * 1024) return res.status(400).json({ error: "Audio muy largo. Máximo ~15 segundos." });
+
+      // 1) Transcribir
+      const transcripcion = await transcribirAudioWeb(buffer, mime || "audio/webm");
+      if (!transcripcion?.trim()) return res.status(422).json({ error: "No escuché nada claro. Probá de nuevo." });
+      log.info(`[WEB_VOZ] ${req.webPhone}: "${transcripcion.trim().substring(0, 80)}"`);
+
+      // 2) Interpretar el lugar con IA (mismo extractor del bot)
+      const ubi = await extraerUbicaciones(transcripcion);
+      const detalle = ubi?.destinoDetalle || ubi?.origenDetalle || null;
+      const textoLugar = (detalle?.texto || ubi?.destino || ubi?.origen || "").trim();
+      if (!textoLugar) {
+        return res.status(422).json({ error: "No entendí el lugar. Decí por ejemplo: \"al Correo Central\" o \"Ayacucho y Heroínas\".", transcripcion });
+      }
+
+      // 3) Resolver con la memoria del sistema (en orden de confianza)
+      const phone = req.webPhone;
+      let punto = null;
+
+      // 3a. Lugar personal del usuario: "mi casa", "mi trabajo", alias guardados
+      if (detalle?.tipo === "personal" && detalle.lugar_personal) {
+        const g = await obtenerLugarPersonal(phone, detalle.lugar_personal).catch(() => null);
+        if (g?.lat) punto = { lat: g.lat, lng: g.lng, nombre: g.nombre || detalle.lugar_personal };
+      }
+      if (!punto && textoLugar) {
+        const alias = await obtenerLugarOtros(phone, textoLugar).catch(() => null);
+        if (alias?.lat) punto = { lat: alias.lat, lng: alias.lng, nombre: alias.nombre || alias.alias };
+      }
+
+      // 3b. Esquina crowdsourced (con match difuso anti errores de dicción)
+      if (!punto && detalle?.tipo === "esquina" && detalle.calle1 && detalle.calle2) {
+        const r = await buscarEsquinaMapeada(detalle.calle1, detalle.calle2, detalle.zona || null).catch(() => null);
+        if (r?.esquina?.lat) punto = { lat: r.esquina.lat, lng: r.esquina.lng, nombre: `${detalle.calle1} y ${detalle.calle2}` };
+      }
+
+      // 3c. Memoria de referencias por voz + geocoding validado de Google
+      if (!punto) {
+        const g = await geocodificarConMemoria(textoLugar, "Cochabamba").catch(() => null);
+        // _incierto está OK acá: la confirmación de la web es visual (el pin)
+        if (g?.lat) punto = { lat: g.lat, lng: g.lng, nombre: g.nombre || textoLugar };
+      }
+
+      if (!punto) {
+        return res.status(422).json({
+          error: `Entendí "${textoLugar}" pero no pude ubicarlo. Movė el pin al lugar o probá con calle y esquina.`,
+          transcripcion,
+          textoLugar,
+        });
+      }
+
+      res.json({ ...punto, transcripcion: transcripcion.trim(), textoLugar });
+    } catch (e) {
+      log.error("[WEB_VOZ]", e.response?.data?.error?.message || e.message);
+      res.status(500).json({ error: "Error procesando el audio. Probá de nuevo." });
     }
   });
 

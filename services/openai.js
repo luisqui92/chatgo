@@ -7,9 +7,9 @@ const os = require("os");
 const FormData = require("form-data");
 const { CONFIG, log } = require("../config");
 
-async function transcribirAudioConModelo(audioBuffer, modelo) {
+async function transcribirAudioConModelo(audioBuffer, modelo, filename = "audio.ogg", contentType = "audio/ogg") {
   const formData = new FormData();
-  formData.append("file", Buffer.from(audioBuffer), { filename: "audio.ogg", contentType: "audio/ogg" });
+  formData.append("file", Buffer.from(audioBuffer), { filename, contentType });
   formData.append("model", modelo);
   formData.append("language", "es");
   // Prompt con lugares locales para mejorar reconocimiento de nombres de Cochabamba
@@ -243,4 +243,16 @@ async function generarAudioDesdeTexto(texto, voz = "nova") {
   }
 }
 
-module.exports = { transcribirAudio, extraerUbicaciones, validarComprobantePago, generarAudioDesdeTexto };
+// Transcribe audio grabado en el NAVEGADOR (canal web): webm/opus o mp4
+// según el dispositivo. Mismo motor y mismo prompt de lugares de Cochabamba.
+async function transcribirAudioWeb(audioBuffer, mime = "audio/webm") {
+  const ext = mime.includes("mp4") ? "mp4" : mime.includes("mpeg") ? "mp3" : mime.includes("ogg") ? "ogg" : "webm";
+  try {
+    return await transcribirAudioConModelo(audioBuffer, "gpt-4o-transcribe", `audio.${ext}`, mime);
+  } catch (e) {
+    log.warn("[TRANSCRIBIR_WEB] gpt-4o-transcribe fallo, usando whisper-1:", e.response?.data?.error?.message || e.message);
+    return await transcribirAudioConModelo(audioBuffer, "whisper-1", `audio.${ext}`, mime);
+  }
+}
+
+module.exports = { transcribirAudio, transcribirAudioWeb, extraerUbicaciones, validarComprobantePago, generarAudioDesdeTexto };
