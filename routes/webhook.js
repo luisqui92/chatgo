@@ -9,6 +9,7 @@ const { Usuario, Chofer, Viaje, ListaEspera, CodigoPromo, LocationReference } = 
 const { getSession, updateSession, checkRateLimit, sessionCache, yaProcesoMensaje } = require("../services/session");
 const { enviarMensaje, enviarBotones, verificarFirmaMeta, registrarNumeroEntrada } = require("../services/whatsapp");
 const { procesarModulos } = require("../modules");
+const { procesarVerificacionWeb } = require("./web");
 const { procesarMensajeUsuario } = require("../flows/pasajero");
 const { procesarMensajeChofer } = require("../flows/chofer");
 const { enPromoGratis, fechaStrBolivia, formatearFechaPromo, promoCodigosActiva } = require("../services/utils");
@@ -68,6 +69,10 @@ app.post("/webhook", limitWebhook, async (req, res) => {
 
         const dentroLimite = await checkRateLimit(phone);
         if (!dentroLimite) { log.warn(`[WEBHOOK] Rate limit excedido para ${phone}`); continue; }
+
+        // VERIFICACIÓN WEB EN 1 TOQUE: "ChatGo-XXXXXX" enlaza el número con la
+        // sesión de la página web. Se procesa antes que cualquier otro flujo.
+        if (msg.text?.body && await procesarVerificacionWeb(phone, msg.text.body)) continue;
 
         // Admin approvals
         if (buttonId && (buttonId.startsWith("aprobar_pago_") || buttonId.startsWith("rechazar_pago_"))) {

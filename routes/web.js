@@ -42,11 +42,44 @@ const limitCodigo = rateLimit("webCodigo", 5, 10 * 60 * 1000, "Demasiados códig
 const codigosPendientes = new Map();
 // phone → { count, resetAt } — máx 3 códigos por número por hora (además del límite por IP)
 const codigosPorTelefono = new Map();
+// ─── Verificación INVERSA (1 toque) ─────────────────────────────────────────
+// La web genera un código, abre wa.me con el mensaje pre-escrito, el usuario
+// solo toca ENVIAR, el webhook detecta el mensaje y la sesión queda verificada
+// sola (el número se toma de msg.from — ni siquiera hay que escribirlo).
+// codigo → { phone: null | "591...", exp }
+const verificacionesInversas = new Map();
 setInterval(() => {
   const now = Date.now();
   for (const [k, v] of codigosPendientes) if (v.exp < now) codigosPendientes.delete(k);
   for (const [k, v] of codigosPorTelefono) if (v.resetAt < now) codigosPorTelefono.delete(k);
+  for (const [k, v] of verificacionesInversas) if (v.exp < now) verificacionesInversas.delete(k);
 }, 5 * 60 * 1000);
+
+// Genera código corto sin caracteres ambiguos (sin 0/O/1/I/L)
+function codigoInverso() {
+  const abc = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+  let c = "";
+  for (let i = 0; i < 6; i++) c += abc[crypto.randomInt(abc.length)];
+  return c;
+}
+
+// Llamada desde el WEBHOOK con cada texto entrante: si es un mensaje de
+// verificación web ("ChatGo-XXXXXX"), completa la verificación y responde.
+// Devuelve true si el mensaje era de verificación (el webhook corta ahí).
+async function procesarVerificacionWeb(phone, texto) {
+  const m = String(texto || "").match(/chatgo[-\s]?([A-HJ-NP-Z2-9]{6})/i);
+  if (!m) return false;
+  const codigo = m[1].toUpperCase();
+  const pendiente = verificacionesInversas.get(codigo);
+  if (!pendiente || pendiente.exp < Date.now()) {
+    await enviarMensaje(phone, "⏱️ Ese código de la web ya venció. Volvé a la página y tocá el botón de nuevo.");
+    return true;
+  }
+  pendiente.phone = phone;
+  log.info(`[WEB] Verificación inversa completada: ${codigo} → ${phone}`);
+  await enviarMensaje(phone, "✅ *¡Listo!* Tu número quedó verificado.\n\nVolvé a la página para pedir tu ChatGo 🚖");
+  return true;
+}
 
 // ─── Token web (HMAC, 24h) ───────────────────────────────────────────────────
 const WEB_SECRET = process.env.JWT_SECRET || process.env.META_APP_SECRET || "chatgo-web-cambiar-en-produccion";
@@ -92,6 +125,36 @@ function coordsValidas(p) {
 }
 
 module.exports = function (app) {
+
+  // ── 0a. Verificación en 1 toque: iniciar ──────────────────────────────────
+  // La web pide un código, abre wa.me con el mensaje pre-escrito, y hace
+  // polling a 0b hasta que el webhook detecte el mensaje del usuario.
+  app.post("/api/web/iniciar-verificacion", limitCodigo, (req, res) => {
+    try {
+      const codigo = codigoInverso();
+      verificacionesInversas.set(codigo, { phone: null, exp: Date.now() + 10 * 60 * 1000 });
+      const texto = encodeURIComponent(`ChatGo-${codigo}`);
+      res.json({
+        codigo,
+        waLink: `https://wa.me/${WA_NUMERO_BOT}?text=${texto}`,
+      });
+    } catch (e) {
+      log.error("[WEB_VERIF_INV]", e.message);
+      res.status(500).json({ error: "Error iniciando la verificación." });
+    }
+  });
+
+  // ── 0b. Verificación en 1 toque: polling ──────────────────────────────────
+  app.get("/api/web/estado-verificacion", limitWeb, (req, res) => {
+    const codigo = String(req.query.codigo || "").toUpperCase();
+    const pendiente = verificacionesInversas.get(codigo);
+    if (!pendiente || pendiente.exp < Date.now()) {
+      return res.status(410).json({ error: "Código vencido. Tocá el botón de nuevo." });
+    }
+    if (!pendiente.phone) return res.json({ pendiente: true });
+    verificacionesInversas.delete(codigo);
+    res.json({ token: generarTokenWeb(pendiente.phone), phone: pendiente.phone });
+  });
 
   // ── 1. Enviar código de verificación por WhatsApp ─────────────────────────
   app.post("/api/web/enviar-codigo", limitCodigo, async (req, res) => {
@@ -354,3 +417,6 @@ module.exports = function (app) {
     }
   });
 };
+
+// Para el webhook: detectar mensajes de verificación web ("ChatGo-XXXXXX")
+module.exports.procesarVerificacionWeb = procesarVerificacionWeb;

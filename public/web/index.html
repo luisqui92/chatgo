@@ -167,18 +167,28 @@
 </head>
 <body>
 
-<!-- ── 1. Teléfono ── -->
+<!-- ── 1. Verificación en 1 toque ── -->
 <div class="screen centrada activa" id="s-telefono">
   <img class="logo" src="/logo.png" alt="ChatGo">
   <h1>Chat<span class="marca">Go</span></h1>
-  <p class="sub">Tu taxi en Cochabamba.<br>Verificamos tu número por WhatsApp — sin registro, sin contraseñas.</p>
-  <div class="campo">
-    <span class="prefijo">🇧🇴 +591</span>
-    <input id="in-telefono" type="tel" inputmode="numeric" maxlength="8" placeholder="71234567" autocomplete="tel">
+  <p class="sub">Tu taxi en Cochabamba.<br>Sin registro, sin contraseñas: un toque en WhatsApp y listo.</p>
+  <button class="btn" id="btn-un-toque">📲 Continuar con WhatsApp</button>
+  <div id="esperando-wa" style="display:none;margin-top:18px;">
+    <div class="spinner" style="margin:0 auto 12px;"></div>
+    <p class="sub" style="margin:0;">Tocá <b>enviar</b> en WhatsApp y volvé acá…<br>Te detectamos automáticamente.</p>
   </div>
-  <button class="btn" id="btn-codigo">Recibir código por WhatsApp</button>
-  <a class="btn secundario" id="btn-abrir-wa" href="#" target="_blank" style="display:none;text-align:center;text-decoration:none;">📲 Abrir WhatsApp y mandar "hola"</a>
-  <p id="ayuda-wa" style="display:none;color:var(--gris);font-size:12px;margin-top:10px;max-width:300px;line-height:1.5;">Después de mandar "hola", volvé acá y tocá <b>Recibir código</b> de nuevo.</p>
+  <button class="link" id="btn-modo-codigo">Prefiero recibir un código a mi número</button>
+
+  <!-- Modo alternativo: por número + código -->
+  <div id="modo-codigo" style="display:none;width:100%;max-width:340px;margin-top:8px;">
+    <div class="campo">
+      <span class="prefijo">🇧🇴 +591</span>
+      <input id="in-telefono" type="tel" inputmode="numeric" maxlength="8" placeholder="71234567" autocomplete="tel">
+    </div>
+    <button class="btn" id="btn-codigo">Recibir código por WhatsApp</button>
+    <a class="btn secundario" id="btn-abrir-wa" href="#" target="_blank" style="display:none;text-align:center;text-decoration:none;">📲 Abrir WhatsApp y mandar "hola"</a>
+    <p id="ayuda-wa" style="display:none;color:var(--gris);font-size:12px;margin-top:10px;line-height:1.5;">Después de mandar "hola", volvé acá y tocá <b>Recibir código</b> de nuevo.</p>
+  </div>
 </div>
 
 <!-- ── 2. Código ── -->
@@ -319,7 +329,44 @@ async function api(ruta, opts = {}) {
   return data;
 }
 
-// ═══════════════ 1-2. Verificación ═══════════════
+// ═══════════════ 1. Verificación en 1 TOQUE (inversa) ═══════════════
+let codigoInverso = null, pollVerif = null;
+
+$("btn-un-toque").onclick = async () => {
+  $("btn-un-toque").disabled = true;
+  try {
+    const r = await api("/api/web/iniciar-verificacion", { body: {} });
+    codigoInverso = r.codigo;
+    window.open(r.waLink, "_blank"); // abre WhatsApp con "ChatGo-XXXXXX" pre-escrito
+    $("esperando-wa").style.display = "block";
+    $("btn-un-toque").textContent = "📲 Volver a abrir WhatsApp";
+    // Polling: en cuanto el webhook vea el mensaje, entramos solos
+    clearInterval(pollVerif);
+    pollVerif = setInterval(async () => {
+      try {
+        const e = await api(`/api/web/estado-verificacion?codigo=${codigoInverso}`);
+        if (e.token) {
+          clearInterval(pollVerif);
+          token = e.token;
+          miPhone = e.phone;
+          localStorage.setItem("chatgo_token", token);
+          localStorage.setItem("chatgo_phone", e.phone);
+          entrarAlMapa();
+        }
+      } catch (err) {
+        if (/vencido/i.test(err.message)) { clearInterval(pollVerif); $("esperando-wa").style.display = "none"; toast(err.message); }
+      }
+    }, 2500);
+  } catch (e) { toast(e.message); }
+  $("btn-un-toque").disabled = false;
+};
+
+$("btn-modo-codigo").onclick = () => {
+  const m = $("modo-codigo");
+  m.style.display = m.style.display === "none" ? "block" : "none";
+};
+
+// ═══════════════ 1b-2. Verificación por código (alternativa) ═══════════════
 $("btn-codigo").onclick = async () => {
   const num = $("in-telefono").value.replace(/\D/g, "");
   if (!/^[67]\d{7}$/.test(num)) return toast("Escribí tu celular de 8 dígitos (empieza con 6 o 7).");
