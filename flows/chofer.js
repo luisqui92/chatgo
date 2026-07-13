@@ -141,7 +141,8 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
 
       // Link de rastreo propio — expira exactamente cuando termina el viaje
       const linkRastreo = generarLinkRastreoPropio(viaje.id);
-      const tipoVeh = chofer.tipoVehiculo || "auto";
+      // Superchofer ("todo"): mostrar al pasajero el tipo del VIAJE, no "todo"
+      const tipoVeh = (chofer.tipoVehiculo === "todo" ? viaje.tipoVehiculo : chofer.tipoVehiculo) || "auto";
       const emojiV = tipoVeh === "moto" ? "🏍️" : "🚗";
       const labelV = tipoVeh === "moto" ? "Moto" : "Auto";
       const colorVStr = chofer.colorVehiculo ? ` ${chofer.colorVehiculo}` : "";

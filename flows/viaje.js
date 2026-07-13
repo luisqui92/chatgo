@@ -79,7 +79,8 @@ async function asignarChofer(userPhone, session, excludeTraccarIds = [], intento
       codigoPromoUsado: session.codigoPromoUsado || null,
       precioTotal: session.precio,
       precioPorKm: session.precioPorKm,
-      tipoVehiculo: chofer.tipoVehiculo || tipoSolicitado || "auto",
+      // Superchofer ("todo"): el viaje registra el tipo SOLICITADO, no "todo"
+      tipoVehiculo: (chofer.tipoVehiculo === "todo" ? tipoSolicitado : chofer.tipoVehiculo) || tipoSolicitado || "auto",
       estado: "pendiente",
       fechaAsignacion: new Date(),
     },

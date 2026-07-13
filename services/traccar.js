@@ -141,10 +141,13 @@ async function buscarChoferDisponibleTraccar(origenUsuario, excludeTraccarIds = 
     // el objetivo del chofer de prueba es validar el flujo de cobro de punta a punta.
     and.push({ pagoDiarioAprobado: true, pagoDiarioFechaStr: hoyStr });
   }
+  // "todo" = SUPERCHOFER: recibe cualquier tipo de solicitud (auto, moto,
+  // van, ambulancia, delivery). Útil para el chofer de pruebas y para
+  // choferes multiservicio reales.
   if (tipoVehiculo === "auto") {
-    and.push({ OR: [{ tipoVehiculo: "auto" }, { tipoVehiculo: "" }] });
+    and.push({ OR: [{ tipoVehiculo: "auto" }, { tipoVehiculo: "" }, { tipoVehiculo: "todo" }] });
   } else if (tipoVehiculo) {
-    and.push({ tipoVehiculo });
+    and.push({ OR: [{ tipoVehiculo }, { tipoVehiculo: "todo" }] });
   }
   if (and.length) where.AND = and;
 
