@@ -395,3 +395,38 @@ model Solicitud {
   @@index([usuarioPhone])
   @@map("solicitudes")
 }
+
+// ─── DELIVERY: catálogo de restaurantes y menús ──────────────────────────────
+model Restaurante {
+  id         String   @id @default(uuid())
+  nombre     String
+  categorias String?  // etiquetas separadas por coma: "pollo,broaster,comida rapida"
+  telefono   String?
+  lat        Float?
+  lng        Float?
+  zona       String?
+  horario    String?  // texto informativo: "11:00 a 22:00"
+  activo     Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  platos     Plato[]
+
+  @@index([activo])
+  @@map("restaurantes")
+}
+
+model Plato {
+  id            String      @id @default(uuid())
+  restauranteId String
+  restaurante   Restaurante @relation(fields: [restauranteId], references: [id])
+  nombre        String
+  descripcion   String?
+  precioBs      Float
+  etiquetas     String?     // "pollo,entero,broaster" — para el buscador por antojo
+  activo        Boolean     @default(true)
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  @@index([restauranteId, activo])
+  @@map("platos")
+}

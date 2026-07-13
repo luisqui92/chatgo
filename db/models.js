@@ -25,4 +25,6 @@ module.exports = {
   Flota: prisma.flota,
   NotificacionPago: prisma.notificacionPago,
   Solicitud: prisma.solicitud,
+  Restaurante: prisma.restaurante,
+  Plato: prisma.plato,
 };

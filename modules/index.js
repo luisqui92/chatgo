@@ -22,19 +22,11 @@ const { esAudio, textoDeMensaje } = require("./util");
 
 const favor = require("./favor");
 const ambulancia = require("./ambulancia");
+const delivery = require("./delivery"); // inteligente: catálogo + presupuesto + despacho
 const { crearModuloCaptura } = require("./captura");
 
 // Módulos de captura (operación manual detrás de escena mientras no exista
-// la contraparte automatizada: catálogos, colegios, cuentas Traccar, etc.)
-const delivery = crearModuloCaptura({
-  id: "delivery",
-  titulo: "🍔 ChatGo Delivery",
-  preguntas: [
-    { campo: "pedido", texto: "¿Qué quieres pedir y cuál es tu presupuesto aproximado?\n\n_Ej: \"un pollo entero, tengo 60 Bs\"_" },
-    { campo: "zona", texto: "📍 ¿En qué zona estás? Puedes mandarme tu ubicación o escribirla.", aceptaUbicacion: true },
-  ],
-  cierre: "🛵 ¡Listo! Un operador de ChatGo está buscando las mejores opciones para tu pedido y te escribe en unos minutos.",
-});
+// la contraparte automatizada: colegios, cuentas Traccar, etc.)
 
 const school = crearModuloCaptura({
   id: "school",
