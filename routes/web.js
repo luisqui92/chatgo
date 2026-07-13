@@ -30,7 +30,7 @@ const { rateLimit } = require("../services/ratelimit");
 const { calcularDistancia, geocodificarDireccion, obtenerDireccion } = require("../services/google");
 const { calcularPrecio } = require("../services/utils");
 const { calcularMultiplierSurge, aplicarSurge } = require("../ai");
-const { asignarChofer } = require("../flows/viaje");
+const { asignarChofer, procesarCancelacionPasajero } = require("../flows/viaje");
 const { getSession, updateSession } = require("../services/session");
 
 // ─── Límites (por IP) ────────────────────────────────────────────────────────
@@ -347,6 +347,22 @@ module.exports = function (app) {
     } catch (e) {
       log.error("[WEB_PEDIR]", e.message);
       res.status(500).json({ error: "No pudimos crear el pedido. Intentá de nuevo." });
+    }
+  });
+
+  // ── 6b. Cancelar desde la web ──────────────────────────────────────────────
+  // Reusa la cancelación real del bot: marca atómico anti-race con el interval
+  // de lista de espera, libera al chofer y le avisa, limpia todo.
+  app.post("/api/web/cancelar", limitWeb, requireTokenWeb, async (req, res) => {
+    try {
+      const phone = req.webPhone;
+      const session = await getSession(phone);
+      await procesarCancelacionPasajero(phone, session || {});
+      log.info(`[WEB] Viaje cancelado desde la web por ${phone}`);
+      res.json({ ok: true });
+    } catch (e) {
+      log.error("[WEB_CANCELAR]", e.message);
+      res.status(500).json({ error: "No pudimos cancelar. Escribí CANCELAR a nuestro WhatsApp." });
     }
   });
 

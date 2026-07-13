@@ -2250,8 +2250,19 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
           : viajeActivoDefault.estado === "en_camino" ? "chofer_en_camino"
           : viajeActivoDefault.estado === "esperando_pasajero" ? "chofer_esperando_pasajero"
           : "en_curso";
-        await updateSession(phone, { ...session, step: stepReal });
         log.warn(`[DEFAULT] Corrigiendo step de ${phone}: ${session.step} → ${stepReal}`);
+        // Si el mensaje que nos trajo acá YA es un intento de cancelar, no
+        // rebotar con "escribe CANCELAR" (el usuario acababa de escribirlo):
+        // ir directo a la confirmación.
+        if (texto && !buttonId && esIntentoCancelar(texto)) {
+          await updateSession(phone, { ...session, step: "confirmando_cancelacion" });
+          await enviarBotones(phone, `⚠️ ¿Estás seguro de cancelar tu viaje?`, [
+            { id: "confirmar_cancelacion", title: "✅ Sí, cancelar" },
+            { id: "no_cancelar", title: "❌ No, seguir" },
+          ]);
+          break;
+        }
+        await updateSession(phone, { ...session, step: stepReal });
         await enviarMensaje(phone, `⚠️ Tu viaje sigue activo.\n\nEscribe CANCELAR para cancelarlo o AYUDA para soporte.`);
       } else if (enEsperaDefault) {
         await updateSession(phone, { ...session, step: "sin_chofer" });

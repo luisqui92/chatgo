@@ -283,7 +283,7 @@
     <p class="estado-sub">Gracias por usar ChatGo.</p>
     <button class="btn" id="btn-otro">Pedir otro viaje</button>
   </div>
-  <button class="link" id="btn-cancelar-info">¿Cómo cancelo? Escribí CANCELAR a nuestro WhatsApp</button>
+  <button class="btn secundario" id="btn-cancelar-viaje" style="max-width:340px;border-color:var(--rojo);color:var(--rojo);">❌ Cancelar viaje</button>
 </div>
 
 <div id="toast"></div>
@@ -563,10 +563,26 @@ function irAEstado() {
   $("estado-buscando").style.display = "block";
   $("estado-chofer").style.display = "none";
   $("estado-fin").style.display = "none";
+  $("btn-cancelar-viaje").style.display = "block";
   consultarEstado();
   clearInterval(pollTimer);
   pollTimer = setInterval(consultarEstado, 4000);
 }
+
+$("btn-cancelar-viaje").onclick = async () => {
+  if (!confirm("¿Seguro que querés cancelar el viaje?")) return;
+  $("btn-cancelar-viaje").disabled = true;
+  try {
+    await api("/api/web/cancelar", { body: {} });
+    clearInterval(pollTimer);
+    $("estado-buscando").style.display = "none";
+    $("estado-chofer").style.display = "none";
+    $("estado-fin").style.display = "block";
+    $("fin-titulo").textContent = "❌ Viaje cancelado";
+    $("btn-cancelar-viaje").style.display = "none";
+  } catch (e) { toast(e.message); }
+  $("btn-cancelar-viaje").disabled = false;
+};
 
 async function consultarEstado() {
   try {
@@ -579,9 +595,12 @@ async function consultarEstado() {
       $("estado-buscando").style.display = "none";
       $("estado-chofer").style.display = "none";
       $("estado-fin").style.display = "block";
+      $("btn-cancelar-viaje").style.display = "none";
       $("fin-titulo").textContent = r.estado === "completado" ? "✅ Viaje finalizado" : "❌ Viaje cancelado";
       return;
     }
+    // En viaje en curso ya no tiene sentido cancelar desde la web
+    $("btn-cancelar-viaje").style.display = r.estado === "en_curso" ? "none" : "block";
 
     // en_camino | esperando_pasajero | en_curso → card del chofer
     $("estado-buscando").style.display = "none";
