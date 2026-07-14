@@ -122,6 +122,25 @@ function enReposo(session) {
   return !session || !session.step || session.step === "inicio";
 }
 
+// Pasos TEMPRANOS del flujo taxi: el usuario todavía no confirmó nada del
+// viaje. Acá una intención INEQUÍVOCA de otro módulo puede interceptar.
+// Caso real: tras el saludo el taxi deja step="eligiendo_historial", y
+// "tengo 30bs y quiero pollo" terminaba como destino "pollo" del taxi.
+const PASOS_SUAVES = new Set([
+  "eligiendo_historial", "esperando_origen", "esperando_destino",
+  "esperando_origen_con_destino", "confirmando_ciudad", "preguntando_opciones",
+]);
+
+// En pasos suaves solo interceptan intenciones que NO pueden ser una dirección:
+// emergencia médica explícita, "delivery"/"servicios" como palabra única, o
+// la intención de comida estricta (verbo de querer + comida, sin palabras de viaje)
+function intencionInequivoca(texto) {
+  if (/^(ambulancia|emergencia m[eé]dica)\b/i.test(texto) && moduloActivo("ambulancia")) return "ambulancia";
+  if (/^(delivery|servicios?)$/i.test(texto)) return texto.toLowerCase().startsWith("s") ? "menu" : "delivery";
+  if (moduloActivo("delivery") && esIntencionComida(texto)) return "delivery";
+  return null;
+}
+
 async function procesarModulos(phone, msg, buttonId, session) {
   if (CONFIG.MODULOS_ACTIVOS.length === 0) return false;
 
@@ -137,12 +156,22 @@ async function procesarModulos(phone, msg, buttonId, session) {
     return false;
   }
 
-  // 2) Entrada por palabra clave — solo en reposo
-  if (!enReposo(session)) return false;
+  const reposo = enReposo(session);
+  const pasoSuave = !reposo && PASOS_SUAVES.has(session?.step);
+  if (!reposo && !pasoSuave) return false;
 
   // 2a) Texto
   const texto = textoDe(msg);
   if (texto) {
+    // En paso suave del taxi: solo intenciones inequívocas
+    if (pasoSuave) {
+      const que = intencionInequivoca(texto);
+      if (!que) return false;
+      if (que === "menu") { await mostrarMenuServicios(phone); return true; }
+      log.info(`[MODULOS] ${phone} intercepta "${que}" en paso suave (${session.step}): "${texto}"`);
+      return await MODULOS[que].iniciar(phone, msg, session);
+    }
+
     if (/^servicios?$/i.test(texto)) {
       await mostrarMenuServicios(phone);
       return true;
@@ -169,6 +198,15 @@ async function procesarModulos(phone, msg, buttonId, session) {
     if (!hayModuloConVoz) return false;
     const { texto: transcripcion } = await textoDeMensaje(msg);
     if (!transcripcion) return false;
+
+    // En paso suave del taxi: solo intenciones inequívocas
+    if (pasoSuave) {
+      const que = intencionInequivoca(transcripcion);
+      if (!que || que === "menu") return false;
+      log.info(`[MODULOS] ${phone} intercepta "${que}" por VOZ en paso suave (${session.step}): "${transcripcion.substring(0, 60)}"`);
+      return await MODULOS[que].iniciar(phone, msg, session);
+    }
+
     for (const { modulo, regex } of ENTRADAS_VOZ) {
       if (moduloActivo(modulo) && regex.test(transcripcion)) {
         log.info(`[MODULOS] ${phone} entra por VOZ al módulo "${modulo}": "${transcripcion.substring(0, 60)}"`);
