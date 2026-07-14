@@ -12,18 +12,25 @@ function esAudio(msg) {
   return (msg?.type === "audio" || msg?.type === "voice") && !!(msg.audio?.id || msg.voice?.id);
 }
 
-// Devuelve { texto, esVoz }. Para texto plano no cuesta nada;
-// para audio transcribe una sola vez por mensaje.
+// Devuelve { texto, esVoz }. Para texto plano no cuesta nada; para audio
+// transcribe UNA vez y cachea el resultado en el propio msg — el router y
+// los módulos pueden llamarla varias veces con el mismo mensaje sin pagar
+// transcripciones repetidas.
 async function textoDeMensaje(msg) {
   if (msg?.text?.body?.trim()) return { texto: msg.text.body.trim(), esVoz: false };
+  if (msg && msg._transcripcionCache !== undefined) {
+    return { texto: msg._transcripcionCache, esVoz: true };
+  }
   if (esAudio(msg)) {
     try {
       const url = await obtenerUrlMedia(msg.audio?.id || msg.voice?.id);
       const transcripcion = await transcribirAudio(url);
       if (transcripcion?.trim()) {
         log.info(`[MODULOS] Audio transcrito: "${transcripcion.trim().substring(0, 80)}"`);
-        return { texto: transcripcion.trim(), esVoz: true };
+        msg._transcripcionCache = transcripcion.trim();
+        return { texto: msg._transcripcionCache, esVoz: true };
       }
+      msg._transcripcionCache = "";
     } catch (e) {
       log.error("[MODULOS] Error transcribiendo audio:", e.message);
     }

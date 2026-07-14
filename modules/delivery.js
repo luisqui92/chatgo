@@ -26,9 +26,16 @@ function norm(s) {
   return String(s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").trim();
 }
 
+// Números hablados frecuentes ("tengo treinta bolivianos" — caso real de audio)
+const NUMEROS_PALABRA = { diez: 10, quince: 15, veinte: 20, veinticinco: 25, treinta: 30, cuarenta: 40, cincuenta: 50, sesenta: 60, setenta: 70, ochenta: 80, noventa: 90, cien: 100 };
+
 // "tengo 30 bs y quiero pollo" → { presupuesto: 30, terminos: ["pollo"] }
 function interpretarPedido(texto) {
-  const t = norm(texto);
+  let t = norm(texto);
+  // Convertir números en palabras a dígitos antes de extraer el monto
+  for (const [palabra, valor] of Object.entries(NUMEROS_PALABRA)) {
+    t = t.replace(new RegExp(`\\b${palabra}\\b`, "g"), String(valor));
+  }
   const mMonto = t.match(/(\d{1,4})\s*(bs|bolivianos|pesos)?\b/);
   const presupuesto = mMonto ? parseInt(mMonto[1], 10) : null;
   const terminos = t
@@ -73,9 +80,17 @@ async function capturaManual(phone, pedidoTexto, session) {
 }
 
 async function iniciar(phone, msg, session) {
+  const base = { ...(session || {}), modulo: "delivery", step: "mod_delivery_pedido" };
+  // Si el mensaje de entrada YA trae el antojo ("tengo 30 bs y quiero pollo"),
+  // procesarlo directo — no volver a preguntar lo que acaba de decir
+  const { texto } = await textoDeMensaje(msg);
+  if (texto && !/^(delivery|comida|restaurantes?)$/i.test(texto.trim())) {
+    await updateSession(phone, base);
+    return await procesar(phone, msg, null, base);
+  }
   await enviarMensaje(phone,
     "🍔 *ChatGo Delivery*\n\n¿Qué se te antoja y cuánto tenés?\n\n_Ej: \"un pollo entero, tengo 60 bs\" — o escribí solo el antojo._\n\nEscribe CANCELAR para salir.");
-  await updateSession(phone, { ...(session || {}), modulo: "delivery", step: "mod_delivery_pedido" });
+  await updateSession(phone, base);
   return true;
 }
 

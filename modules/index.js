@@ -71,6 +71,18 @@ const ENTRADAS = [
   { modulo: "rastreo", regex: /^(rastreo|rastrear|rastreoplus|gps)\b/i },
 ];
 
+// ─── Intención de COMIDA en lenguaje natural ─────────────────────────────────
+// "tengo 30 bs y quiero un pollo" debe abrir DELIVERY, no intentar geocodificar
+// "pollo" como calle (pasó en producción). Requiere verbo de querer/pedir +
+// palabra de comida, y NO frases de viaje ("llévame a Pollos Copacabana" es taxi).
+const PALABRAS_COMIDA = "pollo|pizza|hamburguesa|salchipapa|silpancho|chicharr[oó]n|broaster|lomito|anticucho|salte[ñn]a|empanada|almuerzo|cena|desayuno|comida|sopa|helado|torta|sushi|chifa|churrasco|parrillada";
+const PIDE_COMIDA = new RegExp(`\\b(quiero|quisiera|se me antoja|antojo|tengo ganas|ped(?:ir|ime|imos)|comprar|comer)\\b[\\s\\S]{0,40}?\\b(?:${PALABRAS_COMIDA})s?\\b`, "i");
+const ES_FRASE_VIAJE = /\b(ll[eé]vame|llevame|ir (a|al|hasta)|voy (a|al)|vamos (a|al)|hasta (el|la|los)|taxi|recoja|recojan|b[uú]scame|esquina|calle|avenida)\b/i;
+
+function esIntencionComida(texto) {
+  return PIDE_COMIDA.test(texto) && !ES_FRASE_VIAJE.test(texto);
+}
+
 // Frases que abren cada módulo por VOZ (transcripción de nota de voz).
 // Deliberadamente MÁS estrictas que las de texto: en el habla natural muchas
 // palabras aparecen de pasada ("por favor", "cerca del colegio", "hubo un
@@ -141,6 +153,11 @@ async function procesarModulos(phone, msg, buttonId, session) {
         return await MODULOS[modulo].iniciar(phone, msg, session);
       }
     }
+    // Intención de comida en lenguaje natural → delivery
+    if (moduloActivo("delivery") && esIntencionComida(texto)) {
+      log.info(`[MODULOS] ${phone} entra a delivery por intención de comida: "${texto}"`);
+      return await MODULOS.delivery.iniciar(phone, msg, session);
+    }
     return false;
   }
 
@@ -157,6 +174,11 @@ async function procesarModulos(phone, msg, buttonId, session) {
         log.info(`[MODULOS] ${phone} entra por VOZ al módulo "${modulo}": "${transcripcion.substring(0, 60)}"`);
         return await MODULOS[modulo].iniciar(phone, msg, session);
       }
+    }
+    // Intención de comida hablada → delivery
+    if (moduloActivo("delivery") && esIntencionComida(transcripcion)) {
+      log.info(`[MODULOS] ${phone} entra a delivery por comida (voz): "${transcripcion.substring(0, 60)}"`);
+      return await MODULOS.delivery.iniciar(phone, msg, session);
     }
     return false;
   }
