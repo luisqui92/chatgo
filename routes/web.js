@@ -27,7 +27,7 @@ const { enviarMensaje, enviarPlantillaCodigo } = require("../services/whatsapp")
 // lo demás falla (usuario sin ventana de 24h y plantilla no disponible aún)
 const WA_NUMERO_BOT = process.env.WA_NUMERO_BOT || "59177908529";
 const { rateLimit } = require("../services/ratelimit");
-const { calcularDistancia, geocodificarDireccion, geocodificarConMemoria, obtenerDireccion } = require("../services/google");
+const { calcularDistancia, calcularRutasConTrafico, geocodificarDireccion, geocodificarConMemoria, obtenerDireccion } = require("../services/google");
 const { calcularPrecio, buscarEsquinaMapeada, obtenerLugarPersonal, obtenerLugarOtros } = require("../services/utils");
 const { transcribirAudioWeb, extraerUbicaciones } = require("../services/openai");
 const { calcularMultiplierSurge, aplicarSurge } = require("../ai");
@@ -338,7 +338,18 @@ module.exports = function (app) {
         return res.status(400).json({ error: "El origen y el destino son el mismo punto." });
       }
 
-      const { km, duracion, esAproximado } = await calcularDistancia(origen, destino);
+      // Ruta real por calles (Routes API) — km para el precio Y puntos para
+      // dibujar la ruta en el mapa de cotización (no una línea recta)
+      let km, duracion, esAproximado = false, puntos = [];
+      const rutas = await calcularRutasConTrafico(origen, destino).catch(() => []);
+      if (rutas.length) {
+        km = Math.round((rutas[0].distanciaM / 1000) * 10) / 10;
+        duracion = `${Math.round(rutas[0].duracionSeg / 60)} min`;
+        puntos = rutas[0].puntos;
+      } else {
+        const d = await calcularDistancia(origen, destino);
+        km = d.km; duracion = d.duracion; esAproximado = !!d.esAproximado;
+      }
       const { multiplier } = await calcularMultiplierSurge(origen.lat, origen.lng);
       const auto = aplicarSurge(calcularPrecio(km, "auto").total, multiplier);
       const van = aplicarSurge(calcularPrecio(km, "van").total, multiplier);
@@ -346,9 +357,10 @@ module.exports = function (app) {
       res.json({
         km,
         duracion,
-        esAproximado: !!esAproximado,
+        esAproximado,
         surge: multiplier > 1 ? multiplier : null,
         precios: { auto, van },
+        puntos,
       });
     } catch (e) {
       log.error("[WEB_COTIZAR]", e.message);

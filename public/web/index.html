@@ -24,6 +24,14 @@
     display: flex; flex-direction: column;
     height: 100dvh; overflow: hidden;
   }
+  /* Responsive: en tablet/PC la app se ve como columna centrada, no estirada */
+  @media (min-width: 560px) {
+    body {
+      max-width: 460px; margin: 0 auto;
+      border-left: 1px solid var(--borde); border-right: 1px solid var(--borde);
+      box-shadow: 0 0 40px rgba(0,0,0,.08);
+    }
+  }
 
   /* ── Pantallas ── */
   .screen { display: none; flex: 1; flex-direction: column; overflow-y: auto; }
@@ -624,11 +632,21 @@ function dibujarMapaCotizar() {
   };
   mk(puntoOrigen, "#1D9E75");
   mk(puntoDestino, "#e5484d");
-  new google.maps.Polyline({
-    map: mapCotizar, path: [puntoOrigen, puntoDestino],
-    strokeColor: "#1D9E75", strokeOpacity: .5, strokeWeight: 3,
-    icons: [{ icon: { path: "M 0,-1 0,1", strokeOpacity: 1, scale: 2.5 }, offset: "0", repeat: "12px" }],
-  });
+  if (cotizacion?.puntos?.length) {
+    // Ruta REAL por calles (viene del backend vía Routes API)
+    new google.maps.Polyline({
+      map: mapCotizar, path: cotizacion.puntos,
+      strokeColor: "#1D9E75", strokeOpacity: .9, strokeWeight: 5,
+    });
+    cotizacion.puntos.forEach(p => b.extend(p));
+  } else {
+    // Respaldo si la ruta no vino: línea directa punteada
+    new google.maps.Polyline({
+      map: mapCotizar, path: [puntoOrigen, puntoDestino],
+      strokeColor: "#1D9E75", strokeOpacity: .5, strokeWeight: 3,
+      icons: [{ icon: { path: "M 0,-1 0,1", strokeOpacity: 1, scale: 2.5 }, offset: "0", repeat: "12px" }],
+    });
+  }
   mapCotizar.fitBounds(b, 60);
 }
 

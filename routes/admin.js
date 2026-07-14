@@ -1248,7 +1248,14 @@ function initMap() {
   if (ORIGEN.lat) mkCircle({ lat: ORIGEN.lat, lng: ORIGEN.lng }, "#1D9E75", "Origen");
   if (DESTINO.lat) mkCircle({ lat: DESTINO.lat, lng: DESTINO.lng }, "#f85149", "Destino");
 
-  if (!terminado) poll();
+  // Encuadrar origen-destino y dibujar la ruta YA (sin esperar el primer GPS)
+  if (ORIGEN.lat && DESTINO.lat) {
+    const b = new google.maps.LatLngBounds();
+    b.extend({ lat: ORIGEN.lat, lng: ORIGEN.lng });
+    b.extend({ lat: DESTINO.lat, lng: DESTINO.lng });
+    map.fitBounds(b, 60);
+  }
+  if (!terminado) { dibujarRuta(); poll(); }
   else showFin();
 }
 
@@ -1285,7 +1292,7 @@ function moverSuave(marker, destino) {
 }
 
 function dibujarRuta() {
-  if (!ORIGEN.lat || !DESTINO.lat) return;
+  if (!ORIGEN.lat || !DESTINO.lat || dirRenderer) return; // no dibujar dos veces
   // Routes API vía backend (la Directions legacy da REQUEST_DENIED en proyectos nuevos)
   fetch("/track/" + VID + "/ruta")
     .then(r => r.json())
