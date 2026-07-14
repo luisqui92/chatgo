@@ -211,9 +211,11 @@
   <h1>Revisá tu <span class="marca">WhatsApp</span></h1>
   <p class="sub">Te mandamos un código de 4 dígitos al <b id="tel-mostrado"></b></p>
   <div class="campo" style="max-width:200px;justify-content:center;">
-    <input id="in-codigo" type="tel" inputmode="numeric" maxlength="4" placeholder="• • • •" style="text-align:center;font-size:26px;letter-spacing:10px;font-weight:800;">
+    <input id="in-codigo" type="tel" inputmode="numeric" maxlength="4" placeholder="• • • •" autocomplete="one-time-code" style="text-align:center;font-size:26px;letter-spacing:10px;font-weight:800;">
   </div>
-  <button class="btn" id="btn-verificar">Verificar</button>
+  <button class="btn" id="btn-pegar">📋 Pegar código</button>
+  <button class="btn secundario" id="btn-verificar">Verificar</button>
+  <p class="sub" style="margin-top:14px;font-size:11.5px;">Tocá <b>Copiar código</b> en el mensaje de WhatsApp,<br>volvé acá y tocá <b>Pegar código</b> — listo.</p>
   <button class="link" id="btn-reenviar">Cambiar número o reenviar código</button>
 </div>
 
@@ -400,9 +402,12 @@ $("btn-codigo").onclick = async () => {
   $("btn-codigo").disabled = false;
 };
 
-$("btn-verificar").onclick = async () => {
+let verificando = false;
+async function verificarCodigo() {
   const cod = $("in-codigo").value.trim();
   if (!/^\d{4}$/.test(cod)) return toast("El código tiene 4 dígitos.");
+  if (verificando) return;
+  verificando = true;
   $("btn-verificar").disabled = true;
   try {
     const num = miPhone.replace(/^591/, "");
@@ -412,7 +417,31 @@ $("btn-verificar").onclick = async () => {
     localStorage.setItem("chatgo_phone", r.phone);
     entrarAlMapa();
   } catch (e) { toast(e.message); }
+  verificando = false;
   $("btn-verificar").disabled = false;
+}
+$("btn-verificar").onclick = verificarCodigo;
+
+// Auto-verificar al completar los 4 dígitos (escritos o pegados por teclado)
+$("in-codigo").addEventListener("input", () => {
+  const v = $("in-codigo").value.replace(/\D/g, "");
+  $("in-codigo").value = v;
+  if (v.length === 4) verificarCodigo();
+});
+
+// "📋 Pegar código": lee el portapapeles (el usuario tocó "Copiar código" en
+// la plantilla de WhatsApp), rellena y verifica solo. El navegador no puede
+// leer WhatsApp directamente — esto es lo más cercano a automático en la web.
+$("btn-pegar").onclick = async () => {
+  try {
+    const txt = await navigator.clipboard.readText();
+    const m = String(txt || "").match(/\d{4}/);
+    if (!m) return toast("No hay ningún código copiado. Tocá 'Copiar código' en el mensaje de WhatsApp primero.");
+    $("in-codigo").value = m[0];
+    verificarCodigo();
+  } catch {
+    toast("Tu navegador no dejó leer el portapapeles. Mantené presionado el campo y elegí Pegar.");
+  }
 };
 
 $("btn-reenviar").onclick = () => { $("in-codigo").value = ""; mostrar("s-telefono"); };
