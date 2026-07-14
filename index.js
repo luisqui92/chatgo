@@ -2,12 +2,35 @@
 // ChatGo - Bot de Taxi por WhatsApp (v6.0 - Modular) - Build 20260525055707
 // ═══════════════════════════════════════════════════════════════════════════
 
+// ─── CARGAR .env ─────────────────────────────────────────────────────────────
+// PM2 NO lee el .env (solo conserva las variables de cuando se arrancó el
+// proceso por primera vez). Caso real: MODULOS_ACTIVOS agregado al .env nunca
+// llegaba a la app. La app lo carga acá misma; las variables ya definidas por
+// el entorno/PM2 tienen prioridad (no se pisan).
+(function cargarEnv() {
+  try {
+    const fs = require("fs");
+    const path = require("path");
+    const envPath = path.join(__dirname, ".env");
+    if (!fs.existsSync(envPath)) return;
+    for (const linea of fs.readFileSync(envPath, "utf8").split("\n")) {
+      const m = linea.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/);
+      if (m && process.env[m[1]] === undefined) {
+        process.env[m[1]] = m[2].replace(/^["']|["']$/g, "");
+      }
+    }
+  } catch (e) {
+    console.error("No se pudo cargar .env:", e.message);
+  }
+})();
+
 const express = require("express");
 const app = express();
 
 // ─── MÓDULOS ─────────────────────────────────────────────────────────────────
 const { CONFIG, log, validateConfig } = require("./config");
 validateConfig();
+log.info(`🧩 Módulos activos: ${CONFIG.MODULOS_ACTIVOS.length ? CONFIG.MODULOS_ACTIVOS.join(", ") : "(solo taxi)"}`);
 const models = require("./db/models");
 const { Usuario, Chofer, Viaje, SessionState, ListaEspera, RateLimit, CodigoPromo, LocationReference, NotificacionPago } = models;
 
