@@ -36,6 +36,19 @@ app.post("/webhook", limitWebhook, async (req, res) => {
   res.sendStatus(200);
 
   try {
+    // ESTADOS DE ENTREGA (sent/delivered/read/failed): acá Meta reporta POR QUÉ
+    // un mensaje aceptado no llegó (ej: plantilla sin método de pago = 131042,
+    // ventana 24h = 131047). Sin esto, los fallos de entrega son invisibles.
+    const statuses = req.body.entry?.[0]?.changes?.[0]?.value?.statuses;
+    if (statuses?.length) {
+      for (const st of statuses) {
+        if (st.status === "failed" || st.errors?.length) {
+          const err = st.errors?.[0];
+          log.error(`[WSP_STATUS] Mensaje a ${st.recipient_id} FALLÓ: ${err?.code || "?"} — ${err?.title || ""} ${err?.error_data?.details || err?.message || ""}`);
+        }
+      }
+    }
+
     const messages = req.body.entry?.[0]?.changes?.[0]?.value?.messages;
     if (!messages?.length) return;
 
