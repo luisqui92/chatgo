@@ -176,16 +176,19 @@ module.exports = function (app) {
       const codigo = String(crypto.randomInt(1000, 10000)); // 4 dígitos
       codigosPendientes.set(phone, { codigo, exp: now + 10 * 60 * 1000, intentos: 0 });
 
-      // Cascada de envío:
-      // 1) Mensaje directo — funciona si el usuario habló con el bot en 24h (gratis)
-      // 2) Plantilla de autenticación — funciona SIEMPRE, incluso con usuarios
-      //    que jamás escribieron al bot (requiere la plantilla aprobada en Meta)
-      // 3) Si ambas fallan: la web muestra el botón "Abrir WhatsApp" (wa.me)
-      let ok = await enviarMensaje(phone,
-        `🐒 *ChatGo Web*\n\nTu código de verificación es: *${codigo}*\n\n_Vence en 10 minutos. Si no fuiste vos, ignorá este mensaje._`);
+      // Cascada de envío — LA PLANTILLA VA PRIMERO:
+      // Meta ACEPTA mensajes directos fuera de la ventana de 24h (devuelve
+      // "éxito") y después los descarta en silencio — el fallback nunca se
+      // disparaba y los números nuevos jamás recibían el código (caso real).
+      // Las plantillas de autenticación entregan SIEMPRE; el mensaje directo
+      // queda como respaldo si la plantilla falla (mal nombre/idioma/pausada).
+      let ok = await enviarPlantillaCodigo(phone, codigo);
+      let via = "plantilla";
       if (!ok) {
-        log.info(`[WEB] Mensaje directo falló para ${phone} (ventana 24h) — intentando plantilla`);
-        ok = await enviarPlantillaCodigo(phone, codigo);
+        log.warn(`[WEB] Plantilla de código falló para ${phone} — respaldo con mensaje directo (solo entrega con ventana 24h abierta)`);
+        ok = await enviarMensaje(phone,
+          `🐒 *ChatGo Web*\n\nTu código de verificación es: *${codigo}*\n\n_Vence en 10 minutos. Si no fuiste vos, ignorá este mensaje._`);
+        via = "directo";
       }
       if (!ok) {
         return res.status(422).json({
@@ -193,7 +196,7 @@ module.exports = function (app) {
           waLink: `https://wa.me/${WA_NUMERO_BOT}?text=hola`,
         });
       }
-      log.info(`[WEB] Código enviado a ${phone}`);
+      log.info(`[WEB] Código enviado a ${phone} (vía ${via})`);
       res.json({ ok: true });
     } catch (e) {
       log.error("[WEB_CODIGO]", e.message);
