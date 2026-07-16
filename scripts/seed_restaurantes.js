@@ -17,7 +17,7 @@ const CATALOGO = [
   {
     nombre: "Pollos Copacabana",
     categorias: "pollo,broaster,comida rapida",
-    telefono: "59144222333",           // ← EDITAR
+    telefono: "59162741818",  // encargado de prueba (EDITAR con el real del local)
     lat: -17.3939, lng: -66.1571,      // ← EDITAR (Google Maps → clic derecho → copiar coords)
     zona: "Centro",
     horario: "11:00 a 22:30",
@@ -30,7 +30,7 @@ const CATALOGO = [
   {
     nombre: "Pollos Kansas",
     categorias: "pollo,spiedo",
-    telefono: "59144333444",           // ← EDITAR
+    telefono: "59162741818",  // encargado de prueba (EDITAR con el real del local)
     lat: -17.3862, lng: -66.1650,      // ← EDITAR
     zona: "Cala Cala",
     horario: "11:30 a 22:00",
@@ -42,7 +42,7 @@ const CATALOGO = [
   {
     nombre: "Burger House CBBA",
     categorias: "hamburguesa,comida rapida",
-    telefono: "59144555666",           // ← EDITAR
+    telefono: "59162741818",  // encargado de prueba (EDITAR con el real del local)
     lat: -17.3894, lng: -66.1602,      // ← EDITAR
     zona: "Centro",
     horario: "17:00 a 23:30",
@@ -55,7 +55,7 @@ const CATALOGO = [
   {
     nombre: "Pizzería Nápoles",
     categorias: "pizza,italiana",
-    telefono: "59144777888",           // ← EDITAR
+    telefono: "59162741818",  // encargado de prueba (EDITAR con el real del local)
     lat: -17.3798, lng: -66.1585,      // ← EDITAR
     zona: "Recoleta",
     horario: "18:00 a 23:00",
@@ -71,7 +71,14 @@ async function main() {
   let creados = 0, saltados = 0;
   for (const r of CATALOGO) {
     const existe = await Restaurante.findFirst({ where: { nombre: r.nombre } });
-    if (existe) { console.log(`— ya existe: ${r.nombre}`); saltados++; continue; }
+    if (existe) {
+      // Ya existe: actualizar datos del local (teléfono, coords, horario) sin duplicar platos
+      const { platos, ...datos } = r;
+      await Restaurante.update({ where: { id: existe.id }, data: datos });
+      console.log(`↻ actualizado: ${r.nombre}`);
+      saltados++;
+      continue;
+    }
     const { platos, ...datos } = r;
     await Restaurante.create({
       data: { ...datos, platos: { create: platos } },

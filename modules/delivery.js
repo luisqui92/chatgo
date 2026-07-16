@@ -215,6 +215,18 @@ async function procesar(phone, msg, buttonId, session) {
       enviarMensaje(CONFIG.ADMIN_PHONE,
         `🍔 *PEDIDO DELIVERY*\n👤 +${phone}\n🍽️ ${el.nombre} (Bs ${el.precio})\n🏪 ${el.restNombre}${el.restTelefono ? ` · 📞 +${el.restTelefono}` : ""}\n🛵 Envío Bs ${session.deliveryEnvio} · Total Bs ${session.deliveryTotal}\n📍 ${entrega.nombre}${solicitudId ? `\n🆔 ${solicitudId}` : ""}`).catch(() => {});
 
+      // Avisar al LOCAL para que empiece a preparar (si tiene WhatsApp cargado).
+      // Nota: si el local nunca le escribió al bot, este mensaje choca con la
+      // ventana de 24h de Meta — para locales reales conviene una plantilla.
+      if (el.restTelefono) {
+        enviarMensaje(el.restTelefono,
+          `🍔 *NUEVO PEDIDO — ChatGo Delivery*\n\n` +
+          `🏪 ${el.restNombre}\n` +
+          `🍽️ Preparar: *${el.nombre}* (Bs ${el.precio})\n\n` +
+          `🛵 Un repartidor de ChatGo pasa a recogerlo en unos minutos — te avisamos cuando esté en camino al local.\n` +
+          (solicitudId ? `\n🆔 Pedido: ${solicitudId.slice(0, 8)}` : "")).catch(() => {});
+      }
+
       // Despacho con el motor del taxi (si el restaurante tiene coordenadas):
       // origen = restaurante, destino = cliente, el repartidor ve qué recoger
       if (el.restLat && el.restLng) {

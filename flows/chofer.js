@@ -195,6 +195,22 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
             `💬 Escribe cualquier mensaje para chatear con el repartidor.\n` +
             `_Escribe CANCELAR si necesitas cancelar, o AYUDA para soporte._`
         );
+        // Avisar al LOCAL que el repartidor va en camino a recoger
+        try {
+          const { Solicitud, Restaurante } = require("../db/models");
+          const sol = await Solicitud.findFirst({ where: { viajeId: viaje.id } });
+          const restId = sol?.detalle?.restauranteId;
+          if (restId) {
+            const rest = await Restaurante.findUnique({ where: { id: restId } });
+            if (rest?.telefono) {
+              await enviarMensaje(rest.telefono,
+                `🛵 *Repartidor en camino al local*\n\n` +
+                `👤 ${chofer.nombre} · ${chofer.placa}\n` +
+                `🍽️ Recoge: ${sol.detalle?.plato || "el pedido"}\n\n` +
+                `_Tenelo listo para la entrega rápida 🙏_`);
+            }
+          }
+        } catch (e) { log.error("[DELIVERY_LOCAL]", e.message); }
         await enviarBotones(
           phone,
           `✅ Pedido aceptado!\n\nCuando llegues al LOCAL presiona el botón.`,
