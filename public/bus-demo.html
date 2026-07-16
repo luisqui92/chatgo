@@ -141,22 +141,64 @@
 </div>
 
 <script>
-// ═══════════════ DATOS DE LAS 5 LÍNEAS (Cochabamba) ═══════════════
-const LINEAS = [
-  { id:1, nombre:"Línea 1", color:"#E63946", origen:"Plaza Colón", destino:"Quillacollo",
-    ruta:[[-17.3895,-66.1568],[-17.3905,-66.1620],[-17.3915,-66.1700],[-17.3925,-66.1800],[-17.3890,-66.1950],[-17.3850,-66.2100],[-17.3800,-66.2350],[-17.3785,-66.2650],[-17.3830,-66.2850]] },
-  { id:2, nombre:"Línea 2", color:"#457B9D", origen:"San Sebastián", destino:"Sacaba",
-    ruta:[[-17.3980,-66.1520],[-17.3950,-66.1450],[-17.3920,-66.1350],[-17.3900,-66.1200],[-17.3880,-66.1050],[-17.3920,-66.0900],[-17.3960,-66.0750],[-17.4000,-66.0550],[-17.4020,-66.0400]] },
-  { id:3, nombre:"Línea 3", color:"#2A9D8F", origen:"Cala Cala", destino:"Zona Sud",
-    ruta:[[-17.3650,-66.1480],[-17.3720,-66.1500],[-17.3820,-66.1550],[-17.3895,-66.1568],[-17.4000,-66.1600],[-17.4150,-66.1620],[-17.4300,-66.1650],[-17.4450,-66.1680],[-17.4600,-66.1700]] },
-  { id:4, nombre:"Línea 4", color:"#F4A261", origen:"UMSS", destino:"Aeropuerto",
-    ruta:[[-17.3935,-66.1450],[-17.3980,-66.1480],[-17.4050,-66.1520],[-17.4150,-66.1580],[-17.4250,-66.1650],[-17.4350,-66.1720],[-17.4450,-66.1780],[-17.4520,-66.1770],[-17.4580,-66.1750]] },
-  { id:5, nombre:"Línea 5", color:"#9B5DE5", origen:"Terminal", destino:"Tiquipaya",
-    ruta:[[-17.3960,-66.1560],[-17.3880,-66.1600],[-17.3780,-66.1650],[-17.3680,-66.1720],[-17.3580,-66.1800],[-17.3480,-66.1880],[-17.3400,-66.1950],[-17.3350,-66.2050],[-17.3330,-66.2150]] }
+// ═══════════════ 25 LÍNEAS DE COCHABAMBA (generadas) ═══════════════
+// Cada línea une dos puntos reales del área metropolitana. La polilínea se
+// genera con puntos intermedios y un zigzag suave para que parezca recorrido
+// de calles y no una recta.
+const PUNTOS = {
+  "Plaza Colón":[-17.3895,-66.1568], "Quillacollo":[-17.3830,-66.2850], "San Sebastián":[-17.3980,-66.1520],
+  "Sacaba":[-17.4020,-66.0400], "Cala Cala":[-17.3650,-66.1480], "Zona Sud":[-17.4600,-66.1700],
+  "UMSS":[-17.3935,-66.1450], "Aeropuerto":[-17.4580,-66.1750], "Terminal":[-17.3960,-66.1560],
+  "Tiquipaya":[-17.3330,-66.2150], "La Cancha":[-17.4000,-66.1580], "Colcapirhua":[-17.3900,-66.2400],
+  "Vinto":[-17.3960,-66.3100], "Pacata":[-17.3600,-66.1200], "Villa Busch":[-17.4100,-66.1850],
+  "Recoleta":[-17.3760,-66.1560], "Muyurina":[-17.3810,-66.1440], "La Chimba":[-17.4050,-66.1720],
+  "Jayhuayco":[-17.4180,-66.1550], "Valle Hermoso":[-17.4300,-66.1350], "Alalay":[-17.4150,-66.1400],
+  "Sarco":[-17.3850,-66.1780], "Temporal":[-17.3880,-66.1350], "Hipódromo":[-17.3750,-66.1700],
+  "Chiquicollo":[-17.3700,-66.1900], "Condebamba":[-17.3780,-66.1820], "Coña Coña":[-17.3850,-66.2150],
+  "Ticti Norte":[-17.3550,-66.1650], "Pucara":[-17.4350,-66.1200], "El Abra":[-17.4450,-66.1000],
+};
+const RUTAS_BASE = [
+  ["Plaza Colón","Quillacollo"], ["San Sebastián","Sacaba"], ["Cala Cala","Zona Sud"],
+  ["UMSS","Aeropuerto"], ["Terminal","Tiquipaya"], ["La Cancha","Colcapirhua"],
+  ["Recoleta","Vinto"], ["Pacata","Villa Busch"], ["Muyurina","Jayhuayco"],
+  ["La Chimba","Ticti Norte"], ["Valle Hermoso","Sarco"], ["Alalay","Hipódromo"],
+  ["Temporal","Coña Coña"], ["Condebamba","Pucara"], ["Chiquicollo","El Abra"],
+  ["Quillacollo","Sacaba"], ["Tiquipaya","Zona Sud"], ["Aeropuerto","Cala Cala"],
+  ["Vinto","La Cancha"], ["Sarco","Pacata"], ["Jayhuayco","Recoleta"],
+  ["El Abra","Plaza Colón"], ["Coña Coña","Muyurina"], ["Pucara","Terminal"],
+  ["Ticti Norte","Valle Hermoso"],
 ];
+const NOMBRES_LINEA = ["1","2","3","4","5","B","Q","G","K","Z","3V","7","10","13","18","22","30","35","103","110","130","212","230","260","290"];
+
+// Genera puntos intermedios con zigzag determinista (parece calles reales)
+function generarRuta(a, b, semilla) {
+  const puntos = [];
+  const pasos = 10;
+  for (let i = 0; i <= pasos; i++) {
+    const f = i / pasos;
+    let lat = a[0] + (b[0]-a[0])*f;
+    let lng = a[1] + (b[1]-a[1])*f;
+    if (i > 0 && i < pasos) {
+      // zigzag perpendicular determinista por línea
+      const amp = 0.004 * Math.sin(semilla*7 + i*2.1);
+      lat += amp * 0.6;
+      lng += amp * (semilla % 2 === 0 ? 1 : -1) * 0.8;
+    }
+    puntos.push([lat, lng]);
+  }
+  return puntos;
+}
+
+const LINEAS = RUTAS_BASE.map(([o, d], i) => ({
+  id: i+1,
+  nombre: "Línea " + NOMBRES_LINEA[i],
+  color: `hsl(${Math.round(i * 137.5) % 360}, 72%, 55%)`, // ángulo áureo: 25 colores distintos
+  origen: o, destino: d,
+  ruta: generarRuta(PUNTOS[o], PUNTOS[d], i+1),
+}));
 
 // ═══════════════ MAPA ═══════════════
-const map = L.map('map', { zoomControl:true, attributionControl:false }).setView([-17.39, -66.15], 12);
+const map = L.map('map', { zoomControl:true, attributionControl:false, preferCanvas:true }).setView([-17.395, -66.17], 12);
 L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { maxZoom:19 }).addTo(map);
 
 // Dibujar las rutas de cada línea
@@ -176,7 +218,7 @@ let idMicro = 1;
 
 function crearMicros() {
   LINEAS.forEach(linea => {
-    const cantidad = 2; // 2 micros por línea
+    const cantidad = 20; // 20 micros por línea (25 líneas = 500 micros)
     for (let i=0; i<cantidad; i++) {
       const comportamiento = decidirComportamiento();
       micros.push({
@@ -195,11 +237,12 @@ function crearMicros() {
   });
 }
 
-// La mayoría normales, algunos con problemas (para el demo)
+// La mayoría normales, algunos con problemas (para el demo).
+// Con 500 micros los porcentajes bajan para que las alertas sean creíbles.
 function decidirComportamiento() {
   const r = Math.random();
-  if (r < 0.15) return "desvio";   // 15% se desvía
-  if (r < 0.35) return "piqueo";   // 20% hace piqueo
+  if (r < 0.02) return "desvio";   // ~10 micros desviados
+  if (r < 0.10) return "piqueo";   // ~40 micros con piqueos
   return "normal";                  // resto normal
 }
 
@@ -257,13 +300,20 @@ function actualizarMicros() {
       if (!micro.alertado) { registrarAlerta(micro, "desvio"); micro.alertado = true; }
     }
 
-    // Actualizar o crear marker
+    // Actualizar o crear marker.
+    // PERF (500 micros): el ícono solo se regenera cuando CAMBIA el estado de
+    // alerta — regenerarlo en cada tick destruía el DOM 5000 veces/segundo.
+    const claseEstado = micro.comportamiento === "desvio" ? "desvio" : "normal";
     if (!micro.marker) {
       micro.marker = L.marker(pos, { icon: iconoMicro(micro) }).addTo(map);
       micro.marker.bindTooltip(`${micro.linea.nombre} · Micro ${micro.id}`);
+      micro._claseActual = claseEstado;
     } else {
       micro.marker.setLatLng(pos);
-      micro.marker.setIcon(iconoMicro(micro));
+      if (micro._claseActual !== claseEstado) {
+        micro.marker.setIcon(iconoMicro(micro));
+        micro._claseActual = claseEstado;
+      }
     }
     micro.posActual = pos;
   });
@@ -400,7 +450,8 @@ function togglePanel() {
 crearMicros();
 renderListaLineas();
 llenarSelectPasajero();
-setInterval(actualizarMicros, 100); // 10 fps para movimiento suave
+document.getElementById('statLineas').textContent = LINEAS.length;
+setInterval(actualizarMicros, 150); // ~7 fps: suave y liviano incluso con 500 micros
 </script>
 </body>
 </html>
