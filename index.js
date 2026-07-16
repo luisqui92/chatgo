@@ -126,6 +126,13 @@ iniciarIntervals(allDeps);
 // ─── HEALTH CHECK ─────────────────────────────────────────────────────────────
 app.get("/", (_req, res) => res.send("ChatGo v6.0 Modular - RastreoPlus - Operativo ✅"));
 
+// Demo de ChatGo Bus (5 líneas simuladas, vista operador/pasajero)
+app.get("/bus-demo", (_req, res) => {
+  const path = require("path");
+  res.setHeader("Cache-Control", "no-cache");
+  res.sendFile(path.join(__dirname, "public", "bus-demo.html"));
+});
+
 // Servir logo público
 app.get("/logo.png", (req, res) => {
   const path = require("path");

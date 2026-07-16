@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ChatGo Bus — Demo</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  body { background:#0f1419; color:#e8eaed; overflow:hidden; }
+  #app { display:flex; flex-direction:column; height:100vh; }
+
+  /* Header */
+  header { background:#1a1f26; padding:12px 16px; display:flex; align-items:center; justify-content:space-between; border-bottom:2px solid #1D9E75; z-index:1000; }
+  .logo { display:flex; align-items:center; gap:10px; }
+  .logo-circle { width:36px; height:36px; border-radius:50%; background:#1D9E75; display:flex; align-items:center; justify-content:center; font-size:20px; }
+  .logo h1 { font-size:18px; font-weight:700; }
+  .logo span { color:#1D9E75; }
+  .demo-badge { background:#F4A261; color:#1a1f26; font-size:10px; font-weight:700; padding:3px 8px; border-radius:10px; }
+
+  /* Toggle de vistas */
+  .view-toggle { display:flex; background:#0f1419; border-radius:8px; padding:3px; }
+  .view-toggle button { background:none; border:none; color:#8a919a; padding:6px 14px; border-radius:6px; font-size:13px; font-weight:600; cursor:pointer; transition:.2s; }
+  .view-toggle button.active { background:#1D9E75; color:#fff; }
+
+  /* Layout principal */
+  .main { flex:1; display:flex; position:relative; }
+  #map { flex:1; height:100%; background:#1a1f26; }
+
+  /* Panel lateral */
+  .panel { width:320px; background:#1a1f26; overflow-y:auto; border-left:1px solid #2a3038; }
+  .panel-section { padding:14px 16px; border-bottom:1px solid #2a3038; }
+  .panel-section h2 { font-size:12px; text-transform:uppercase; letter-spacing:1px; color:#8a919a; margin-bottom:10px; }
+
+  /* Lista de líneas */
+  .linea-item { display:flex; align-items:center; gap:10px; padding:8px; border-radius:8px; margin-bottom:6px; cursor:pointer; transition:.2s; }
+  .linea-item:hover { background:#232a33; }
+  .linea-dot { width:12px; height:12px; border-radius:50%; flex-shrink:0; }
+  .linea-info { flex:1; }
+  .linea-nombre { font-size:14px; font-weight:600; }
+  .linea-ruta { font-size:11px; color:#8a919a; }
+  .linea-stats { font-size:11px; text-align:right; color:#8a919a; }
+
+  /* Alertas */
+  .alerta { display:flex; align-items:flex-start; gap:8px; padding:10px; border-radius:8px; margin-bottom:8px; font-size:12px; animation:slideIn .3s; }
+  @keyframes slideIn { from{opacity:0;transform:translateX(20px);} to{opacity:1;transform:translateX(0);} }
+  .alerta.desvio { background:rgba(230,57,70,.15); border-left:3px solid #E63946; }
+  .alerta.piqueo { background:rgba(244,162,97,.15); border-left:3px solid #F4A261; }
+  .alerta.ok { background:rgba(42,157,143,.12); border-left:3px solid #2A9D8F; }
+  .alerta-icon { font-size:16px; }
+  .alerta-text b { display:block; margin-bottom:2px; }
+  .alerta-text span { color:#a8b0b8; font-size:11px; }
+  .alerta-time { margin-left:auto; font-size:10px; color:#6a727a; white-space:nowrap; }
+
+  /* Stats generales */
+  .stat-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  .stat-box { background:#0f1419; border-radius:8px; padding:10px; text-align:center; }
+  .stat-box .num { font-size:22px; font-weight:700; color:#1D9E75; }
+  .stat-box .lbl { font-size:10px; color:#8a919a; text-transform:uppercase; }
+
+  /* Vista pasajero */
+  .pasajero-card { background:#0f1419; border-radius:12px; padding:16px; margin-bottom:12px; }
+  .pasajero-card h3 { font-size:15px; margin-bottom:12px; display:flex; align-items:center; gap:8px; }
+  .eta-big { font-size:36px; font-weight:800; color:#1D9E75; text-align:center; margin:8px 0; }
+  .eta-lbl { text-align:center; font-size:12px; color:#8a919a; margin-bottom:12px; }
+  .parada-row { display:flex; align-items:center; gap:10px; padding:8px 0; font-size:13px; }
+  .parada-icon { width:20px; text-align:center; }
+  .select-linea { width:100%; padding:10px; background:#232a33; border:1px solid #2a3038; border-radius:8px; color:#e8eaed; font-size:14px; margin-bottom:12px; }
+
+  /* Micro marker */
+  .micro-marker { background:none; border:none; }
+  .micro-icon { width:28px; height:28px; border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:14px; box-shadow:0 2px 6px rgba(0,0,0,.5); border:2px solid #fff; position:relative; }
+  .micro-icon.alerta-desvio { animation:pulse 1s infinite; }
+  @keyframes pulse { 0%,100%{transform:scale(1);} 50%{transform:scale(1.2);} }
+
+  .hidden { display:none !important; }
+
+  /* Responsive */
+  @media (max-width:768px) {
+    .panel { position:absolute; right:0; top:0; bottom:0; width:85%; max-width:320px; z-index:900; box-shadow:-4px 0 20px rgba(0,0,0,.5); }
+    .panel.collapsed { transform:translateX(100%); }
+    .panel-toggle-mobile { position:absolute; bottom:20px; right:20px; z-index:950; width:52px; height:52px; border-radius:50%; background:#1D9E75; border:none; color:#fff; font-size:22px; box-shadow:0 4px 12px rgba(0,0,0,.4); cursor:pointer; }
+  }
+  @media (min-width:769px) { .panel-toggle-mobile { display:none; } }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <div class="logo">
+      <div class="logo-circle">🚌</div>
+      <h1>ChatGo<span>Bus</span></h1>
+      <span class="demo-badge">DEMO</span>
+    </div>
+    <div class="view-toggle">
+      <button id="btnOperador" class="active" onclick="cambiarVista('operador')">🎛️ Operador</button>
+      <button id="btnPasajero" onclick="cambiarVista('pasajero')">🧍 Pasajero</button>
+    </div>
+  </header>
+
+  <div class="main">
+    <div id="map"></div>
+
+    <!-- PANEL OPERADOR -->
+    <div class="panel" id="panelOperador">
+      <div class="panel-section">
+        <h2>Resumen en vivo</h2>
+        <div class="stat-grid">
+          <div class="stat-box"><div class="num" id="statMicros">0</div><div class="lbl">Micros activos</div></div>
+          <div class="stat-box"><div class="num" id="statLineas">5</div><div class="lbl">Líneas</div></div>
+          <div class="stat-box"><div class="num" id="statAlertas" style="color:#E63946">0</div><div class="lbl">Alertas</div></div>
+          <div class="stat-box"><div class="num" id="statOk" style="color:#2A9D8F">0</div><div class="lbl">En regla</div></div>
+        </div>
+      </div>
+      <div class="panel-section">
+        <h2>Líneas</h2>
+        <div id="listaLineas"></div>
+      </div>
+      <div class="panel-section">
+        <h2>Alertas de control</h2>
+        <div id="listaAlertas"><p style="color:#6a727a;font-size:12px">Monitoreando...</p></div>
+      </div>
+    </div>
+
+    <!-- PANEL PASAJERO -->
+    <div class="panel hidden" id="panelPasajero">
+      <div class="panel-section">
+        <h2>¿Qué línea esperás?</h2>
+        <select class="select-linea" id="selectLineaPasajero" onchange="seleccionarLineaPasajero()">
+          <option value="">Elegí tu línea...</option>
+        </select>
+        <div id="infoPasajero">
+          <p style="color:#6a727a;font-size:13px;text-align:center;padding:20px 0">Elegí una línea para ver dónde está tu trufi 🚌</p>
+        </div>
+      </div>
+    </div>
+
+    <button class="panel-toggle-mobile" onclick="togglePanel()">☰</button>
+  </div>
+</div>
+
+<script>
+// ═══════════════ DATOS DE LAS 5 LÍNEAS (Cochabamba) ═══════════════
+const LINEAS = [
+  { id:1, nombre:"Línea 1", color:"#E63946", origen:"Plaza Colón", destino:"Quillacollo",
+    ruta:[[-17.3895,-66.1568],[-17.3905,-66.1620],[-17.3915,-66.1700],[-17.3925,-66.1800],[-17.3890,-66.1950],[-17.3850,-66.2100],[-17.3800,-66.2350],[-17.3785,-66.2650],[-17.3830,-66.2850]] },
+  { id:2, nombre:"Línea 2", color:"#457B9D", origen:"San Sebastián", destino:"Sacaba",
+    ruta:[[-17.3980,-66.1520],[-17.3950,-66.1450],[-17.3920,-66.1350],[-17.3900,-66.1200],[-17.3880,-66.1050],[-17.3920,-66.0900],[-17.3960,-66.0750],[-17.4000,-66.0550],[-17.4020,-66.0400]] },
+  { id:3, nombre:"Línea 3", color:"#2A9D8F", origen:"Cala Cala", destino:"Zona Sud",
+    ruta:[[-17.3650,-66.1480],[-17.3720,-66.1500],[-17.3820,-66.1550],[-17.3895,-66.1568],[-17.4000,-66.1600],[-17.4150,-66.1620],[-17.4300,-66.1650],[-17.4450,-66.1680],[-17.4600,-66.1700]] },
+  { id:4, nombre:"Línea 4", color:"#F4A261", origen:"UMSS", destino:"Aeropuerto",
+    ruta:[[-17.3935,-66.1450],[-17.3980,-66.1480],[-17.4050,-66.1520],[-17.4150,-66.1580],[-17.4250,-66.1650],[-17.4350,-66.1720],[-17.4450,-66.1780],[-17.4520,-66.1770],[-17.4580,-66.1750]] },
+  { id:5, nombre:"Línea 5", color:"#9B5DE5", origen:"Terminal", destino:"Tiquipaya",
+    ruta:[[-17.3960,-66.1560],[-17.3880,-66.1600],[-17.3780,-66.1650],[-17.3680,-66.1720],[-17.3580,-66.1800],[-17.3480,-66.1880],[-17.3400,-66.1950],[-17.3350,-66.2050],[-17.3330,-66.2150]] }
+];
+
+// ═══════════════ MAPA ═══════════════
+const map = L.map('map', { zoomControl:true, attributionControl:false }).setView([-17.39, -66.15], 12);
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { maxZoom:19 }).addTo(map);
+
+// Dibujar las rutas de cada línea
+LINEAS.forEach(linea => {
+  L.polyline(linea.ruta, { color:linea.color, weight:4, opacity:.7 }).addTo(map);
+  // Marcadores de inicio y fin
+  const inicio = linea.ruta[0], fin = linea.ruta[linea.ruta.length-1];
+  L.circleMarker(inicio, { radius:5, color:'#fff', fillColor:linea.color, fillOpacity:1, weight:2 }).addTo(map).bindTooltip(linea.origen);
+  L.circleMarker(fin, { radius:5, color:'#fff', fillColor:linea.color, fillOpacity:1, weight:2 }).addTo(map).bindTooltip(linea.destino);
+});
+
+// ═══════════════ MICROS (buses ficticios) ═══════════════
+// Cada línea tiene 2 micros. Cada micro tiene: posición en la ruta (t de 0 a 1),
+// velocidad, y un "comportamiento" (normal, desvio, piqueo)
+let micros = [];
+let idMicro = 1;
+
+function crearMicros() {
+  LINEAS.forEach(linea => {
+    const cantidad = 2; // 2 micros por línea
+    for (let i=0; i<cantidad; i++) {
+      const comportamiento = decidirComportamiento();
+      micros.push({
+        id: idMicro++,
+        linea: linea,
+        t: Math.random(),          // posición en la ruta (0 a 1)
+        velocidad: 0.0008 + Math.random()*0.0006,
+        direccion: 1,              // 1 = adelante, -1 = atrás
+        comportamiento: comportamiento,
+        piqueoTiempo: 0,           // contador de piqueo
+        desvioOffset: 0,           // qué tan desviado está
+        marker: null,
+        alertado: false
+      });
+    }
+  });
+}
+
+// La mayoría normales, algunos con problemas (para el demo)
+function decidirComportamiento() {
+  const r = Math.random();
+  if (r < 0.15) return "desvio";   // 15% se desvía
+  if (r < 0.35) return "piqueo";   // 20% hace piqueo
+  return "normal";                  // resto normal
+}
+
+// Interpola posición en la ruta según t (0 a 1)
+function posicionEnRuta(ruta, t) {
+  const segmentos = ruta.length - 1;
+  const pos = t * segmentos;
+  const i = Math.min(Math.floor(pos), segmentos-1);
+  const frac = pos - i;
+  const lat = ruta[i][0] + (ruta[i+1][0]-ruta[i][0])*frac;
+  const lng = ruta[i][1] + (ruta[i+1][1]-ruta[i][1])*frac;
+  return [lat, lng];
+}
+
+function iconoMicro(micro) {
+  const esAlerta = micro.comportamiento === "desvio";
+  const claseAlerta = esAlerta ? "alerta-desvio" : "";
+  return L.divIcon({
+    className: 'micro-marker',
+    html: `<div class="micro-icon ${claseAlerta}" style="background:${micro.linea.color}">🚌</div>`,
+    iconSize: [28,28], iconAnchor:[14,14]
+  });
+}
+
+// ═══════════════ MOTOR DE SIMULACIÓN ═══════════════
+let alertas = [];
+
+function actualizarMicros() {
+  micros.forEach(micro => {
+    // PIQUEO: se queda parado un rato
+    if (micro.comportamiento === "piqueo" && micro.piqueoTiempo > 0) {
+      micro.piqueoTiempo--;
+      if (micro.piqueoTiempo === 0) micro.comportamiento = "normal"; // termina el piqueo
+      // no se mueve
+    } else {
+      // Avanzar por la ruta
+      micro.t += micro.velocidad * micro.direccion;
+      if (micro.t >= 1) { micro.t = 1; micro.direccion = -1; }
+      if (micro.t <= 0) { micro.t = 0; micro.direccion = 1; }
+
+      // Iniciar piqueo aleatoriamente
+      if (micro.comportamiento === "piqueo" && micro.piqueoTiempo === 0 && Math.random() < 0.01) {
+        micro.piqueoTiempo = 60; // parado ~6 seg (simula piqueo largo)
+        registrarAlerta(micro, "piqueo");
+      }
+    }
+
+    // Calcular posición base
+    let pos = posicionEnRuta(micro.linea.ruta, micro.t);
+
+    // DESVÍO: se aleja de la ruta
+    if (micro.comportamiento === "desvio") {
+      micro.desvioOffset = Math.min(micro.desvioOffset + 0.0002, 0.008);
+      pos = [pos[0] + micro.desvioOffset, pos[1] + micro.desvioOffset*0.5];
+      if (!micro.alertado) { registrarAlerta(micro, "desvio"); micro.alertado = true; }
+    }
+
+    // Actualizar o crear marker
+    if (!micro.marker) {
+      micro.marker = L.marker(pos, { icon: iconoMicro(micro) }).addTo(map);
+      micro.marker.bindTooltip(`${micro.linea.nombre} · Micro ${micro.id}`);
+    } else {
+      micro.marker.setLatLng(pos);
+      micro.marker.setIcon(iconoMicro(micro));
+    }
+    micro.posActual = pos;
+  });
+  actualizarStats();
+  if (vistaActual === 'pasajero' && lineaPasajeroSel) actualizarVistaPasajero();
+}
+
+function registrarAlerta(micro, tipo) {
+  const ahora = new Date();
+  const hora = ahora.toLocaleTimeString('es', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+  alertas.unshift({ tipo, micro:micro.id, linea:micro.linea.nombre, color:micro.linea.color, hora });
+  if (alertas.length > 8) alertas.pop();
+  renderAlertas();
+}
+
+function renderAlertas() {
+  const cont = document.getElementById('listaAlertas');
+  if (alertas.length === 0) { cont.innerHTML = '<p style="color:#6a727a;font-size:12px">Todo en orden ✓</p>'; return; }
+  cont.innerHTML = alertas.map(a => {
+    if (a.tipo === "desvio") return `<div class="alerta desvio"><span class="alerta-icon">⚠️</span><div class="alerta-text"><b>Desvío de ruta</b><span>${a.linea} · Micro ${a.micro} salió del recorrido</span></div><span class="alerta-time">${a.hora}</span></div>`;
+    if (a.tipo === "piqueo") return `<div class="alerta piqueo"><span class="alerta-icon">🛑</span><div class="alerta-text"><b>Piqueo detectado</b><span>${a.linea} · Micro ${a.micro} parado demasiado tiempo</span></div><span class="alerta-time">${a.hora}</span></div>`;
+    return '';
+  }).join('');
+}
+
+function actualizarStats() {
+  const conAlerta = micros.filter(m => m.comportamiento === "desvio" || (m.comportamiento==="piqueo" && m.piqueoTiempo>0)).length;
+  document.getElementById('statMicros').textContent = micros.length;
+  document.getElementById('statAlertas').textContent = conAlerta;
+  document.getElementById('statOk').textContent = micros.length - conAlerta;
+}
+
+// ═══════════════ LISTA DE LÍNEAS (operador) ═══════════════
+function renderListaLineas() {
+  const cont = document.getElementById('listaLineas');
+  cont.innerHTML = LINEAS.map(l => {
+    const microsLinea = micros.filter(m => m.linea.id === l.id);
+    return `<div class="linea-item" onclick="enfocarLinea(${l.id})">
+      <div class="linea-dot" style="background:${l.color}"></div>
+      <div class="linea-info"><div class="linea-nombre">${l.nombre}</div><div class="linea-ruta">${l.origen} → ${l.destino}</div></div>
+      <div class="linea-stats">${microsLinea.length} 🚌</div>
+    </div>`;
+  }).join('');
+}
+
+function enfocarLinea(id) {
+  const linea = LINEAS.find(l => l.id === id);
+  const bounds = L.latLngBounds(linea.ruta);
+  map.fitBounds(bounds, { padding:[50,50] });
+}
+
+// ═══════════════ VISTA PASAJERO ═══════════════
+let vistaActual = 'operador';
+let lineaPasajeroSel = null;
+let paradaPasajero = null;
+
+function cambiarVista(vista) {
+  vistaActual = vista;
+  document.getElementById('btnOperador').classList.toggle('active', vista==='operador');
+  document.getElementById('btnPasajero').classList.toggle('active', vista==='pasajero');
+  document.getElementById('panelOperador').classList.toggle('hidden', vista!=='operador');
+  document.getElementById('panelPasajero').classList.toggle('hidden', vista!=='pasajero');
+}
+
+function llenarSelectPasajero() {
+  const sel = document.getElementById('selectLineaPasajero');
+  LINEAS.forEach(l => {
+    const opt = document.createElement('option');
+    opt.value = l.id;
+    opt.textContent = `${l.nombre}: ${l.origen} → ${l.destino}`;
+    sel.appendChild(opt);
+  });
+}
+
+function seleccionarLineaPasajero() {
+  const id = parseInt(document.getElementById('selectLineaPasajero').value);
+  if (!id) { lineaPasajeroSel = null; return; }
+  lineaPasajeroSel = LINEAS.find(l => l.id === id);
+  // Simular una parada del pasajero (un punto medio de la ruta)
+  const idx = Math.floor(lineaPasajeroSel.ruta.length * 0.4);
+  paradaPasajero = lineaPasajeroSel.ruta[idx];
+  // Marcar la parada en el mapa
+  if (window.markerParada) map.removeLayer(window.markerParada);
+  window.markerParada = L.marker(paradaPasajero, {
+    icon: L.divIcon({ className:'', html:'<div style="font-size:24px">📍</div>', iconSize:[24,24], iconAnchor:[12,24] })
+  }).addTo(map).bindTooltip("Tu parada");
+  map.setView(paradaPasajero, 13);
+  actualizarVistaPasajero();
+}
+
+function actualizarVistaPasajero() {
+  if (!lineaPasajeroSel || !paradaPasajero) return;
+  // Encontrar el micro de esa línea más cercano que viene hacia la parada
+  const microsLinea = micros.filter(m => m.linea.id === lineaPasajeroSel.id && m.posActual);
+  let mejorMicro = null, menorDist = Infinity;
+  microsLinea.forEach(m => {
+    const d = distancia(m.posActual, paradaPasajero);
+    if (d < menorDist) { menorDist = d; mejorMicro = m; }
+  });
+
+  const cont = document.getElementById('infoPasajero');
+  if (!mejorMicro) { cont.innerHTML = '<p style="color:#6a727a">No hay micros en esta línea ahora.</p>'; return; }
+
+  // ETA aproximado (distancia / velocidad promedio) — simulado
+  const etaMin = Math.max(1, Math.round(menorDist * 900));
+  const estadoMicro = mejorMicro.comportamiento === "piqueo" && mejorMicro.piqueoTiempo>0 ? "🛑 Detenido (piqueo)" :
+                      mejorMicro.comportamiento === "desvio" ? "⚠️ Fuera de ruta" : "🟢 En camino";
+
+  cont.innerHTML = `
+    <div class="pasajero-card">
+      <h3><span class="linea-dot" style="background:${lineaPasajeroSel.color}"></span> ${lineaPasajeroSel.nombre}</h3>
+      <div class="eta-big">${etaMin} min</div>
+      <div class="eta-lbl">Tu ${lineaPasajeroSel.nombre.toLowerCase()} llega en</div>
+      <div class="parada-row"><span class="parada-icon">🚌</span> Micro ${mejorMicro.id} · ${estadoMicro}</div>
+      <div class="parada-row"><span class="parada-icon">📍</span> Tu parada</div>
+      <div class="parada-row"><span class="parada-icon">🏁</span> Destino: ${lineaPasajeroSel.destino}</div>
+    </div>
+    <div class="pasajero-card" style="background:rgba(29,158,117,.1)">
+      <p style="font-size:12px;color:#a8b0b8">💡 En ChatGo Bus real, esto te llega por WhatsApp: "Tu Línea ${lineaPasajeroSel.id} está a ${etaMin} min de tu parada"</p>
+    </div>
+  `;
+}
+
+function distancia(a, b) {
+  return Math.sqrt(Math.pow(a[0]-b[0],2) + Math.pow(a[1]-b[1],2));
+}
+
+function togglePanel() {
+  const panel = vistaActual==='operador' ? document.getElementById('panelOperador') : document.getElementById('panelPasajero');
+  panel.classList.toggle('collapsed');
+}
+
+// ═══════════════ INICIAR ═══════════════
+crearMicros();
+renderListaLineas();
+llenarSelectPasajero();
+setInterval(actualizarMicros, 100); // 10 fps para movimiento suave
+</script>
+</body>
+</html>
