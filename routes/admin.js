@@ -1152,7 +1152,11 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;backgrou
 .status-txt{color:#1D9E75;font-weight:500;}
 .status-txt.fin{color:#f85149;}
 .update-ts{font-size:10px;color:#8b949e;margin-left:auto;}
-#map{flex:1;}
+#map-wrap{flex:1;position:relative;}
+#map{position:absolute;inset:0;}
+#map-btns{position:absolute;right:12px;bottom:16px;display:flex;flex-direction:column;gap:10px;z-index:5;}
+.map-btn{width:48px;height:48px;border-radius:50%;border:1px solid #30363d;background:#161b22;color:#e6e6e6;font-size:22px;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,.45);}
+.map-btn:active{background:#21262d;}
 .info{background:#161b22;border-top:1px solid #30363d;padding:10px 14px;flex-shrink:0;display:grid;grid-template-columns:1fr 1fr;gap:8px;}
 .info-item{background:#0d1117;border-radius:8px;padding:8px 10px;}
 .info-label{font-size:10px;color:#8b949e;text-transform:uppercase;letter-spacing:.5px;}
@@ -1181,7 +1185,13 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;backgrou
   </div>
 </div>
 
-<div id="map"></div>
+<div id="map-wrap">
+  <div id="map"></div>
+  <div id="map-btns">
+    <button class="map-btn" id="btn-ver-chofer" title="Ver al chofer">🚕</button>
+    <button class="map-btn" id="btn-aqui-estoy" title="Aquí estoy">📍</button>
+  </div>
+</div>
 
 <div class="info">
   <div class="info-item">
@@ -1221,7 +1231,7 @@ const VID = "${viaje.id}";
 const GMKEY = "${CONFIG.GOOGLE_MAPS_KEY}";
 const ORIGEN = ${JSON.stringify({ lat: viaje.origenLat, lng: viaje.origenLng, nombre: viaje.origenNombre })};
 const DESTINO = ${JSON.stringify({ lat: viaje.destinoLat, lng: viaje.destinoLng, nombre: viaje.destinoNombre })};
-let map, taxiMarker, terminado = ${activo ? "false" : "true"};
+let map, taxiMarker, miMarker, terminado = ${activo ? "false" : "true"};
 let segundos = 0, timer;
 
 function initMap() {
@@ -1229,6 +1239,7 @@ function initMap() {
   map = new google.maps.Map(document.getElementById("map"), {
     center: centro, zoom: 14,
     disableDefaultUI: true, zoomControl: true,
+    gestureHandling: "greedy", // mover el mapa con UN dedo (sin el "usa dos dedos")
     styles: [
       {elementType:"geometry",stylers:[{color:"#212121"}]},
       {elementType:"labels.text.fill",stylers:[{color:"#757575"}]},
@@ -1238,6 +1249,36 @@ function initMap() {
       {featureType:"water",elementType:"geometry",stylers:[{color:"#000000"}]},
     ],
   });
+
+  // Botón "🚕": centrar en el chofer (si ya hay señal GPS)
+  document.getElementById("btn-ver-chofer").onclick = function() {
+    if (taxiMarker && taxiMarker.getPosition()) {
+      map.panTo(taxiMarker.getPosition());
+      map.setZoom(16);
+    } else {
+      document.getElementById("ts").textContent = "Esperando señal GPS del chofer…";
+    }
+  };
+
+  // Botón "📍 Aquí estoy": marcar y centrar la ubicación actual del pasajero
+  document.getElementById("btn-aqui-estoy").onclick = function() {
+    if (!navigator.geolocation) return;
+    navigator.geolocation.getCurrentPosition(function(p) {
+      const yo = { lat: p.coords.latitude, lng: p.coords.longitude };
+      if (!miMarker) {
+        miMarker = new google.maps.Marker({
+          position: yo, map, title: "Aquí estoy", zIndex: 5,
+          icon: { path: google.maps.SymbolPath.CIRCLE, scale: 9, fillColor: "#4285F4", fillOpacity: 1, strokeColor: "#fff", strokeWeight: 3 },
+        });
+      } else {
+        miMarker.setPosition(yo);
+      }
+      map.panTo(yo);
+      map.setZoom(16);
+    }, function() {
+      document.getElementById("ts").textContent = "Activa el GPS y dale permiso al navegador";
+    }, { enableHighAccuracy: true, timeout: 8000 });
+  };
 
   const mkCircle = (pos, color, title) => new google.maps.Marker({
     position: pos, map, title,
@@ -1316,6 +1357,13 @@ async function poll() {
     const d = await r.json();
     if (d.error === "not_found") { showFin("Link inválido"); return; }
     if (d.terminado) { showFin(); return; }
+
+    // Sin señal GPS del chofer todavía: avisar en vez de dejar el mapa mudo
+    if (typeof d.lat !== "number" || typeof d.lng !== "number") {
+      document.getElementById("ts").textContent = "⏳ Esperando señal GPS del chofer…";
+      setTimeout(poll, 5000);
+      return;
+    }
 
     const pos = { lat: d.lat, lng: d.lng };
     if (!taxiMarker) {
