@@ -122,16 +122,19 @@ async function asignarChofer(userPhone, session, excludeTraccarIds = [], intento
   const textoObs = session.observaciones ? `\n📝 *Notas del pasajero:*\n_${session.observaciones}_\n` : "";
   const textoDesc = session.descuentoBs > 0 ? `\n🎁 _Pasajero usó código de descuento (Bs ${session.descuentoBs} off)_\n` : "";
 
+  // DELIVERY: el cliente pidió comida, no un taxi — los mensajes hablan de su pedido
+  const esDelivery = !!session.esDelivery;
+
   await enviarBotones(
     chofer.phone,
-    `🚖 *NUEVO VIAJE*\n\n` +
-      `📏 Distancia viaje: ${session.distancia} km\n` +
-      `💰 Precio a cobrar: Bs ${session.precio}\n` +
+    (esDelivery ? `🍔 *NUEVO PEDIDO DELIVERY*\n\n` : `🚖 *NUEVO VIAJE*\n\n`) +
+      `📏 Distancia ${esDelivery ? "recorrido" : "viaje"}: ${session.distancia} km\n` +
+      `💰 ${esDelivery ? "Envío a cobrar" : "Precio a cobrar"}: Bs ${session.precio}\n` +
       textoDesc +
-      `📌 Estás a ${Math.round(chofer.distanciaAlUsuario * 10) / 10} km del pasajero\n\n` +
-      `📍 Origen: ${session.origen.nombre || "Ver mapa"}\n` +
+      `📌 Estás a ${Math.round(chofer.distanciaAlUsuario * 10) / 10} km ${esDelivery ? "del local" : "del pasajero"}\n\n` +
+      `📍 ${esDelivery ? "Recoger en" : "Origen"}: ${session.origen.nombre || "Ver mapa"}\n` +
       textoParadas +
-      `🏁 Destino: ${session.destino.nombre || "Ver mapa"}\n` +
+      `🏁 ${esDelivery ? "Entregar en" : "Destino"}: ${session.destino.nombre || "Ver mapa"}\n` +
       textoObs +
       `\n🗺️ Ver ruta con tráfico:\n${linkViaje}\n\n` +
       `⏱️ Tienes *${CONFIG.TIMEOUT_ACEPTACION_CHOFER}s* para aceptar`,
@@ -143,7 +146,9 @@ async function asignarChofer(userPhone, session, excludeTraccarIds = [], intento
 
   await enviarMensaje(
     userPhone,
-    `🔍 Encontramos un chofer cerca.\n_Esperando confirmación (máx ${CONFIG.TIMEOUT_ACEPTACION_CHOFER}s)..._\n\n_Escribe CANCELAR si quieres cancelar._`
+    esDelivery
+      ? `✅ *Tu pedido fue recibido* 🏪\n\nEstamos asignando un repartidor para recogerlo..._\n\n_Escribe CANCELAR si quieres cancelar._`
+      : `🔍 Encontramos un chofer cerca.\n_Esperando confirmación (máx ${CONFIG.TIMEOUT_ACEPTACION_CHOFER}s)..._\n\n_Escribe CANCELAR si quieres cancelar._`
   );
 }
 

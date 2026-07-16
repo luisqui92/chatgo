@@ -26,6 +26,13 @@ const { asignarChofer, procesarPedidoAyuda, solicitarRating } = require("../flow
 const { calcularPrecio, choferPagoAlDia, crearCodigoPromo, enPromoGratis, enviarCodigoDescuento, esPedidoAyuda, esPlusCode, fechaStrBolivia, formatearFechaPromo, guardarRutaFrecuente, promoCodigosActiva } = require("../services/utils");
 
 
+// ¿El viaje es un pedido de DELIVERY? (marcador que pone modules/delivery.js
+// en las observaciones). El cliente pidió comida, no un taxi: los mensajes
+// de todo el ciclo hablan de su pedido, no de "tu chofer/tu viaje".
+function esViajeDelivery(v) {
+  return !!(v?.observaciones && v.observaciones.startsWith("🍔 DELIVERY"));
+}
+
 async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, mensaje) {
   let chofer = await Chofer.findUnique({ where: { phone } });
 
@@ -177,6 +184,28 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
         }
       }
 
+      if (esViajeDelivery(viaje)) {
+        await enviarMensaje(
+          userPhone,
+          `🛵 *¡Tu pedido fue asignado!*\n\n` +
+            `👤 Repartidor: *${chofer.nombre}*\n` +
+            `${emojiV} ${labelV}${colorVStr} · Placa: *${chofer.placa}*\n\n` +
+            `Ya está yendo al local a recoger tu pedido 🏪\n\n` +
+            `📍 Seguí tu pedido en tiempo real:\n${linkRastreo}\n\n` +
+            `💬 Escribe cualquier mensaje para chatear con el repartidor.\n` +
+            `_Escribe CANCELAR si necesitas cancelar, o AYUDA para soporte._`
+        );
+        await enviarBotones(
+          phone,
+          `✅ Pedido aceptado!\n\nCuando llegues al LOCAL presiona el botón.`,
+          [
+            { id: "llegue_al_punto", title: "🏪 Llegué al local" },
+            { id: "cancelar_viaje_chofer", title: "❌ Cancelar" },
+          ]
+        );
+        return;
+      }
+
       await enviarMensaje(
         userPhone,
         `🎉 *¡Viaje aceptado!*\n\n` +
@@ -248,6 +277,18 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
       const label = tipoVeh === "moto" ? "moto" : "auto";
 
       const colorLlegueManual = chofer.colorVehiculo ? ` ${chofer.colorVehiculo}` : "";
+      if (esViajeDelivery(viaje)) {
+        await enviarMensaje(viaje.usuarioPhone, `🏪 *El repartidor llegó al local*\n\nEstá recogiendo tu pedido. En cuanto lo tenga, sale para tu ubicación 🛵`);
+        await enviarBotones(
+          phone,
+          `✅ Cliente notificado.\n\nCuando tengas el pedido en mano presiona:`,
+          [
+            { id: "iniciar_viaje", title: "🛵 Pedido recogido" },
+            { id: "cancelar_viaje_chofer", title: "❌ Cancelar" },
+          ]
+        );
+        return;
+      }
       await enviarMensaje(viaje.usuarioPhone, `🚕 *¡Tu chofer llegó!*\n\n👤 ${chofer.nombre}\n${emoji} ${label}${colorLlegueManual} · placa: ${chofer.placa}\n\nDirígete al vehículo.`);
       const usuarioLlegueBtn = await Usuario.findUnique({ where: { phone: viaje.usuarioPhone } });
       const nombreLlegueBtn = usuarioLlegueBtn?.nombre ? `\n🙋 Pregunta por: *ChatGo para ${usuarioLlegueBtn.nombre}*` : "";
@@ -317,8 +358,20 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
       }
       const session = await getSession(viaje.usuarioPhone);
       if (session) await updateSession(viaje.usuarioPhone, { ...session, step: "en_curso" });
-      await enviarMensaje(viaje.usuarioPhone, `🚖 *Viaje iniciado*\n\n¡Disfruta tu viaje con ChatGo!`);
       const linkAlDestino = `https://www.google.com/maps/dir/?api=1&origin=${viaje.origenLat},${viaje.origenLng}&destination=${viaje.destinoLat},${viaje.destinoLng}&travelmode=driving`;
+      if (esViajeDelivery(viaje)) {
+        await enviarMensaje(viaje.usuarioPhone, `🛵 *¡Tu pedido va en camino!*\n\n📍 Seguilo en tiempo real:\n${generarLinkRastreoPropio(viaje.id)}\n\n¡Preparate que ya llega! 🍔`);
+        await enviarBotones(
+          phone,
+          `🛵 *Pedido en camino*\n\n` +
+            `🏁 Entregar en: ${viaje.destinoNombre || "ubicación del cliente"}\n` +
+            `📏 ${viaje.distanciaKm} km\n\n` +
+            `🗺️ Ir a la entrega:\n${linkAlDestino}\n\nConduce con cuidado! 🛵`,
+          [{ id: "terminar_viaje", title: "✅ Pedido entregado" }]
+        );
+        return;
+      }
+      await enviarMensaje(viaje.usuarioPhone, `🚖 *Viaje iniciado*\n\n¡Disfruta tu viaje con ChatGo!`);
       await enviarBotones(
         phone,
         `▶️ *Viaje iniciado*\n\n` +
@@ -451,7 +504,9 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
 
         await enviarMensaje(
           viaje.usuarioPhone,
-          `✅ *Viaje completado*\n\n📏 ${viaje.distanciaKm} km\n💰 Bs ${viaje.precioTotal}\n\n¡Gracias por usar ChatGo! 🚖`
+          esViajeDelivery(viaje)
+            ? `✅ *¡Pedido entregado!*\n\n¡Buen provecho! 🍔\n\nGracias por usar ChatGo Delivery 🛵`
+            : `✅ *Viaje completado*\n\n📏 ${viaje.distanciaKm} km\n💰 Bs ${viaje.precioTotal}\n\n¡Gracias por usar ChatGo! 🚖`
         );
         // Nota: el botón "pedir otro taxi" aparece después del rating
 
