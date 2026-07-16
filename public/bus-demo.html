@@ -36,6 +36,7 @@
   /* Lista de líneas */
   .linea-item { display:flex; align-items:center; gap:10px; padding:8px; border-radius:8px; margin-bottom:6px; cursor:pointer; transition:.2s; }
   .linea-item:hover { background:#232a33; }
+  .linea-item.activa { background:#1D9E7522; border:1px solid #1D9E75; }
   .linea-dot { width:12px; height:12px; border-radius:50%; flex-shrink:0; }
   .linea-info { flex:1; }
   .linea-nombre { font-size:14px; font-weight:600; }
@@ -201,14 +202,40 @@ const LINEAS = RUTAS_BASE.map(([o, d], i) => ({
 const map = L.map('map', { zoomControl:true, attributionControl:false, preferCanvas:true }).setView([-17.395, -66.17], 12);
 L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { maxZoom:19 }).addTo(map);
 
-// Dibujar las rutas de cada línea
+// ═══════════════ UNA LÍNEA A LA VEZ ═══════════════
+// Con 500 micros el mapa se arrastraba en celulares. Por defecto se muestra
+// UNA línea y el usuario elige cuál ver — los micros de las líneas ocultas
+// ni siquiera se simulan.
+let lineaSeleccionada = null;
+
+// Preparar (sin agregar al mapa) las capas de cada línea
 LINEAS.forEach(linea => {
-  L.polyline(linea.ruta, { color:linea.color, weight:4, opacity:.7 }).addTo(map);
-  // Marcadores de inicio y fin
   const inicio = linea.ruta[0], fin = linea.ruta[linea.ruta.length-1];
-  L.circleMarker(inicio, { radius:5, color:'#fff', fillColor:linea.color, fillOpacity:1, weight:2 }).addTo(map).bindTooltip(linea.origen);
-  L.circleMarker(fin, { radius:5, color:'#fff', fillColor:linea.color, fillOpacity:1, weight:2 }).addTo(map).bindTooltip(linea.destino);
+  linea._capas = [
+    L.polyline(linea.ruta, { color:linea.color, weight:4, opacity:.7 }),
+    L.circleMarker(inicio, { radius:6, color:'#fff', fillColor:linea.color, fillOpacity:1, weight:2 }).bindTooltip(linea.origen),
+    L.circleMarker(fin, { radius:6, color:'#fff', fillColor:linea.color, fillOpacity:1, weight:2 }).bindTooltip(linea.destino),
+  ];
 });
+
+function seleccionarLinea(id) {
+  const nueva = LINEAS.find(l => l.id === id);
+  if (!nueva || nueva === lineaSeleccionada) return;
+
+  // Ocultar la línea anterior: capas fuera del mapa y micros sin marker
+  if (lineaSeleccionada) {
+    lineaSeleccionada._capas.forEach(c => map.removeLayer(c));
+    micros.filter(m => m.linea.id === lineaSeleccionada.id && m.marker).forEach(m => {
+      map.removeLayer(m.marker);
+      m.marker = null;
+    });
+  }
+
+  lineaSeleccionada = nueva;
+  nueva._capas.forEach(c => c.addTo(map));
+  map.fitBounds(L.latLngBounds(nueva.ruta), { padding:[40,40] });
+  renderListaLineas(); // refrescar el resaltado
+}
 
 // ═══════════════ MICROS (buses ficticios) ═══════════════
 // Cada línea tiene 2 micros. Cada micro tiene: posición en la ruta (t de 0 a 1),
@@ -271,7 +298,9 @@ function iconoMicro(micro) {
 let alertas = [];
 
 function actualizarMicros() {
-  micros.forEach(micro => {
+  if (!lineaSeleccionada) return;
+  // Solo se simulan y dibujan los micros de la LÍNEA SELECCIONADA
+  micros.filter(m => m.linea.id === lineaSeleccionada.id).forEach(micro => {
     // PIQUEO: se queda parado un rato
     if (micro.comportamiento === "piqueo" && micro.piqueoTiempo > 0) {
       micro.piqueoTiempo--;
@@ -340,10 +369,12 @@ function renderAlertas() {
 }
 
 function actualizarStats() {
-  const conAlerta = micros.filter(m => m.comportamiento === "desvio" || (m.comportamiento==="piqueo" && m.piqueoTiempo>0)).length;
-  document.getElementById('statMicros').textContent = micros.length;
+  // Stats de la línea seleccionada (es lo que se está viendo)
+  const visibles = lineaSeleccionada ? micros.filter(m => m.linea.id === lineaSeleccionada.id) : [];
+  const conAlerta = visibles.filter(m => m.comportamiento === "desvio" || (m.comportamiento==="piqueo" && m.piqueoTiempo>0)).length;
+  document.getElementById('statMicros').textContent = visibles.length;
   document.getElementById('statAlertas').textContent = conAlerta;
-  document.getElementById('statOk').textContent = micros.length - conAlerta;
+  document.getElementById('statOk').textContent = visibles.length - conAlerta;
 }
 
 // ═══════════════ LISTA DE LÍNEAS (operador) ═══════════════
@@ -351,18 +382,13 @@ function renderListaLineas() {
   const cont = document.getElementById('listaLineas');
   cont.innerHTML = LINEAS.map(l => {
     const microsLinea = micros.filter(m => m.linea.id === l.id);
-    return `<div class="linea-item" onclick="enfocarLinea(${l.id})">
+    const activa = lineaSeleccionada && lineaSeleccionada.id === l.id;
+    return `<div class="linea-item ${activa ? 'activa' : ''}" onclick="seleccionarLinea(${l.id})">
       <div class="linea-dot" style="background:${l.color}"></div>
       <div class="linea-info"><div class="linea-nombre">${l.nombre}</div><div class="linea-ruta">${l.origen} → ${l.destino}</div></div>
-      <div class="linea-stats">${microsLinea.length} 🚌</div>
+      <div class="linea-stats">${activa ? '👁️ ' : ''}${microsLinea.length} 🚌</div>
     </div>`;
   }).join('');
-}
-
-function enfocarLinea(id) {
-  const linea = LINEAS.find(l => l.id === id);
-  const bounds = L.latLngBounds(linea.ruta);
-  map.fitBounds(bounds, { padding:[50,50] });
 }
 
 // ═══════════════ VISTA PASAJERO ═══════════════
@@ -392,6 +418,7 @@ function seleccionarLineaPasajero() {
   const id = parseInt(document.getElementById('selectLineaPasajero').value);
   if (!id) { lineaPasajeroSel = null; return; }
   lineaPasajeroSel = LINEAS.find(l => l.id === id);
+  seleccionarLinea(id); // mostrar en el mapa SOLO la línea del pasajero
   // Simular una parada del pasajero (un punto medio de la ruta)
   const idx = Math.floor(lineaPasajeroSel.ruta.length * 0.4);
   paradaPasajero = lineaPasajeroSel.ruta[idx];
@@ -451,6 +478,7 @@ crearMicros();
 renderListaLineas();
 llenarSelectPasajero();
 document.getElementById('statLineas').textContent = LINEAS.length;
+seleccionarLinea(LINEAS[0].id); // por defecto se ve UNA línea (elegí otra en la lista)
 setInterval(actualizarMicros, 150); // ~7 fps: suave y liviano incluso con 500 micros
 </script>
 </body>
