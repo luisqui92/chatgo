@@ -21,13 +21,73 @@ const { textoDeMensaje } = require("./util");
 
 // Clasificación de prioridad por palabras clave (determinista y sin latencia —
 // en una emergencia no hay tiempo para esperar a un modelo)
-const SIGNOS_CRITICOS = /inconsciente|no respira|respira mal|dificultad para respirar|infarto|paro card|convulsion|sangr|hemorragia|atropell|choque|volcadura|grave|embarazada|parto|quemadura|electrocut|ahog|arma|bala|apuñal/i;
+const SIGNOS_CRITICOS = /inconsciente|no respira|respira mal|dificultad para respirar|infarto|paro card|convulsion|sangr|hemorragia|atropell|choque|volcadura|grave|embarazada|parto|quemad|quem[oó]|electrocut|ahog|arma|bala|apuñal/i;
 const SIGNOS_MEDIOS = /fractura|caida|caída|golpe fuerte|dolor fuerte|dolor de pecho|fiebre alta|corte|herida|mareo|desmayo/i;
 
 function clasificarPrioridad(descripcion) {
   if (SIGNOS_CRITICOS.test(descripcion)) return "critica";
   if (SIGNOS_MEDIOS.test(descripcion)) return "media";
   return "normal";
+}
+
+// ─── PRIMEROS AUXILIOS MIENTRAS LLEGA LA AYUDA ──────────────────────────────
+// Guías básicas curadas (estándar de primeros auxilios para personas sin
+// entrenamiento). Elegidas por la condición detectada — texto fijo, nunca
+// generado por IA en el momento: en emergencias no se improvisa.
+const GUIAS_AUXILIO = [
+  {
+    k: /no respira|paro card|inconsciente|infarto/i,
+    t: "🫀 *MIENTRAS LLEGA LA AYUDA — si NO respira:*\n" +
+       "1️⃣ Acostala boca arriba en superficie firme\n" +
+       "2️⃣ Con los brazos rectos, comprimí FUERTE y RÁPIDO el centro del pecho — 2 veces por segundo, sin miedo\n" +
+       "3️⃣ NO pares hasta que llegue ayuda o vuelva a respirar\n" +
+       "4️⃣ Si hay más personas, túrnense cada 2 minutos",
+  },
+  {
+    k: /atragant/i,
+    t: "🫁 *MIENTRAS LLEGA LA AYUDA — atragantamiento:*\n" +
+       "1️⃣ Si tose, dejala toser — no golpees la espalda todavía\n" +
+       "2️⃣ Si NO puede toser ni hablar: abrazala por detrás, puño cerrado sobre el ombligo, y presioná fuerte HACIA ADENTRO Y ARRIBA\n" +
+       "3️⃣ Repetí hasta que expulse el objeto",
+  },
+  {
+    k: /sangr|hemorragia|corte|herida|apuñal|bala/i,
+    t: "🩸 *MIENTRAS LLEGA LA AYUDA — sangrado:*\n" +
+       "1️⃣ Presioná DIRECTO sobre la herida con tela limpia, fuerte y sin soltar\n" +
+       "2️⃣ Si la tela se empapa, poné otra ENCIMA (no la quites)\n" +
+       "3️⃣ Si es un brazo o pierna, mantenelo elevado\n" +
+       "4️⃣ NO saques objetos clavados — fijalos donde están",
+  },
+  {
+    k: /convulsion/i,
+    t: "🧠 *MIENTRAS LLEGA LA AYUDA — convulsión:*\n" +
+       "1️⃣ NO la sujetes ni le pongas NADA en la boca\n" +
+       "2️⃣ Apartá objetos con los que pueda golpearse; algo blando bajo la cabeza\n" +
+       "3️⃣ Cuando termine, acostala DE LADO\n" +
+       "4️⃣ Tomá el tiempo: si dura más de 5 minutos es muy grave",
+  },
+  {
+    k: /quemad|quem[oó]|electrocut/i,
+    t: "🔥 *MIENTRAS LLEGA LA AYUDA — quemadura:*\n" +
+       "1️⃣ Agua FRESCA (no helada) sobre la zona por 10-20 minutos\n" +
+       "2️⃣ NADA de hielo, cremas, pasta dental ni remedios caseros\n" +
+       "3️⃣ No revientes ampollas; cubrí con tela limpia y húmeda\n" +
+       "⚡ Si fue electricidad: cortá la corriente ANTES de tocar a la persona",
+  },
+  {
+    k: /desmayo|mareo|se desmay/i,
+    t: "😵 *MIENTRAS LLEGA LA AYUDA — desmayo:*\n" +
+       "1️⃣ Acostala y levantale las piernas\n" +
+       "2️⃣ Aflojá ropa apretada; que le llegue aire\n" +
+       "3️⃣ Cuando despierte, que se levante DE A POCO\n" +
+       "4️⃣ Si no despierta en 1 minuto, tratala como inconsciente",
+  },
+];
+
+function guiaPrimerosAuxilios(descripcion) {
+  const g = GUIAS_AUXILIO.find(g => g.k.test(descripcion));
+  if (!g) return null;
+  return g.t + "\n\n_Estas indicaciones básicas no reemplazan la atención médica profesional._";
 }
 
 async function iniciar(phone, msg, session) {
@@ -161,13 +221,37 @@ async function procesar(phone, msg, buttonId, session) {
         log.error("[MOD:ambulancia] Error en despacho:", e.message);
       }
 
-      // 3) Sin unidad disponible → operación manual urgente
+      // 2b) PRIMEROS AUXILIOS mientras llega la ayuda (según lo que pasó).
+      // Es la parte más valiosa del servicio comunitario: minutos que salvan vidas.
+      const guia = guiaPrimerosAuxilios(descripcion);
+      if (guia) await enviarMensaje(phone, guia);
+
+      // 3) Sin unidad con GPS disponible → difundir a TODA la red de ambulancias
+      //    registradas (servicio comunitario: sin cuotas, sin cobros) + operación manual
       if (!despachada) {
-        await deleteSession(phone);
+        try {
+          const { Chofer } = require("../db/models");
+          const red = await Chofer.findMany({ where: { tipoVehiculo: "ambulancia" }, take: 20 });
+          for (const unidad of red) {
+            enviarMensaje(unidad.phone,
+              `🚨🚑 *EMERGENCIA EN LA ZONA — ChatGo Ambulancias*\n\n` +
+              `🩺 ${descripcion}\n📍 ${ubi.nombre}\n` +
+              `🗺️ https://maps.google.com/?q=${ubi.lat},${ubi.lng}\n\n` +
+              `Si podés atenderla, respondé este mensaje y coordinamos de inmediato.`).catch(() => {});
+          }
+          if (red.length) log.info(`[MOD:ambulancia] Difundido a ${red.length} unidades de la red`);
+        } catch (e) { log.error("[MOD:ambulancia] Error difundiendo a la red:", e.message); }
+
         await enviarMensaje(phone,
           `🚑 *Solicitud registrada — prioridad ${prioridad.toUpperCase()}*\n\n` +
           `🚨 *Llama YA a los servicios de emergencia de tu ciudad* (SAMU / Cruz Roja / 110) — no esperes.\n\n` +
-          `Un operador de ChatGo también está viendo tu solicitud e intentará conseguirte una unidad.`);
+          `Avisamos a nuestra red de ambulancias y un operador de ChatGo está viendo tu solicitud.\n\n` +
+          `_ChatGo Ambulancias es un servicio gratuito para la comunidad._ ❤️`);
+
+        // Ofrecer avisar a un familiar con la ubicación
+        await updateSession(phone, { ...session, step: "mod_ambulancia_familiar", ambDescripcion: descripcion });
+        await enviarMensaje(phone,
+          `👪 ¿Querés que le avisemos a un *familiar*?\n\nMandame su número (ej: _71234567_) y le comparto la ubicación y lo que pasó.\n\n_Escribí NO para omitir._`);
       }
 
       // 4) Alerta al admin SIEMPRE (crítica o no)
@@ -182,6 +266,37 @@ async function procesar(phone, msg, buttonId, session) {
         log.error("[MOD:ambulancia] Error alertando admin:", e.message);
       }
 
+      return true;
+    }
+
+    // ── Aviso a un familiar (opcional) ───────────────────────────────────
+    case "mod_ambulancia_familiar": {
+      if (/^(no|omitir|nada)$/i.test(texto)) {
+        await deleteSession(phone);
+        await enviarMensaje(phone, "👍 Listo. Cualquier novedad te escribimos por acá.");
+        return true;
+      }
+      const num = String(texto || "").replace(/\D/g, "");
+      if (!/^(591)?[67]\d{7}$/.test(num)) {
+        await enviarMensaje(phone, "🙏 Mandame el número del familiar (ej: _71234567_) o escribí *NO* para omitir.");
+        return true;
+      }
+      const familiar = num.startsWith("591") ? num : `591${num}`;
+      const ubi = session.ambUbicacion;
+      const ok = await enviarMensaje(familiar,
+        `🚨 *Aviso de emergencia — ChatGo Ambulancias*\n\n` +
+        `Un familiar tuyo (+${phone}) reportó una emergencia médica:\n` +
+        `🩺 ${session.ambDescripcion || "emergencia médica"}\n` +
+        `📍 ${ubi?.nombre || "Ver mapa"}\n` +
+        (ubi ? `🗺️ https://maps.google.com/?q=${ubi.lat},${ubi.lng}\n` : "") +
+        `\nYa se avisó a la red de ambulancias y a los operadores.`);
+      await deleteSession(phone);
+      if (ok) {
+        await enviarMensaje(phone, `✅ Le avisamos al +${familiar} con la ubicación.\n\nFuerza. Cualquier novedad te escribimos por acá. ❤️`);
+      } else {
+        // Ventana de 24h de Meta: si el familiar nunca habló con el bot puede no llegar
+        await enviarMensaje(phone, `⚠️ No pudimos escribirle al +${familiar} (WhatsApp lo bloqueó por no conocer nuestro número).\n\nCompartile vos esta ubicación:\nhttps://maps.google.com/?q=${ubi?.lat},${ubi?.lng}`);
+      }
       return true;
     }
 

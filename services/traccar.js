@@ -136,7 +136,9 @@ async function buscarChoferDisponibleTraccar(origenUsuario, excludeTraccarIds = 
   };
 
   const and = [];
-  if (!enPromoGratis()) {
+  // AMBULANCIAS: servicio comunitario GRATUITO — las unidades de la red nunca
+  // pagan cuota. La exigencia de pago aplica solo al resto de los servicios.
+  if (!enPromoGratis() && tipoVehiculo !== "ambulancia") {
     // Exigir pago al día a TODOS los choferes, incluyendo el de prueba —
     // el objetivo del chofer de prueba es validar el flujo de cobro de punta a punta.
     and.push({ pagoDiarioAprobado: true, pagoDiarioFechaStr: hoyStr });
