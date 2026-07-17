@@ -16,7 +16,8 @@
 const { CONFIG, log, detectarCiudadPorCoords } = require("../config");
 const { Solicitud, Viaje, Chofer } = require("../db/models");
 const { updateSession, deleteSession } = require("../services/session");
-const { enviarMensaje, enviarBotones } = require("../services/whatsapp");
+const { enviarMensaje, enviarBotones, reenviarAudioPorId } = require("../services/whatsapp");
+const { buscarEsquinaMapeada } = require("../services/utils");
 const { obtenerDireccion, geocodificarConMemoria } = require("../services/google");
 const { extraerUbicaciones } = require("../services/openai");
 const { buscarChoferDisponibleTraccar, reservarChoferTraccar } = require("../services/traccar");
@@ -104,7 +105,7 @@ function extraerContenidoUtil(texto) {
 // ─── EL DESPACHO (una sola función, llamada desde todos los caminos) ─────────
 // Registra la solicitud, intenta despacho con GPS, difunde a la red si no hay,
 // manda la guía de auxilios y alerta al admin. Devuelve { despachada, solicitudId }.
-async function despacharEmergencia(phone, ubi, descripcion, esGenerica = false) {
+async function despacharEmergencia(phone, ubi, descripcion, esGenerica = false, audioId = null) {
   const prioridad = esGenerica ? "critica" : clasificarPrioridad(descripcion); // sin datos, se asume lo peor
 
   // 1) Registrar SIEMPRE
@@ -150,6 +151,10 @@ async function despacharEmergencia(phone, ubi, descripcion, esGenerica = false) 
             { id: "aceptar_viaje", title: "🚑 VOY" },
             { id: "rechazar_viaje", title: "❌ No puedo" },
           ]);
+        if (audioId) {
+          enviarMensaje(unidad.phone, "🎤 _Audio original del solicitante:_").catch(() => {});
+          reenviarAudioPorId(unidad.phone, audioId).catch(() => {});
+        }
         await updateSession(phone, { step: "esperando_chofer", viajeId: viaje.id.toString(), choferPhone: unidad.phone });
         await enviarMensaje(phone,
           `🚑 *AYUDA EN CAMINO — ambulancia a ${unidad.distanciaAlUsuario?.toFixed(1) || "?"} km*\n\n` +
@@ -175,6 +180,7 @@ async function despacharEmergencia(phone, ubi, descripcion, esGenerica = false) 
           `🩺 ${descripcion}\n📍 ${ubi.nombre}\n` +
           `🗺️ https://maps.google.com/?q=${ubi.lat},${ubi.lng}\n\n` +
           `Si podés atenderla, respondé este mensaje y coordinamos de inmediato.`).catch(() => {});
+        if (audioId) reenviarAudioPorId(unidad.phone, audioId).catch(() => {});
       }
       if (red.length) log.info(`[MOD:ambulancia] Difundido a ${red.length} unidades de la red`);
     } catch (e) { log.error("[MOD:ambulancia] Error difundiendo:", e.message); }
@@ -193,36 +199,79 @@ async function despacharEmergencia(phone, ubi, descripcion, esGenerica = false) 
       `👤 +${phone}\n🩺 ${descripcion}\n📍 ${ubi.nombre}\n` +
       `🗺️ https://maps.google.com/?q=${ubi.lat},${ubi.lng}` +
       (solicitudId ? `\n🆔 ${solicitudId}` : ""));
+    if (audioId) reenviarAudioPorId(CONFIG.ADMIN_PHONE, audioId).catch(() => {});
   } catch (e) { log.error("[MOD:ambulancia] Error alertando admin:", e.message); }
 
   return { despachada, solicitudId };
 }
 
-// Resuelve un punto desde texto (para "a la América y Pando" en el audio inicial)
-async function resolverUbicacionTexto(textoLugar) {
+// Normaliza un nombre para comparar calles ("Av. América" ≈ "america")
+function _normCalle(s) {
+  return String(s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/\b(av|avenida|calle|c|esq|esquina|y)\b\.?/g, " ").replace(/[^a-z0-9 ]/g, "").replace(/\s+/g, " ").trim();
+}
+
+// Resuelve un punto desde texto y lo VERIFICA CONTRA EL MAPA (ida y vuelta):
+// 1. Esquinas crowdsourced primero (ya confirmadas por vecinos reales)
+// 2. Geocodificar → y preguntar al mapa QUÉ HAY en ese punto (reverso):
+//    si las calles que dijo el usuario aparecen en la respuesta del mapa,
+//    la dirección está VERIFICADA y se puede despachar con confianza.
+// Devuelve { lat, lng, nombre, verificada } o null.
+async function resolverUbicacionTexto(textoLugar, detalle = null) {
+  // 1) Esquina ya mapeada por la comunidad (con match difuso anti-dicción)
+  if (detalle?.tipo === "esquina" && detalle.calle1 && detalle.calle2) {
+    const r = await buscarEsquinaMapeada(detalle.calle1, detalle.calle2, detalle.zona || null).catch(() => null);
+    if (r?.esquina?.lat) {
+      return { lat: r.esquina.lat, lng: r.esquina.lng, nombre: `${detalle.calle1} y ${detalle.calle2}`, verificada: true };
+    }
+  }
+
+  // 2) Geocodificar y verificar con el reverso
   const g = await geocodificarConMemoria(textoLugar, "Cochabamba").catch(() => null);
-  // Solo aceptar resultados CONFIABLES: despachar una ambulancia a una
-  // dirección adivinada es peor que pedir el pin (un mensaje más)
-  if (g?.lat && !g._incierto) return { lat: g.lat, lng: g.lng, nombre: g.nombre || textoLugar };
-  return null;
+  if (!g?.lat) return null;
+
+  const reverso = await obtenerDireccion(g.lat, g.lng).catch(() => null);
+  let verificada = false;
+  if (reverso) {
+    const reversoNorm = _normCalle(reverso);
+    // Tokens significativos de lo que DIJO el usuario (calles, lugares)
+    const tokens = _normCalle(textoLugar).split(" ").filter(t => t.length >= 4);
+    verificada = tokens.some(t => reversoNorm.includes(t));
+  }
+  // Sin _incierto Y verificada por el reverso → confianza total.
+  // Incierto pero verificada → aceptable (el mapa confirma las calles).
+  if ((!g._incierto && verificada) || (g._incierto && verificada)) {
+    return { lat: g.lat, lng: g.lng, nombre: reverso || g.nombre || textoLugar, verificada: true };
+  }
+  if (!g._incierto) {
+    // Geocoder confiable aunque el reverso no confirme (ej: lugar con nombre propio)
+    return { lat: g.lat, lng: g.lng, nombre: g.nombre || textoLugar, verificada: false };
+  }
+  return null; // incierto y sin verificar: mejor pedir el pin
 }
 
 // ─── ENTRADA: minar el primer mensaje al máximo ──────────────────────────────
 async function iniciar(phone, msg, session) {
   const { texto } = await textoDeMensaje(msg); // audio ya transcrito y cacheado
   const contenido = extraerContenidoUtil(texto);
+  const audioId = msg?.audio?.id || msg?.voice?.id || null; // el audio original viaja con la alerta
 
   // ¿El mensaje de entrada YA dice dónde? ("...a la América y Pando")
   if (contenido) {
     try {
       const ubi = await extraerUbicaciones(texto);
-      const lugarTxt = (ubi?.destinoDetalle?.texto || ubi?.destino || ubi?.origenDetalle?.texto || ubi?.origen || "").trim();
+      const detalleLugar = ubi?.destinoDetalle || ubi?.origenDetalle || null;
+      const lugarTxt = (detalleLugar?.texto || ubi?.destino || ubi?.origen || "").trim();
       if (lugarTxt) {
-        const punto = await resolverUbicacionTexto(lugarTxt);
+        const punto = await resolverUbicacionTexto(lugarTxt, detalleLugar);
         if (punto) {
           // TODO en un solo mensaje → despacho inmediato, cero preguntas
-          await enviarMensaje(phone, `🚑 *Entendido:* ${contenido}\n📍 *En:* ${punto.nombre}\n\n_Si el lugar NO es ese, mandá tu pin 📍 ahora._`);
-          const r = await despacharEmergencia(phone, punto, contenido);
+          await enviarMensaje(phone,
+            `🚑 *Entendido:* ${contenido}\n` +
+            (punto.verificada
+              ? `🗺️ *Verificado en el mapa:* ${punto.nombre} ✔️\n\n_Si NO es ahí, mandá tu pin 📍 ahora._`
+              : `📍 *En:* ${punto.nombre}\n\n_Si el lugar NO es ese, mandá tu pin 📍 ahora._`));
+          const r = await despacharEmergencia(phone, punto, contenido, false, audioId);
           if (!r.despachada) {
             await updateSession(phone, { modulo: "ambulancia", step: "mod_ambulancia_familiar", ambUbicacion: punto, ambDescripcion: contenido });
             await enviarMensaje(phone, `👪 ¿Aviso a un *familiar*? Mandame su número (ej: _71234567_) o escribí NO.`);
@@ -238,7 +287,7 @@ async function iniciar(phone, msg, session) {
     "🚑 *EMERGENCIA — mandá tu 📍 UBICACIÓN ya:*\n" +
     "📎 clip → *Ubicación* → *Enviar mi ubicación actual*\n\n" +
     "_Con el pin la ayuda sale de inmediato. Si es grave, llamá también al SAMU / 110._");
-  await updateSession(phone, { ...(session || {}), modulo: "ambulancia", step: "mod_ambulancia_ubicacion", ambDescPrevia: contenido || null });
+  await updateSession(phone, { ...(session || {}), modulo: "ambulancia", step: "mod_ambulancia_ubicacion", ambDescPrevia: contenido || null, ambAudioId: audioId });
   return true;
 }
 
@@ -276,7 +325,7 @@ async function procesar(phone, msg, buttonId, session) {
 
       if (session.ambDescPrevia) {
         // Ya sabíamos qué pasó desde el primer mensaje → despacho completo
-        const r = await despacharEmergencia(phone, punto, session.ambDescPrevia);
+        const r = await despacharEmergencia(phone, punto, session.ambDescPrevia, false, session.ambAudioId || null);
         if (!r.despachada) {
           await updateSession(phone, { modulo: "ambulancia", step: "mod_ambulancia_familiar", ambUbicacion: punto, ambDescripcion: session.ambDescPrevia });
           await enviarMensaje(phone, `👪 ¿Aviso a un *familiar*? Mandame su número (ej: _71234567_) o escribí NO.`);
@@ -286,7 +335,7 @@ async function procesar(phone, msg, buttonId, session) {
 
       // Sin detalle todavía: LA AYUDA SALE IGUAL (se asume lo peor) y el
       // "¿qué pasó?" viene después, mientras la ayuda ya viaja
-      const r = await despacharEmergencia(phone, punto, "🚨 Emergencia médica (detalle en camino)", true);
+      const r = await despacharEmergencia(phone, punto, "🚨 Emergencia médica (detalle en camino)", true, session.ambAudioId || null);
       if (r.despachada) return true; // el chat con la unidad toma el control; lo que escriba le llega directo
       await updateSession(phone, {
         modulo: "ambulancia", step: "mod_ambulancia_detalle_post",
