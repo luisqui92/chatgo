@@ -25,7 +25,7 @@ const { textoDeMensaje } = require("./util");
 
 // ─── Clasificación de prioridad (determinista, sin latencia) ─────────────────
 const SIGNOS_CRITICOS = /inconsciente|no respira|respira mal|dificultad para respirar|infarto|paro card|convulsion|sangr|hemorragia|atropell|choque|volcadura|grave|embarazada|parto|quemad|quem[oó]|electrocut|ahog|arma|bala|apuñal/i;
-const SIGNOS_MEDIOS = /fractura|caida|caída|golpe fuerte|dolor fuerte|dolor de pecho|fiebre alta|corte|herida|mareo|desmayo/i;
+const SIGNOS_MEDIOS = /fractura|caida|caída|se cay[oó]|de caer|cay[oó]\b|golpe fuerte|dolor fuerte|dolor de pecho|fiebre alta|corte|herida|mareo|desmayo/i;
 
 function clasificarPrioridad(descripcion) {
   if (SIGNOS_CRITICOS.test(descripcion)) return "critica";
@@ -173,7 +173,7 @@ async function despacharEmergencia(phone, ubi, descripcion, esGenerica = false, 
   // 4) Sin unidad con GPS → difundir a TODA la red (servicio gratuito)
   if (!despachada) {
     try {
-      const red = await Chofer.findMany({ where: { tipoVehiculo: "ambulancia" }, take: 20 });
+      const red = await Chofer.findMany({ where: { tipoVehiculo: { in: ["ambulancia", "todo"] } }, take: 20 });
       for (const unidad of red) {
         enviarMensaje(unidad.phone,
           `🚨🚑 *EMERGENCIA EN LA ZONA — ChatGo Ambulancias*\n\n` +

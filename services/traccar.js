@@ -111,7 +111,8 @@ async function buscarChoferDisponibleTraccar(origenUsuario, excludeTraccarIds = 
   // poder probar el flujo de cobro de punta a punta con este número.
   if (CONFIG.CHOFER_PRUEBA_PHONE) {
     const choferPrueba = await Chofer.findUnique({ where: { phone: CONFIG.CHOFER_PRUEBA_PHONE } });
-    const pagoOk = enPromoGratis() || choferPagoAlDia(choferPrueba);
+    // Ambulancias: servicio comunitario gratuito — sin exigencia de pago tampoco en pruebas
+    const pagoOk = tipoVehiculo === "ambulancia" || enPromoGratis() || choferPagoAlDia(choferPrueba);
     if (choferPrueba?.traccarId && pagoOk && !excludeTraccarIds.includes(choferPrueba.traccarId)) {
       await asegurarSnapshot();
       const dev = snapshotDispositivos[String(choferPrueba.traccarId)];
