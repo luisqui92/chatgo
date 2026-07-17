@@ -23,6 +23,7 @@ const { esAudio, textoDeMensaje } = require("./util");
 const favor = require("./favor");
 const ambulancia = require("./ambulancia");
 const delivery = require("./delivery"); // inteligente: catálogo + presupuesto + despacho
+const bus = require("./bus"); // qué línea me lleva + micro más próximo (demo)
 const { crearModuloCaptura } = require("./captura");
 
 // Módulos de captura (operación manual detrás de escena mientras no exista
@@ -58,7 +59,7 @@ const rastreo = crearModuloCaptura({
   cierre: "🛰️ ¡Anotado! Te contactaremos para activar el rastreo por WhatsApp: ubicación al instante, alertas y geocercas.",
 });
 
-const MODULOS = { favor, ambulancia, delivery, school, empresas, rastreo };
+const MODULOS = { favor, ambulancia, delivery, bus, school, empresas, rastreo };
 
 // Palabras que abren cada módulo por TEXTO (solo con el usuario en reposo)
 const ENTRADAS = [
@@ -69,6 +70,7 @@ const ENTRADAS = [
   { modulo: "school", regex: /^(school|colegio|transporte escolar|escolar)\b/i },
   { modulo: "empresas", regex: /^(empresa|empresas|corporativo|logistica|logística)\b/i },
   { modulo: "rastreo", regex: /^(rastreo|rastrear|rastreoplus|gps)\b/i },
+  { modulo: "bus", regex: /^(bus|micro|trufi|l[ií]nea)s?\b|\bqu[eé] l[ií]nea\b/i },
 ];
 
 // ─── Intención de COMIDA en lenguaje natural ─────────────────────────────────
@@ -95,6 +97,7 @@ const ENTRADAS_VOZ = [
   { modulo: "school", regex: /\btransporte escolar\b/i },
   { modulo: "empresas", regex: /\bchatgo empresas\b|\blog[íi]stica empresarial\b/i },
   { modulo: "rastreo", regex: /\brastrear\b|\brastreo\b|\brastreoplus\b/i },
+  { modulo: "bus", regex: /\bqu[eé] l[ií]nea\b|\btrufi\b|\bchatgo ?bus\b/i },
 ];
 
 function moduloActivo(id) {
@@ -114,6 +117,7 @@ async function mostrarMenuServicios(phone) {
   if (moduloActivo("school")) lineas.push("🎒 Escribe *colegio* — transporte escolar");
   if (moduloActivo("empresas")) lineas.push("🏢 Escribe *empresa* — logística corporativa");
   if (moduloActivo("rastreo")) lineas.push("📡 Escribe *rastreo* — GPS RastreoPlus");
+  if (moduloActivo("bus")) lineas.push("🚌 Escribe *bus* — qué línea te lleva (demo)");
   await enviarMensaje(phone, lineas.join("\n"));
 }
 
@@ -136,6 +140,7 @@ const PASOS_SUAVES = new Set([
 // la intención de comida estricta (verbo de querer + comida, sin palabras de viaje)
 function intencionInequivoca(texto) {
   if (/^(ambulancia|emergencia m[eé]dica)\b/i.test(texto) && moduloActivo("ambulancia")) return "ambulancia";
+  if (/\bqu[eé] l[ií]nea\b/i.test(texto) && moduloActivo("bus")) return "bus";
   if (/^(delivery|servicios?)$/i.test(texto)) return texto.toLowerCase().startsWith("s") ? "menu" : "delivery";
   if (moduloActivo("delivery") && esIntencionComida(texto)) return "delivery";
   return null;

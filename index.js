@@ -118,6 +118,7 @@ require("./routes/admin")(app, allDeps);
 require("./routes/pagoNotificacion")(app, allDeps);
 require("./routes/mapa")(app);
 require("./routes/web")(app); // Canal web premium (Etapa 1) — GET /pedir
+require("./routes/bus")(app); // ChatGo Bus demo — GET /bus/:lineaId
 
 // ─── INTERVALS ────────────────────────────────────────────────────────────────
 const { iniciarIntervals } = require("./intervals");
