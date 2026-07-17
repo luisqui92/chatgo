@@ -1,26 +1,28 @@
-// ChatGo — Módulo AMBULANCIAS
+// ChatGo — Módulo AMBULANCIAS (servicio comunitario GRATUITO)
 //
-// Emergencias médicas por WhatsApp: pide la ubicación PRIMERO (mínima fricción),
-// clasifica la prioridad por palabras clave, y despacha la ambulancia más cercana
-// reutilizando el motor del taxi — las ambulancias se registran como choferes con
-// tipoVehiculo "ambulancia" y el filtro por tipo del motor hace el resto (GPS,
-// reserva atómica, botones Aceptar/Rechazar, tracking en vivo, chat).
+// FILOSOFÍA: EL PIN DESPACHA, LOS DETALLES DESPUÉS.
+// En una emergencia cada mensaje de ida y vuelta son segundos que duelen:
+//   - Un solo audio basta: "manden una ambulancia a la América y Pando, mi
+//     papá no respira" → se extrae QUÉ pasó y DÓNDE del mismo mensaje →
+//     despacho inmediato, cero preguntas.
+//   - Pin = despacho instantáneo: la ayuda sale YA con la ubicación (se asume
+//     lo peor); el "¿qué pasó?" se pregunta DESPUÉS, mientras la ayuda viaja,
+//     y sirve para mandar la guía de primeros auxilios y enriquecer la alerta.
 //
-// Si no hay ambulancia disponible (la realidad de hoy en las sombras), guarda la
-// solicitud, alerta al ADMIN con máxima prioridad y orienta al usuario a llamar
-// a los servicios de emergencia oficiales. ChatGo complementa, nunca reemplaza,
-// la llamada de emergencia.
+// Despacho: unidades tipo "ambulancia" (exentas de toda cuota — gratis) vía el
+// motor del taxi si tienen GPS; sin GPS, difusión a toda la red registrada.
+// ChatGo complementa, nunca reemplaza, la llamada de emergencia oficial.
 
 const { CONFIG, log, detectarCiudadPorCoords } = require("../config");
-const { Solicitud, Viaje } = require("../db/models");
+const { Solicitud, Viaje, Chofer } = require("../db/models");
 const { updateSession, deleteSession } = require("../services/session");
 const { enviarMensaje, enviarBotones } = require("../services/whatsapp");
 const { obtenerDireccion, geocodificarConMemoria } = require("../services/google");
+const { extraerUbicaciones } = require("../services/openai");
 const { buscarChoferDisponibleTraccar, reservarChoferTraccar } = require("../services/traccar");
 const { textoDeMensaje } = require("./util");
 
-// Clasificación de prioridad por palabras clave (determinista y sin latencia —
-// en una emergencia no hay tiempo para esperar a un modelo)
+// ─── Clasificación de prioridad (determinista, sin latencia) ─────────────────
 const SIGNOS_CRITICOS = /inconsciente|no respira|respira mal|dificultad para respirar|infarto|paro card|convulsion|sangr|hemorragia|atropell|choque|volcadura|grave|embarazada|parto|quemad|quem[oó]|electrocut|ahog|arma|bala|apuñal/i;
 const SIGNOS_MEDIOS = /fractura|caida|caída|golpe fuerte|dolor fuerte|dolor de pecho|fiebre alta|corte|herida|mareo|desmayo/i;
 
@@ -31,9 +33,7 @@ function clasificarPrioridad(descripcion) {
 }
 
 // ─── PRIMEROS AUXILIOS MIENTRAS LLEGA LA AYUDA ──────────────────────────────
-// Guías básicas curadas (estándar de primeros auxilios para personas sin
-// entrenamiento). Elegidas por la condición detectada — texto fijo, nunca
-// generado por IA en el momento: en emergencias no se improvisa.
+// Guías básicas curadas — texto fijo, nunca IA improvisando en una emergencia.
 const GUIAS_AUXILIO = [
   {
     k: /no respira|paro card|inconsciente|infarto/i,
@@ -90,17 +90,159 @@ function guiaPrimerosAuxilios(descripcion) {
   return g.t + "\n\n_Estas indicaciones básicas no reemplazan la atención médica profesional._";
 }
 
+// Limpia las palabras de invocación del mensaje de entrada para quedarnos con
+// el CONTENIDO útil: "manden una ambulancia rápido, mi papá no respira" →
+// "mi papá no respira"
+function extraerContenidoUtil(texto) {
+  const limpio = String(texto || "")
+    .replace(/\b(manden?|env[ií]en?|necesito|quiero|una?|la|el|ambulancia|emergencia( m[eé]dica)?|urgente|r[aá]pido|ya|por favor|porfavor|auxilio|ayuda)\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return limpio.length >= 8 ? limpio : null;
+}
+
+// ─── EL DESPACHO (una sola función, llamada desde todos los caminos) ─────────
+// Registra la solicitud, intenta despacho con GPS, difunde a la red si no hay,
+// manda la guía de auxilios y alerta al admin. Devuelve { despachada, solicitudId }.
+async function despacharEmergencia(phone, ubi, descripcion, esGenerica = false) {
+  const prioridad = esGenerica ? "critica" : clasificarPrioridad(descripcion); // sin datos, se asume lo peor
+
+  // 1) Registrar SIEMPRE
+  let solicitudId = null;
+  try {
+    const sol = await Solicitud.create({
+      data: {
+        tipo: "ambulancia", usuarioPhone: phone, estado: "nueva",
+        detalle: { descripcion, prioridad, generica: esGenerica },
+        origenLat: ubi.lat, origenLng: ubi.lng, origenNombre: ubi.nombre,
+      },
+    });
+    solicitudId = sol.id;
+  } catch (e) { log.error("[MOD:ambulancia] Error guardando solicitud:", e.message); }
+
+  // 2) Despacho automático (unidad con GPS)
+  let despachada = false;
+  try {
+    const unidad = await buscarChoferDisponibleTraccar(ubi, [], "ambulancia");
+    if (unidad) {
+      const viaje = await Viaje.create({
+        data: {
+          usuarioPhone: phone, choferPhone: unidad.phone, choferTraccarId: unidad.traccarId,
+          choferNombre: unidad.nombre, choferPlaca: unidad.placa,
+          ciudad: detectarCiudadPorCoords(ubi.lat, ubi.lng),
+          origenLat: ubi.lat, origenLng: ubi.lng, origenNombre: ubi.nombre,
+          destinoLat: ubi.lat, destinoLng: ubi.lng, destinoNombre: "Traslado según evaluación médica",
+          observaciones: `🚑 EMERGENCIA MÉDICA [prioridad ${prioridad.toUpperCase()}]: ${descripcion}`,
+          distanciaKm: 0, precioTotal: 0, precioBase: 0,
+          tipoVehiculo: "ambulancia", estado: "pendiente", fechaAsignacion: new Date(),
+        },
+      });
+      const reservada = await reservarChoferTraccar(unidad.traccarId, viaje.id);
+      if (reservada) {
+        despachada = true;
+        if (solicitudId) await Solicitud.update({ where: { id: solicitudId }, data: { viajeId: viaje.id, estado: "asignada", asignadoPhone: unidad.phone } }).catch(() => {});
+        await enviarBotones(unidad.phone,
+          `🚨🚑 *EMERGENCIA MÉDICA — PRIORIDAD ${prioridad.toUpperCase()}*\n\n` +
+          `🩺 ${descripcion}\n📍 ${ubi.nombre}\n` +
+          `🗺️ https://maps.google.com/?q=${ubi.lat},${ubi.lng}\n` +
+          `📏 A ${unidad.distanciaAlUsuario?.toFixed(1) || "?"} km de ti\n\n⏱️ *RESPONDE DE INMEDIATO*`,
+          [
+            { id: "aceptar_viaje", title: "🚑 VOY" },
+            { id: "rechazar_viaje", title: "❌ No puedo" },
+          ]);
+        await updateSession(phone, { step: "esperando_chofer", viajeId: viaje.id.toString(), choferPhone: unidad.phone });
+        await enviarMensaje(phone,
+          `🚑 *AYUDA EN CAMINO — ambulancia a ${unidad.distanciaAlUsuario?.toFixed(1) || "?"} km*\n\n` +
+          `Estamos confirmando la unidad; te llega el enlace para verla llegar.\n\n` +
+          `⚠️ _No muevas a la persona herida salvo peligro inminente._`);
+      } else {
+        await Viaje.delete({ where: { id: viaje.id } }).catch(() => {});
+      }
+    }
+  } catch (e) { log.error("[MOD:ambulancia] Error en despacho:", e.message); }
+
+  // 3) Guía de primeros auxilios (si sabemos qué pasó)
+  const guia = guiaPrimerosAuxilios(descripcion);
+  if (guia) await enviarMensaje(phone, guia);
+
+  // 4) Sin unidad con GPS → difundir a TODA la red (servicio gratuito)
+  if (!despachada) {
+    try {
+      const red = await Chofer.findMany({ where: { tipoVehiculo: "ambulancia" }, take: 20 });
+      for (const unidad of red) {
+        enviarMensaje(unidad.phone,
+          `🚨🚑 *EMERGENCIA EN LA ZONA — ChatGo Ambulancias*\n\n` +
+          `🩺 ${descripcion}\n📍 ${ubi.nombre}\n` +
+          `🗺️ https://maps.google.com/?q=${ubi.lat},${ubi.lng}\n\n` +
+          `Si podés atenderla, respondé este mensaje y coordinamos de inmediato.`).catch(() => {});
+      }
+      if (red.length) log.info(`[MOD:ambulancia] Difundido a ${red.length} unidades de la red`);
+    } catch (e) { log.error("[MOD:ambulancia] Error difundiendo:", e.message); }
+
+    await enviarMensaje(phone,
+      `🚑 *Alerta enviada a la red — prioridad ${prioridad.toUpperCase()}*\n\n` +
+      `🚨 *Llama YA a los servicios de emergencia de tu ciudad* (SAMU / Cruz Roja / 110) — no esperes.\n\n` +
+      `_ChatGo Ambulancias es un servicio gratuito para la comunidad._ ❤️`);
+  }
+
+  // 5) Alerta al admin SIEMPRE
+  try {
+    const icono = prioridad === "critica" ? "🔴🔴🔴" : prioridad === "media" ? "🟠" : "🟡";
+    await enviarMensaje(CONFIG.ADMIN_PHONE,
+      `${icono} *AMBULANCIA — PRIORIDAD ${prioridad.toUpperCase()}* ${despachada ? "(unidad despachada)" : "(SIN UNIDAD — OPERAR MANUAL)"}\n\n` +
+      `👤 +${phone}\n🩺 ${descripcion}\n📍 ${ubi.nombre}\n` +
+      `🗺️ https://maps.google.com/?q=${ubi.lat},${ubi.lng}` +
+      (solicitudId ? `\n🆔 ${solicitudId}` : ""));
+  } catch (e) { log.error("[MOD:ambulancia] Error alertando admin:", e.message); }
+
+  return { despachada, solicitudId };
+}
+
+// Resuelve un punto desde texto (para "a la América y Pando" en el audio inicial)
+async function resolverUbicacionTexto(textoLugar) {
+  const g = await geocodificarConMemoria(textoLugar, "Cochabamba").catch(() => null);
+  // Solo aceptar resultados CONFIABLES: despachar una ambulancia a una
+  // dirección adivinada es peor que pedir el pin (un mensaje más)
+  if (g?.lat && !g._incierto) return { lat: g.lat, lng: g.lng, nombre: g.nombre || textoLugar };
+  return null;
+}
+
+// ─── ENTRADA: minar el primer mensaje al máximo ──────────────────────────────
 async function iniciar(phone, msg, session) {
+  const { texto } = await textoDeMensaje(msg); // audio ya transcrito y cacheado
+  const contenido = extraerContenidoUtil(texto);
+
+  // ¿El mensaje de entrada YA dice dónde? ("...a la América y Pando")
+  if (contenido) {
+    try {
+      const ubi = await extraerUbicaciones(texto);
+      const lugarTxt = (ubi?.destinoDetalle?.texto || ubi?.destino || ubi?.origenDetalle?.texto || ubi?.origen || "").trim();
+      if (lugarTxt) {
+        const punto = await resolverUbicacionTexto(lugarTxt);
+        if (punto) {
+          // TODO en un solo mensaje → despacho inmediato, cero preguntas
+          await enviarMensaje(phone, `🚑 *Entendido:* ${contenido}\n📍 *En:* ${punto.nombre}\n\n_Si el lugar NO es ese, mandá tu pin 📍 ahora._`);
+          const r = await despacharEmergencia(phone, punto, contenido);
+          if (!r.despachada) {
+            await updateSession(phone, { modulo: "ambulancia", step: "mod_ambulancia_familiar", ambUbicacion: punto, ambDescripcion: contenido });
+            await enviarMensaje(phone, `👪 ¿Aviso a un *familiar*? Mandame su número (ej: _71234567_) o escribí NO.`);
+          }
+          return true;
+        }
+      }
+    } catch (e) { log.warn("[MOD:ambulancia] Extracción de entrada:", e.message); }
+  }
+
+  // Falta la ubicación: pedir SOLO el pin (lo único imprescindible)
   await enviarMensaje(phone,
-    "🚑 *ChatGo Ambulancias — Emergencia médica*\n\n" +
-    "📍 Mándame *AHORA la ubicación* del incidente (pin de WhatsApp) o escribe la dirección exacta.\n\n" +
-    "⚠️ _Si la emergencia es grave, llama también a los servicios de emergencia de tu ciudad._");
-  await updateSession(phone, { ...(session || {}), modulo: "ambulancia", step: "mod_ambulancia_ubicacion" });
+    "🚑 *EMERGENCIA — mandá tu 📍 UBICACIÓN ya:*\n" +
+    "📎 clip → *Ubicación* → *Enviar mi ubicación actual*\n\n" +
+    "_Con el pin la ayuda sale de inmediato. Si es grave, llamá también al SAMU / 110._");
+  await updateSession(phone, { ...(session || {}), modulo: "ambulancia", step: "mod_ambulancia_ubicacion", ambDescPrevia: contenido || null });
   return true;
 }
 
 async function procesar(phone, msg, buttonId, session) {
-  // Acepta texto o nota de voz — en una emergencia, hablar es más rápido que escribir
   const { texto } = await textoDeMensaje(msg);
 
   if (/^cancelar$/i.test(texto)) {
@@ -111,6 +253,7 @@ async function procesar(phone, msg, buttonId, session) {
 
   switch (session.step) {
 
+    // ── EL PIN DESPACHA ──────────────────────────────────────────────────────
     case "mod_ambulancia_ubicacion": {
       let punto = null;
       if (msg?.location) {
@@ -121,155 +264,58 @@ async function procesar(phone, msg, buttonId, session) {
           punto = { lat, lng, nombre };
         }
       } else if (texto) {
-        const geo = await geocodificarConMemoria(texto, session.ciudadUsuario || null).catch(() => null);
-        if (geo && geo.lat) punto = { lat: geo.lat, lng: geo.lng, nombre: geo.nombre || texto };
+        // Puede venir "en la América y Pando, se cayó mi mamá": dirección + detalle
+        const contenidoNuevo = extraerContenidoUtil(texto);
+        if (contenidoNuevo && !session.ambDescPrevia) session.ambDescPrevia = contenidoNuevo;
+        punto = await resolverUbicacionTexto(texto);
       }
       if (!punto) {
-        await enviarMensaje(phone, "📍 Necesito la ubicación exacta: toca el clip 📎 → *Ubicación* → *Enviar mi ubicación actual*.");
+        await enviarMensaje(phone, "📍 Mandá el PIN: 📎 clip → *Ubicación* → *Enviar mi ubicación actual*.");
         return true;
       }
-      await updateSession(phone, { ...session, ambUbicacion: punto, step: "mod_ambulancia_detalle" });
-      await enviarMensaje(phone, `✅ Ubicación recibida: *${punto.nombre}*\n\n🩺 En pocas palabras: ¿*qué pasó* y cuántas personas necesitan ayuda?`);
+
+      if (session.ambDescPrevia) {
+        // Ya sabíamos qué pasó desde el primer mensaje → despacho completo
+        const r = await despacharEmergencia(phone, punto, session.ambDescPrevia);
+        if (!r.despachada) {
+          await updateSession(phone, { modulo: "ambulancia", step: "mod_ambulancia_familiar", ambUbicacion: punto, ambDescripcion: session.ambDescPrevia });
+          await enviarMensaje(phone, `👪 ¿Aviso a un *familiar*? Mandame su número (ej: _71234567_) o escribí NO.`);
+        }
+        return true;
+      }
+
+      // Sin detalle todavía: LA AYUDA SALE IGUAL (se asume lo peor) y el
+      // "¿qué pasó?" viene después, mientras la ayuda ya viaja
+      const r = await despacharEmergencia(phone, punto, "🚨 Emergencia médica (detalle en camino)", true);
+      if (r.despachada) return true; // el chat con la unidad toma el control; lo que escriba le llega directo
+      await updateSession(phone, {
+        modulo: "ambulancia", step: "mod_ambulancia_detalle_post",
+        ambUbicacion: punto, ambSolicitudId: r.solicitudId,
+      });
+      await enviarMensaje(phone, `✅ *Tu ubicación ya fue enviada a la red.*\n\n🩺 Ahora contame: ¿*qué pasó*? (así te guío mientras llega la ayuda)`);
       return true;
     }
 
-    case "mod_ambulancia_detalle": {
-      if (!texto) {
-        await enviarMensaje(phone, "🩺 Escríbeme brevemente qué pasó (ej: _persona inconsciente_, _accidente de tránsito, 2 heridos_).");
-        return true;
-      }
+    // ── Detalle DESPUÉS del despacho: guía + enriquecer la alerta ───────────
+    case "mod_ambulancia_detalle_post": {
+      if (!texto) { await enviarMensaje(phone, "🩺 Contame qué pasó (texto o audio)."); return true; }
       const descripcion = texto.substring(0, 300);
       const prioridad = clasificarPrioridad(descripcion);
-      const ubi = session.ambUbicacion;
 
-      // 1) Guardar la solicitud SIEMPRE (auditoría y operación manual)
-      let solicitudId = null;
-      try {
-        const sol = await Solicitud.create({
-          data: {
-            tipo: "ambulancia",
-            usuarioPhone: phone,
-            estado: "nueva",
-            detalle: { descripcion, prioridad },
-            origenLat: ubi.lat,
-            origenLng: ubi.lng,
-            origenNombre: ubi.nombre,
-          },
-        });
-        solicitudId = sol.id;
-      } catch (e) {
-        log.error("[MOD:ambulancia] Error guardando solicitud:", e.message);
-      }
-
-      // 2) Intentar despacho automático: ambulancias = choferes tipo "ambulancia"
-      let despachada = false;
-      try {
-        const unidad = await buscarChoferDisponibleTraccar(ubi, [], "ambulancia");
-        if (unidad) {
-          const viaje = await Viaje.create({
-            data: {
-              usuarioPhone: phone,
-              choferPhone: unidad.phone,
-              choferTraccarId: unidad.traccarId,
-              choferNombre: unidad.nombre,
-              choferPlaca: unidad.placa,
-              ciudad: detectarCiudadPorCoords(ubi.lat, ubi.lng),
-              origenLat: ubi.lat,
-              origenLng: ubi.lng,
-              origenNombre: ubi.nombre,
-              destinoLat: ubi.lat,
-              destinoLng: ubi.lng,
-              destinoNombre: "Traslado según evaluación médica",
-              observaciones: `🚑 EMERGENCIA MÉDICA [prioridad ${prioridad.toUpperCase()}]: ${descripcion}`,
-              distanciaKm: 0,
-              precioTotal: 0,
-              precioBase: 0,
-              tipoVehiculo: "ambulancia",
-              estado: "pendiente",
-              fechaAsignacion: new Date(),
-            },
-          });
-          const reservada = await reservarChoferTraccar(unidad.traccarId, viaje.id);
-          if (reservada) {
-            despachada = true;
-            if (solicitudId) {
-              await Solicitud.update({ where: { id: solicitudId }, data: { viajeId: viaje.id, estado: "asignada", asignadoPhone: unidad.phone } }).catch(() => {});
-            }
-            // Orden URGENTE a la ambulancia — los botones Aceptar/Rechazar
-            // los procesa el flujo chofer existente (aceptar_viaje / rechazar_viaje)
-            await enviarBotones(unidad.phone,
-              `🚨🚑 *EMERGENCIA MÉDICA — PRIORIDAD ${prioridad.toUpperCase()}*\n\n` +
-              `🩺 ${descripcion}\n` +
-              `📍 ${ubi.nombre}\n` +
-              `🗺️ https://maps.google.com/?q=${ubi.lat},${ubi.lng}\n` +
-              `📏 A ${unidad.distanciaAlUsuario?.toFixed(1) || "?"} km de ti\n\n` +
-              `⏱️ *RESPONDE DE INMEDIATO*`,
-              [
-                { id: "aceptar_viaje", title: "🚑 VOY" },
-                { id: "rechazar_viaje", title: "❌ No puedo" },
-              ]);
-            await updateSession(phone, { step: "esperando_chofer", viajeId: viaje.id.toString(), choferPhone: unidad.phone });
-            await enviarMensaje(phone,
-              `🚑 *Ambulancia localizada a ${unidad.distanciaAlUsuario?.toFixed(1) || "?"} km*\n\n` +
-              `Estamos confirmando la unidad. En cuanto acepte te llega el enlace para verla llegar en tiempo real.\n\n` +
-              `⚠️ _Mientras tanto: no muevas a la persona herida salvo peligro inminente._`);
-          } else {
-            await Viaje.delete({ where: { id: viaje.id } }).catch(() => {});
-          }
-        }
-      } catch (e) {
-        log.error("[MOD:ambulancia] Error en despacho:", e.message);
-      }
-
-      // 2b) PRIMEROS AUXILIOS mientras llega la ayuda (según lo que pasó).
-      // Es la parte más valiosa del servicio comunitario: minutos que salvan vidas.
       const guia = guiaPrimerosAuxilios(descripcion);
       if (guia) await enviarMensaje(phone, guia);
 
-      // 3) Sin unidad con GPS disponible → difundir a TODA la red de ambulancias
-      //    registradas (servicio comunitario: sin cuotas, sin cobros) + operación manual
-      if (!despachada) {
-        try {
-          const { Chofer } = require("../db/models");
-          const red = await Chofer.findMany({ where: { tipoVehiculo: "ambulancia" }, take: 20 });
-          for (const unidad of red) {
-            enviarMensaje(unidad.phone,
-              `🚨🚑 *EMERGENCIA EN LA ZONA — ChatGo Ambulancias*\n\n` +
-              `🩺 ${descripcion}\n📍 ${ubi.nombre}\n` +
-              `🗺️ https://maps.google.com/?q=${ubi.lat},${ubi.lng}\n\n` +
-              `Si podés atenderla, respondé este mensaje y coordinamos de inmediato.`).catch(() => {});
-          }
-          if (red.length) log.info(`[MOD:ambulancia] Difundido a ${red.length} unidades de la red`);
-        } catch (e) { log.error("[MOD:ambulancia] Error difundiendo a la red:", e.message); }
-
-        await enviarMensaje(phone,
-          `🚑 *Solicitud registrada — prioridad ${prioridad.toUpperCase()}*\n\n` +
-          `🚨 *Llama YA a los servicios de emergencia de tu ciudad* (SAMU / Cruz Roja / 110) — no esperes.\n\n` +
-          `Avisamos a nuestra red de ambulancias y un operador de ChatGo está viendo tu solicitud.\n\n` +
-          `_ChatGo Ambulancias es un servicio gratuito para la comunidad._ ❤️`);
-
-        // Ofrecer avisar a un familiar con la ubicación
-        await updateSession(phone, { ...session, step: "mod_ambulancia_familiar", ambDescripcion: descripcion });
-        await enviarMensaje(phone,
-          `👪 ¿Querés que le avisemos a un *familiar*?\n\nMandame su número (ej: _71234567_) y le comparto la ubicación y lo que pasó.\n\n_Escribí NO para omitir._`);
+      if (session.ambSolicitudId) {
+        await Solicitud.update({ where: { id: session.ambSolicitudId }, data: { detalle: { descripcion, prioridad } } }).catch(() => {});
       }
+      enviarMensaje(CONFIG.ADMIN_PHONE, `🩺 *Detalle de la emergencia de +${phone}:* ${descripcion} (prioridad ${prioridad.toUpperCase()})`).catch(() => {});
 
-      // 4) Alerta al admin SIEMPRE (crítica o no)
-      try {
-        const icono = prioridad === "critica" ? "🔴🔴🔴" : prioridad === "media" ? "🟠" : "🟡";
-        await enviarMensaje(CONFIG.ADMIN_PHONE,
-          `${icono} *AMBULANCIA — PRIORIDAD ${prioridad.toUpperCase()}* ${despachada ? "(unidad despachada)" : "(SIN UNIDAD — OPERAR MANUAL)"}\n\n` +
-          `👤 +${phone}\n🩺 ${descripcion}\n📍 ${ubi.nombre}\n` +
-          `🗺️ https://maps.google.com/?q=${ubi.lat},${ubi.lng}` +
-          (solicitudId ? `\n🆔 ${solicitudId}` : ""));
-      } catch (e) {
-        log.error("[MOD:ambulancia] Error alertando admin:", e.message);
-      }
-
+      await updateSession(phone, { ...session, step: "mod_ambulancia_familiar", ambDescripcion: descripcion });
+      await enviarMensaje(phone, `👪 ¿Aviso a un *familiar*? Mandame su número (ej: _71234567_) o escribí NO.`);
       return true;
     }
 
-    // ── Aviso a un familiar (opcional) ───────────────────────────────────
+    // ── Aviso a un familiar (opcional) ───────────────────────────────────────
     case "mod_ambulancia_familiar": {
       if (/^(no|omitir|nada)$/i.test(texto)) {
         await deleteSession(phone);
@@ -294,7 +340,6 @@ async function procesar(phone, msg, buttonId, session) {
       if (ok) {
         await enviarMensaje(phone, `✅ Le avisamos al +${familiar} con la ubicación.\n\nFuerza. Cualquier novedad te escribimos por acá. ❤️`);
       } else {
-        // Ventana de 24h de Meta: si el familiar nunca habló con el bot puede no llegar
         await enviarMensaje(phone, `⚠️ No pudimos escribirle al +${familiar} (WhatsApp lo bloqueó por no conocer nuestro número).\n\nCompartile vos esta ubicación:\nhttps://maps.google.com/?q=${ubi?.lat},${ubi?.lng}`);
       }
       return true;
