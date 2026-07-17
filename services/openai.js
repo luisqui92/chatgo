@@ -255,4 +255,60 @@ async function transcribirAudioWeb(audioBuffer, mime = "audio/webm") {
   }
 }
 
-module.exports = { transcribirAudio, transcribirAudioWeb, extraerUbicaciones, validarComprobantePago, generarAudioDesdeTexto };
+
+// ─── CLASIFICADOR DE INTENCIONES (router de servicios) ──────────────────────
+// Decide a qué servicio corresponde un mensaje cuando las reglas deterministas
+// no lo reconocen. gpt-4o-mini, temperatura 0, respuesta de una sola palabra.
+// REGLA DE ORO: ante cualquier ambigüedad devuelve "taxi" (el servicio base) —
+// un falso módulo rompe un pedido de taxi; un falso taxi no rompe nada.
+async function clasificarIntencion(texto) {
+  try {
+    const res = await axios.post(
+      "https://api.openai.com/v1/chat/completions",
+      {
+        model: "gpt-4o-mini",
+        temperature: 0,
+        max_tokens: 12,
+        messages: [
+          {
+            role: "system",
+            content: `Clasificas mensajes de clientes de ChatGo (Cochabamba, Bolivia). Responde SOLO una palabra: taxi, bus, delivery, ambulancia, favor u otro.
+
+DEFINICIONES:
+- taxi: quiere que un movil LO LLEVE a un lugar (auto/moto/van), pide carrera, da direcciones para viajar, pregunta precio de una carrera
+- bus: pregunta por el transporte PUBLICO — que linea/micro/trufi le sirve, por donde pasa, cuando llega
+- delivery: quiere COMIDA de un restaurante a domicilio
+- ambulancia: emergencia MEDICA — alguien herido, inconsciente, enfermo grave, accidente con heridos
+- favor: mandado/encargo SIN pasajero — recoger, comprar o entregar ALGO (documentos, medicamentos, paquetes)
+- otro: saludos, agradecimientos, dudas generales, nada de lo anterior
+
+REGLAS:
+1. Ante ambiguedad entre taxi y cualquier otro: taxi
+2. "ambulancia" SOLO con emergencia medica real de una persona
+3. Direcciones o esquinas sueltas: taxi
+
+EJEMPLOS:
+"llevame a la cancha" -> taxi
+"cuanto esta una carrera a Sacaba" -> taxi
+"America y Libertador" -> taxi
+"en que micro llego al centro" -> bus
+"que trufi pasa por la Heroinas" -> bus
+"tengo hambre, hay algo para pedir" -> delivery
+"mi mama se cayo y no reacciona" -> ambulancia
+"necesito que recojan unos documentos de la notaria" -> favor
+"gracias" -> otro`,
+          },
+          { role: "user", content: String(texto).substring(0, 300) },
+        ],
+      },
+      { headers: { Authorization: `Bearer ${CONFIG.OPENAI_KEY}` }, timeout: 6000 }
+    );
+    const r = String(res.data.choices?.[0]?.message?.content || "").trim().toLowerCase();
+    return ["taxi", "bus", "delivery", "ambulancia", "favor", "otro"].includes(r) ? r : "taxi";
+  } catch (e) {
+    log.warn("[CLASIFICADOR]", e.response?.data?.error?.message || e.message);
+    return "taxi"; // si la IA falla, el flujo base manda
+  }
+}
+
+module.exports = { transcribirAudio, transcribirAudioWeb, extraerUbicaciones, validarComprobantePago, generarAudioDesdeTexto, clasificarIntencion };

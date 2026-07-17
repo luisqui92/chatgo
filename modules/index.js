@@ -19,6 +19,7 @@ const { CONFIG, log } = require("../config");
 const { deleteSession } = require("../services/session");
 const { enviarMensaje } = require("../services/whatsapp");
 const { esAudio, textoDeMensaje } = require("./util");
+const { clasificarIntencion } = require("../services/openai");
 
 const favor = require("./favor");
 const ambulancia = require("./ambulancia");
@@ -146,6 +147,23 @@ function intencionInequivoca(texto) {
   return null;
 }
 
+
+// ─── CLASIFICADOR IA (última capa, solo EN REPOSO) ──────────────────────────
+// Jerarquía para que NUNCA se crucen los cables:
+//   1º keywords deterministas (gratis, instantáneas, precisas)
+//   2º intención de comida por reglas
+//   3º ESTA capa: gpt-4o-mini decide taxi/bus/delivery/ambulancia/favor/otro
+// Solo con el usuario en reposo, con mensajes sustanciales, y ante cualquier
+// duda la IA responde "taxi" → el flujo base procesa como siempre.
+async function clasificarConIA(phone, texto, msg, session) {
+  if (texto.length < 10 || texto.trim().split(/\s+/).length < 3) return false; // saludos/monosílabos: no gastar
+  const servicio = await clasificarIntencion(texto);
+  if (servicio === "taxi" || servicio === "otro") return false;
+  if (!moduloActivo(servicio) || !MODULOS[servicio]) return false;
+  log.info(`[MODULOS] IA clasificó "${servicio}" para ${phone}: "${texto.substring(0, 60)}"`);
+  return await MODULOS[servicio].iniciar(phone, msg, session);
+}
+
 async function procesarModulos(phone, msg, buttonId, session) {
   if (CONFIG.MODULOS_ACTIVOS.length === 0) return false;
 
@@ -192,7 +210,8 @@ async function procesarModulos(phone, msg, buttonId, session) {
       log.info(`[MODULOS] ${phone} entra a delivery por intención de comida: "${texto}"`);
       return await MODULOS.delivery.iniciar(phone, msg, session);
     }
-    return false;
+    // Última capa: clasificador IA (solo en reposo)
+    return await clasificarConIA(phone, texto, msg, session);
   }
 
   // 2b) Nota de voz: transcribir y buscar frases de módulo (matching estricto).
@@ -223,7 +242,8 @@ async function procesarModulos(phone, msg, buttonId, session) {
       log.info(`[MODULOS] ${phone} entra a delivery por comida (voz): "${transcripcion.substring(0, 60)}"`);
       return await MODULOS.delivery.iniciar(phone, msg, session);
     }
-    return false;
+    // Última capa: clasificador IA sobre la transcripción (solo en reposo)
+    return await clasificarConIA(phone, transcripcion, msg, session);
   }
 
   return false;
