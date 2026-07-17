@@ -36,14 +36,18 @@ async function resolverPuntoBus(msg, texto) {
   return null;
 }
 
-// Respuesta final: la línea + SOLO el micro que viene hacia el pasajero
-async function responderLinea(phone, origen, destino) {
+// Respuesta final: la línea + SOLO el micro que viene hacia el pasajero.
+// opts.conservarSesion: cuando se llama desde el flujo TAXI (cross-sell), la
+// sesión del pedido de taxi NO se toca — el pasajero puede seguir y pedir Auto.
+async function responderLinea(phone, origen, destino, opts = {}) {
   const candidatas = buscarLineasParaViaje(origen, destino);
   if (!candidatas.length) {
-    await deleteSession(phone);
+    if (!opts.conservarSesion) await deleteSession(phone);
     await enviarMensaje(phone,
       `😕 Ninguna de nuestras líneas cubre el tramo\n📍 ${origen.nombre}\n🏁 ${destino.nombre}\n\n` +
-      `🚖 Si querés, pedí un taxi: escribí a dónde vas y te cotizamos al toque.`);
+      (opts.conservarSesion
+        ? `🚖 Seguí con tu taxi: elegí Auto, Moto o Van arriba 👆`
+        : `🚖 Si querés, pedí un taxi: escribí a dónde vas y te cotizamos al toque.`));
     return true;
   }
 
@@ -53,7 +57,7 @@ async function responderLinea(phone, origen, destino) {
     ? `\n_También te sirve la ${candidatas[1].linea.nombre} (parada a ${candidatas[1].pO.distM} m)._`
     : "";
 
-  await deleteSession(phone);
+  if (!opts.conservarSesion) await deleteSession(phone);
   await enviarMensaje(phone,
     `🚌 *${mejor.linea.nombre}* (${mejor.linea.origen} → ${mejor.linea.destino})\n\n` +
     `📍 Tu parada queda a *${mejor.pO.distM} m* de donde estás\n` +
@@ -62,6 +66,7 @@ async function responderLinea(phone, origen, destino) {
     `(está a ${micro.kmDeDistancia} km)\n\n` +
     `🗺️ Miralo venir en vivo:\n${linkBus(mejor.linea.id, origen)}` +
     alternativa +
+    (opts.conservarSesion ? `\n\n🚖 _¿Preferís el taxi al final? Elegí Auto, Moto o Van arriba 👆_` : "") +
     `\n\n_🚧 DEMO: líneas simuladas de ChatGo Bus._`);
   log.info(`[MOD:bus] ${phone}: ${origen.nombre} → ${destino.nombre} = ${mejor.linea.nombre}, micro ${micro.id} en ${micro.etaMin} min`);
   return true;
@@ -159,4 +164,4 @@ async function procesar(phone, msg, buttonId, session) {
   }
 }
 
-module.exports = { id: "bus", iniciar, procesar };
+module.exports = { id: "bus", iniciar, procesar, responderLinea };

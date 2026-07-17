@@ -288,6 +288,21 @@ async function procesarCalculoViaje(phone, session) {
         { id: "cancelar_viaje", title: "❌ Cancelar" },
       ]
     );
+
+    // CROSS-SELL BUS: si el módulo bus está activo y alguna línea de transporte
+    // público cubre este mismo tramo, ofrecerla debajo de la cotización.
+    // La búsqueda es geometría pura (sin APIs): costo cero.
+    try {
+      if (CONFIG.MODULOS_ACTIVOS.includes("bus") && session.origen?.lat && session.destino?.lat) {
+        const { buscarLineasParaViaje } = require("../services/buslineas");
+        const lineasBus = buscarLineasParaViaje(session.origen, session.destino);
+        if (lineasBus.length) {
+          await enviarMensaje(phone,
+            `🚌 _¿Preferís transporte público? La *${lineasBus[0].linea.nombre}* también te lleva ` +
+            `(parada a ${lineasBus[0].pO.distM} m). Escribí *BUS* para ver cuál te sirve y cuándo pasa._`);
+        }
+      }
+    } catch (e) { log.warn("[CROSS_BUS]", e.message); }
   } catch (e) {
     log.error("[CALCULO_PRECIO]", e.message, e.stack);
     // Notificar al admin para investigar
@@ -2011,6 +2026,17 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
     }
 
     case "eligiendo_tipo_vehiculo": {
+      // Atajo BUS (cross-sell): mostrar qué línea de transporte público cubre
+      // este mismo tramo, SIN perder la cotización del taxi (la sesión queda
+      // intacta — puede volver y elegir Auto/Moto/Van cuando quiera)
+      if (!buttonId && textoUpper === "BUS" && CONFIG.MODULOS_ACTIVOS.includes("bus")) {
+        try {
+          const { responderLinea } = require("../modules/bus");
+          await responderLinea(phone, session.origen, session.destino, { conservarSesion: true });
+        } catch (e) { log.warn("[CROSS_BUS]", e.message); }
+        break;
+      }
+
       let tipoElegido = null;
       if (buttonId === "elegir_auto" || /\b(AUTO|CARRO|COCHE|TAXI)\b/i.test(textoUpper)) tipoElegido = "auto";
       else if (buttonId === "elegir_moto" || /\b(MOTO|MOTOCICLETA)\b/i.test(textoUpper)) tipoElegido = "moto";
