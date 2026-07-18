@@ -11,7 +11,8 @@
 const { CONFIG, log } = require("../config");
 const { updateSession, deleteSession } = require("../services/session");
 const { enviarMensaje } = require("../services/whatsapp");
-const { geocodificarConMemoria, obtenerDireccion } = require("../services/google");
+const { geocodificarConMemoria, obtenerDireccion, guardarReferenciaVoz } = require("../services/google");
+const { buscarEsquinaMapeada, guardarEsquina } = require("../services/utils");
 const { extraerUbicaciones } = require("../services/openai");
 const { buscarLineasParaViaje, microMasProximo } = require("../services/buslineas");
 const { textoDeMensaje } = require("./util");
@@ -21,12 +22,20 @@ function linkBus(lineaId, parada) {
   return `${base}/bus/${lineaId}?p=${parada.lat.toFixed(5)},${parada.lng.toFixed(5)}`;
 }
 
-async function resolverPuntoBus(msg, texto) {
+async function resolverPuntoBus(msg, texto, detalle = null) {
   const lat = parseFloat(msg?.location?.latitude ?? msg?.location?.lat);
   const lng = parseFloat(msg?.location?.longitude ?? msg?.location?.lng);
   if (!isNaN(lat) && !isNaN(lng)) {
     const nombre = (await obtenerDireccion(lat, lng).catch(() => null)) || "Tu ubicación";
     return { lat, lng, nombre };
+  }
+  // Esquina crowdsourced primero ("Juan de la Rosa y Melchor" que un vecino
+  // ya confirmó con su pin) — con match difuso anti errores de dicción
+  if (detalle?.tipo === "esquina" && detalle.calle1 && detalle.calle2) {
+    const r = await buscarEsquinaMapeada(detalle.calle1, detalle.calle2, detalle.zona || null).catch(() => null);
+    if (r?.esquina?.lat) {
+      return { lat: r.esquina.lat, lng: r.esquina.lng, nombre: `${detalle.calle1} y ${detalle.calle2}` };
+    }
   }
   if (texto) {
     const g = await geocodificarConMemoria(texto, "Cochabamba").catch(() => null);
@@ -34,6 +43,20 @@ async function resolverPuntoBus(msg, texto) {
     if (g?.lat) return { lat: g.lat, lng: g.lng, nombre: g.nombre || texto };
   }
   return null;
+}
+
+// APRENDIZAJE: cuando el usuario manda el pin de un lugar que el sistema no
+// supo resolver, esa asociación queda guardada PARA SIEMPRE (memoria de
+// referencias + esquina crowdsourced). La próxima vez nadie pide el pin.
+async function aprenderDePin(punto, textoFallido, detalle) {
+  if (!textoFallido || !punto?.lat) return;
+  try {
+    await guardarReferenciaVoz(textoFallido, punto.lat, punto.lng, punto.nombre || textoFallido, "Cochabamba");
+    if (detalle?.tipo === "esquina" && detalle.calle1 && detalle.calle2) {
+      await guardarEsquina(detalle.calle1, detalle.calle2, punto.lat, punto.lng, { zona: detalle.zona || null, ciudad: "Cochabamba" });
+    }
+    log.info(`[MOD:bus] Aprendido: "${textoFallido}" → ${punto.lat},${punto.lng}`);
+  } catch (e) { log.error("[MOD:bus] Error aprendiendo:", e.message); }
 }
 
 // Respuesta final: la línea + SOLO el micro que viene hacia el pasajero.
@@ -123,24 +146,28 @@ async function procesar(phone, msg, buttonId, session) {
         return true;
       }
 
-      // Resolver lo que tengamos
-      const origen = txtOrigen ? await resolverPuntoBus(null, txtOrigen) : null;
-      const destino = txtDestino ? await resolverPuntoBus(null, txtDestino) : null;
+      // Resolver lo que tengamos (esquinas guardadas primero, luego geocoder)
+      const detOrigen = ubi?.origenDetalle || null;
+      const detDestino = ubi?.destinoDetalle || null;
+      const origen = txtOrigen ? await resolverPuntoBus(null, txtOrigen, detOrigen) : null;
+      const destino = txtDestino ? await resolverPuntoBus(null, txtDestino, detDestino) : null;
 
       if (origen && destino) return await responderLinea(phone, origen, destino);
 
       if (destino && !origen) {
-        await updateSession(phone, { ...session, step: "mod_bus_origen", busDestino: destino });
-        await enviarMensaje(phone, `🏁 Destino: *${destino.nombre}*\n\n📍 ¿Desde dónde salís? Mandame tu ubicación (pin) o escribí el lugar.`);
+        // Guardar el TEXTO que no supimos resolver: cuando llegue el pin, se aprende
+        await updateSession(phone, { ...session, step: "mod_bus_origen", busDestino: destino, busTextoOrigen: txtOrigen || null, busDetalleOrigen: detOrigen });
+        await enviarMensaje(phone, `🏁 Destino: *${destino.nombre}*\n\n📍 ¿Desde dónde salís? Mandame tu ubicación (pin) o escribí el lugar.` + (txtOrigen ? `\n\n_No encontré "${txtOrigen}" — con tu pin lo aprendo para la próxima._` : ""));
         return true;
       }
       if (origen && !destino) {
-        await updateSession(phone, { ...session, step: "mod_bus_destino", busOrigen: origen });
-        await enviarMensaje(phone, `📍 Origen: *${origen.nombre}*\n\n🏁 ¿A dónde querés ir?`);
+        await updateSession(phone, { ...session, step: "mod_bus_destino", busOrigen: origen, busTextoDestino: txtDestino || null, busDetalleDestino: detDestino });
+        await enviarMensaje(phone, `📍 Origen: *${origen.nombre}*\n\n🏁 ¿A dónde querés ir?` + (txtDestino ? `\n\n_No encontré "${txtDestino}" — con tu pin lo aprendo para la próxima._` : ""));
         return true;
       }
 
-      await enviarMensaje(phone, `😕 No pude ubicar "${txtOrigen || txtDestino}". Probá con otro nombre o mandá tu 📍 pin.`);
+      await updateSession(phone, { ...session, step: "mod_bus_origen", busDestino: null, busTextoOrigen: txtOrigen || null, busDetalleOrigen: detOrigen, busTextoDestino: txtDestino || null, busDetalleDestino: detDestino });
+      await enviarMensaje(phone, `😕 No pude ubicar "${txtOrigen || txtDestino}". Mandame tu 📍 pin (lo aprendo para la próxima) o probá con otro nombre.`);
       return true;
     }
 
@@ -148,6 +175,13 @@ async function procesar(phone, msg, buttonId, session) {
     case "mod_bus_origen": {
       const origen = await resolverPuntoBus(msg, texto);
       if (!origen) { await enviarMensaje(phone, "🙏 Mandame tu 📍 ubicación o escribí el lugar de donde salís."); return true; }
+      // Si vino por PIN y había un texto que no supimos resolver: APRENDER
+      if (msg?.location && session.busTextoOrigen) await aprenderDePin(origen, session.busTextoOrigen, session.busDetalleOrigen);
+      if (!session.busDestino) {
+        await updateSession(phone, { ...session, step: "mod_bus_destino", busOrigen: origen });
+        await enviarMensaje(phone, `📍 Origen: *${origen.nombre}*\n\n🏁 ¿A dónde querés ir?`);
+        return true;
+      }
       return await responderLinea(phone, origen, session.busDestino);
     }
 
@@ -155,6 +189,7 @@ async function procesar(phone, msg, buttonId, session) {
     case "mod_bus_destino": {
       const destino = await resolverPuntoBus(msg, texto);
       if (!destino) { await enviarMensaje(phone, "🙏 Escribime a dónde vas o mandá el 📍 pin del lugar."); return true; }
+      if (msg?.location && session.busTextoDestino) await aprenderDePin(destino, session.busTextoDestino, session.busDetalleDestino);
       return await responderLinea(phone, session.busOrigen, destino);
     }
 

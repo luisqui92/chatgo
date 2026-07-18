@@ -30,9 +30,12 @@ async function _usuarioUsaVoz(phone) {
   const cached = _vozCache.get(phone);
   if (cached && Date.now() - cached.ts < 60000) return cached.usaVoz;
   try {
+    // La VOZ es SOLO para cuentas de adulto mayor registradas por su familia
+    // (modoAdultoMayor / respuestasPorVoz). El "espejo" de responder con voz
+    // a cualquiera que mande audio se eliminó: la mayoría pide por audio pero
+    // quiere LEER la respuesta, y el TTS a veces no se entiende (caso real).
     const usuario = await Usuario.findUnique({ where: { phone } });
-    const session = await getSession(phone);
-    const usaVoz = !!(usuario?.respuestasPorVoz || usuario?.modoAdultoMayor || session?.ultimaInteraccionVoz);
+    const usaVoz = !!(usuario?.respuestasPorVoz || usuario?.modoAdultoMayor);
     _vozCache.set(phone, { usaVoz, ts: Date.now() });
     return usaVoz;
   } catch {
@@ -1017,7 +1020,8 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
     // OPCIÓN C - ESPEJO: el usuario mandó audio → el bot le responde por voz
     await updateSession(phone, { ...session, ultimaInteraccionVoz: true });
     session = { ...session, ultimaInteraccionVoz: true };
-    _setVozCache(phone, true); // activar voz al instante (sin esperar la DB)
+    // (la voz de respuesta ya NO se activa por mandar audio: solo cuentas
+    // de adulto mayor registradas — ver _usuarioUsaVoz)
 
     // INTERCEPCIÓN: si estamos esperando que confirme el viaje por voz (sí/no),
     // transcribir el audio corto e interpretarlo como sí o no.
