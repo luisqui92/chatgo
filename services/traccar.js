@@ -104,29 +104,42 @@ async function buscarChoferDisponibleTraccar(origenUsuario, excludeTraccarIds = 
     data: { viajeReservado: null, reservadoHasta: null },
   });
 
-  // CHOFER DE PRUEBA: se le asigna el viaje sin importar ciudad/distancia/
-  // tiempo, mientras tenga GPS en vivo y no haya sido excluido en este
-  // mismo intento (para no reintentar infinito si no responde). El pago
-  // diario SÍ se exige igual que a cualquier chofer real — el objetivo es
-  // poder probar el flujo de cobro de punta a punta con este número.
-  if (CONFIG.CHOFER_PRUEBA_PHONE) {
-    const choferPrueba = await Chofer.findUnique({ where: { phone: CONFIG.CHOFER_PRUEBA_PHONE } });
-    // Ambulancias: servicio comunitario gratuito — sin exigencia de pago tampoco en pruebas
-    const pagoOk = tipoVehiculo === "ambulancia" || enPromoGratis() || choferPagoAlDia(choferPrueba);
-    if (choferPrueba?.traccarId && pagoOk && !excludeTraccarIds.includes(choferPrueba.traccarId)) {
-      await asegurarSnapshot();
+  // CHOFERES DE PRUEBA (SUPERCHOFERES forzados): se les asigna el viaje sin
+  // importar ciudad/distancia/tiempo, mientras tengan GPS en vivo y no hayan
+  // sido excluidos en este mismo intento (para no reintentar infinito si no
+  // responden). El pago diario SÍ se exige igual que a cualquier chofer real —
+  // el objetivo es poder probar el flujo de cobro de punta a punta.
+  // Con VARIOS números se ve la SECUENCIA de llegada: el más cercano recibe
+  // primero, y como cada rechazo/timeout lo agrega a excludeTraccarIds, el
+  // siguiente intento cae en el siguiente superchofer más cercano.
+  const pruebaPhones = CONFIG.CHOFER_PRUEBA_PHONES || (CONFIG.CHOFER_PRUEBA_PHONE ? [CONFIG.CHOFER_PRUEBA_PHONE] : []);
+  if (pruebaPhones.length) {
+    await asegurarSnapshot();
+    const candidatosPrueba = [];
+    for (const phone of pruebaPhones) {
+      const choferPrueba = await Chofer.findUnique({ where: { phone } });
+      // Ambulancias: servicio comunitario gratuito — sin exigencia de pago tampoco en pruebas
+      const pagoOk = tipoVehiculo === "ambulancia" || enPromoGratis() || choferPagoAlDia(choferPrueba);
+      if (!choferPrueba?.traccarId || !pagoOk || excludeTraccarIds.includes(choferPrueba.traccarId)) continue;
       const dev = snapshotDispositivos[String(choferPrueba.traccarId)];
       const pos = snapshotPosiciones[String(choferPrueba.traccarId)];
-      if (dev?.positionId && pos) {
-        log.info(`[TRACCAR_PRUEBA] Forzando asignación al chofer de prueba ${CONFIG.CHOFER_PRUEBA_PHONE}`);
-        return {
-          ...choferPrueba,
-          ubicacion: { lat: pos.latitude, lng: pos.longitude, minutos: 0 },
-          distanciaAlUsuario: distanciaEntrePuntos(origenUsuario.lat, origenUsuario.lng, pos.latitude, pos.longitude),
-        };
+      if (!dev?.positionId || !pos) {
+        log.warn(`[TRACCAR_PRUEBA] Chofer de prueba ${phone} sin posición GPS en vivo`);
+        continue;
       }
-      log.warn(`[TRACCAR_PRUEBA] Chofer de prueba sin posición GPS en vivo, sigue flujo normal`);
+      candidatosPrueba.push({
+        ...choferPrueba,
+        ubicacion: { lat: pos.latitude, lng: pos.longitude, minutos: 0 },
+        distanciaAlUsuario: distanciaEntrePuntos(origenUsuario.lat, origenUsuario.lng, pos.latitude, pos.longitude),
+      });
     }
+    if (candidatosPrueba.length) {
+      candidatosPrueba.sort((a, b) => a.distanciaAlUsuario - b.distanciaAlUsuario);
+      const elegido = candidatosPrueba[0];
+      log.info(`[TRACCAR_PRUEBA] Forzando asignación al superchofer ${elegido.phone} (${candidatosPrueba.length} de prueba disponibles, más cercano a ${elegido.distanciaAlUsuario.toFixed(1)} km)`);
+      return elegido;
+    }
+    log.warn(`[TRACCAR_PRUEBA] Ningún chofer de prueba disponible con GPS en vivo, sigue flujo normal`);
   }
 
   const hoyStr = fechaStrBolivia();

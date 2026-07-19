@@ -41,10 +41,17 @@ const CONFIG = {
   MAX_REINTENTOS_ASIGNAR: 5,
   // TTL para deduplicación de mensajes WA (ms)
   MSG_DEDUP_TTL: 5 * 60 * 1000,
-  // Chofer de pruebas: siempre se le asigna el viaje sin filtros de
-  // estado/pago/ciudad/distancia (mientras tenga GPS en vivo y no haya
-  // sido excluido en este mismo intento de asignación).
-  CHOFER_PRUEBA_PHONE: process.env.CHOFER_PRUEBA_PHONE || "59176496075",
+  // Choferes de prueba (SUPERCHOFERES forzados): siempre se les asigna el
+  // viaje sin filtros de estado/pago/ciudad/distancia (mientras tengan GPS en
+  // vivo y no hayan sido excluidos en este mismo intento). Acepta VARIOS
+  // números separados por coma para ver la secuencia de llegada de trabajos:
+  // el más cercano recibe primero, y si rechaza/vence pasa al siguiente.
+  // CHOFER_PRUEBA_PHONE queda por retrocompatibilidad (primer número).
+  CHOFER_PRUEBA_PHONE: (process.env.CHOFER_PRUEBA_PHONE || "59176496075").split(",")[0].trim(),
+  CHOFER_PRUEBA_PHONES: (process.env.CHOFER_PRUEBA_PHONE || "59176496075")
+    .split(",")
+    .map((n) => n.trim())
+    .filter(Boolean),
   // Cuota diaria que debe pagar cada chofer (en Bs)
   CUOTA_DIARIA_BS: Number(process.env.CUOTA_DIARIA_BS || 10),
   // Secreto compartido para validar notificaciones de pago bancario (MacroDroid → webhook).
