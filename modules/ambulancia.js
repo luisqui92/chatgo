@@ -123,6 +123,7 @@ async function despacharEmergencia(phone, ubi, descripcion, esGenerica = false, 
 
   // 2) Despacho automático (unidad con GPS)
   let despachada = false;
+  let unidadDespachadaPhone = null;
   try {
     const unidad = await buscarChoferDisponibleTraccar(ubi, [], "ambulancia");
     if (unidad) {
@@ -141,6 +142,7 @@ async function despacharEmergencia(phone, ubi, descripcion, esGenerica = false, 
       const reservada = await reservarChoferTraccar(unidad.traccarId, viaje.id);
       if (reservada) {
         despachada = true;
+        unidadDespachadaPhone = unidad.phone;
         if (solicitudId) await Solicitud.update({ where: { id: solicitudId }, data: { viajeId: viaje.id, estado: "asignada", asignadoPhone: unidad.phone } }).catch(() => {});
         await enviarBotones(unidad.phone,
           `🚨🚑 *EMERGENCIA MÉDICA — PRIORIDAD ${prioridad.toUpperCase()}*\n\n` +
@@ -170,21 +172,32 @@ async function despacharEmergencia(phone, ubi, descripcion, esGenerica = false, 
   const guia = guiaPrimerosAuxilios(descripcion);
   if (guia) await enviarMensaje(phone, guia);
 
-  // 4) Sin unidad con GPS → difundir a TODA la red (servicio gratuito)
-  if (!despachada) {
-    try {
-      const red = await Chofer.findMany({ where: { tipoVehiculo: { in: ["ambulancia", "todo"] } }, take: 20 });
-      for (const unidad of red) {
-        enviarMensaje(unidad.phone,
-          `🚨🚑 *EMERGENCIA EN LA ZONA — ChatGo Ambulancias*\n\n` +
-          `🩺 ${descripcion}\n📍 ${ubi.nombre}\n` +
-          `🗺️ https://maps.google.com/?q=${ubi.lat},${ubi.lng}\n\n` +
-          `Si podés atenderla, respondé este mensaje y coordinamos de inmediato.`).catch(() => {});
-        if (audioId) reenviarAudioPorId(unidad.phone, audioId).catch(() => {});
-      }
-      if (red.length) log.info(`[MOD:ambulancia] Difundido a ${red.length} unidades de la red`);
-    } catch (e) { log.error("[MOD:ambulancia] Error difundiendo:", e.message); }
+  // 4) Difundir a TODA la red SIEMPRE (servicio comunitario gratuito): aunque
+  // ya se haya despachado a la unidad más cercana, se avisa al resto como
+  // respaldo — por si el más cercano no puede ir, alguien más está listo.
+  // A la unidad que YA recibió el despacho directo (botón VOY) no se le
+  // reenvía el aviso general para no duplicarle el mensaje.
+  try {
+    const red = await Chofer.findMany({ where: { tipoVehiculo: { in: ["ambulancia", "todo"] } }, take: 20 });
+    let avisados = 0;
+    for (const unidad of red) {
+      if (unidadDespachadaPhone && unidad.phone === unidadDespachadaPhone) continue;
+      enviarMensaje(unidad.phone,
+        `🚨🚑 *EMERGENCIA EN LA ZONA — ChatGo Ambulancias*\n\n` +
+        `🩺 ${descripcion}\n📍 ${ubi.nombre}\n` +
+        `🗺️ https://maps.google.com/?q=${ubi.lat},${ubi.lng}\n\n` +
+        (despachada
+          ? `Ya hay una unidad en camino, pero si estás *más cerca* respondé este mensaje para reforzar. 🙏`
+          : `Si podés atenderla, respondé este mensaje y coordinamos de inmediato.`)).catch(() => {});
+      if (audioId) reenviarAudioPorId(unidad.phone, audioId).catch(() => {});
+      avisados++;
+    }
+    if (avisados) log.info(`[MOD:ambulancia] Difundido a ${avisados} unidades de la red (respaldo${despachada ? ", ya había despacho directo" : ""})`);
+  } catch (e) { log.error("[MOD:ambulancia] Error difundiendo:", e.message); }
 
+  // Si NO se pudo despachar a una unidad con GPS, avisamos al usuario que la
+  // alerta salió a la red y que llame ya a emergencias.
+  if (!despachada) {
     await enviarMensaje(phone,
       `🚑 *Alerta enviada a la red — prioridad ${prioridad.toUpperCase()}*\n\n` +
       `🚨 *Llama YA a los servicios de emergencia de tu ciudad* (SAMU / Cruz Roja / 110) — no esperes.\n\n` +
