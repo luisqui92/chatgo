@@ -100,13 +100,15 @@ async function altaUno(phone, nombre) {
   const uniqueId = phone.startsWith("591") ? phone.slice(3) : phone;
   const { lat, lng } = coordDe(phone);
 
-  // 1. Dispositivo Traccar (crear o reutilizar)
+  // 1. Dispositivo Traccar (reutilizar el que ya tienen; crear solo si falta)
   let deviceId = null;
+  let tieneGpsVivo = false;
   try {
     const existentes = await traccarReq("GET", `/api/devices?uniqueId=${uniqueId}`);
     if (Array.isArray(existentes) && existentes.length) {
       deviceId = existentes[0].id;
-      console.log(`  · Dispositivo Traccar ya existía → id=${deviceId}`);
+      tieneGpsVivo = !!existentes[0].positionId; // ya reportó posición al menos una vez
+      console.log(`  · Dispositivo Traccar ya existía → id=${deviceId}${tieneGpsVivo ? " (con GPS en vivo ✔️)" : " (todavía sin posición)"}`);
     } else {
       const dev = await traccarReq("POST", "/api/devices", { name: `TEST ${nombre} (${uniqueId})`, uniqueId });
       if (dev?.id) { deviceId = dev.id; console.log(`  · Dispositivo Traccar creado → id=${deviceId}`); }
@@ -116,12 +118,15 @@ async function altaUno(phone, nombre) {
     console.log(`  ⚠️ Error con Traccar (¿TRACCAR_USER/PASS en el .env?): ${e.message}`);
   }
 
-  // 2. Posición inicial vía OsMand (para que tenga GPS en vivo sin app)
-  if (deviceId) {
+  // 2. Posición: si ya tienen la app de GPS reportando, NO la tocamos (su
+  // ubicación real manda). Solo sembramos una posición inicial si el
+  // dispositivo todavía no reportó nunca, para que sea asignable de una.
+  if (deviceId && !tieneGpsVivo) {
     const code = await enviarPosicionOsmand(uniqueId, lat, lng);
-    if (code >= 200 && code < 300) console.log(`  · Posición GPS inicial cargada en ${lat.toFixed(4)},${lng.toFixed(4)} (OsMand ${code})`);
-    else console.log(`  ⚠️ No se pudo cargar la posición (OsMand puerto ${OSMAND_PORT} respondió ${code}). ` +
-      `Igual queda dado de alta; la posición se llenará cuando el celular abra la app de GPS, o reintentá con OSMAND_PORT correcto.`);
+    if (code >= 200 && code < 300) console.log(`  · Posición inicial sembrada en ${lat.toFixed(4)},${lng.toFixed(4)} (se actualizará sola cuando el celular reporte)`);
+    else console.log(`  ⚠️ No se pudo sembrar posición (OsMand puerto ${OSMAND_PORT} respondió ${code}). Igual queda de alta; se llenará cuando su app de GPS reporte.`);
+  } else if (tieneGpsVivo) {
+    console.log(`  · Uso su GPS real (no se toca su ubicación).`);
   }
 
   // 3. Chofer en la base como SUPERCHOFER
