@@ -144,6 +144,17 @@ function generarHTML({ viajeId, origenLat, origenLng, origenNombre, destinoLat, 
     .spinner { width: 36px; height: 36px; border: 3px solid #1e293b; border-top-color: #22d3ee; border-radius: 50%; animation: spin .8s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
 
+    #btn-aqui {
+      position: absolute; z-index: 9;
+      right: 12px; bottom: 16px;
+      display: flex; align-items: center; gap: 6px;
+      background: #0f172a; color: #22d3ee;
+      border: 1px solid #22d3ee; border-radius: 999px;
+      padding: 9px 15px; font-size: 14px; font-weight: 700;
+      box-shadow: 0 3px 12px rgba(0,0,0,.45); cursor: pointer;
+    }
+    #btn-aqui:active { background: #164e63; }
+
     #footer {
       background: #0f172a;
       padding: 10px 14px;
@@ -203,6 +214,7 @@ function generarHTML({ viajeId, origenLat, origenLng, origenNombre, destinoLat, 
       <div class="spinner"></div>
       <span style="font-size:13px">Cargando mapa y tráfico…</span>
     </div>
+    <button id="btn-aqui" onclick="centrarEnChofer()" title="Centrar en mi ubicación">📍 Aquí estoy</button>
   </div>
 
   <div id="footer">
@@ -258,6 +270,8 @@ function generarHTML({ viajeId, origenLat, origenLng, origenNombre, destinoLat, 
 
     // ── MAPA + RUTAS ──────────────────────────────────────────────────────
     let map, rendererPrincipal, polysAlternativas = [], etaAnteriorMin = null;
+    // Ubicación EN VIVO del chofer (GPS del propio celular)
+    let choferMarker = null, seguirChofer = true, tengoUbiChofer = false, watchIdChofer = null;
 
     function initMap() {
       const loading = document.getElementById("map-loading");
@@ -288,9 +302,69 @@ function generarHTML({ viajeId, origenLat, origenLng, origenNombre, destinoLat, 
       new google.maps.Marker({ position: origen, map, zIndex: 3, title: "Origen", icon: svgPin("#22c55e", "A") });
       new google.maps.Marker({ position: destino, map, zIndex: 3, title: "Destino", icon: svgPin("#ef4444", "B") });
 
+      // Si el chofer arrastra el mapa, dejamos de seguirlo (para que pueda
+      // mirar adelante). El botón "Aquí estoy" vuelve a activar el seguimiento.
+      map.addListener("dragstart", () => { seguirChofer = false; });
+
+      iniciarSeguimientoChofer();
       calcularRuta(true);
       // Re-chequear el tráfico cada 2 minutos: si empeora, el copiloto avisa
       setInterval(() => calcularRuta(false), 120000);
+    }
+
+    // ── UBICACIÓN EN VIVO DEL CHOFER ──────────────────────────────────────
+    // Ícono de auto (vista superior) que APUNTA hacia donde se mueve y se
+    // actualiza en cada cambio de posición del GPS del celular.
+    function iconoAuto(rumbo) {
+      const rot = (typeof rumbo === "number" && !isNaN(rumbo)) ? rumbo : 0;
+      const svg = \`<svg xmlns="http://www.w3.org/2000/svg" width="42" height="42" viewBox="0 0 42 42">
+        <g transform="rotate(\${rot} 21 21)">
+          <circle cx="21" cy="21" r="20" fill="#22d3ee" fill-opacity="0.16"/>
+          <rect x="14" y="9" width="14" height="24" rx="5" fill="#f5b73d" stroke="#5a4310" stroke-width="1.6"/>
+          <rect x="16" y="12" width="10" height="6" rx="2" fill="#0d1411" fill-opacity="0.75"/>
+          <rect x="16" y="24" width="10" height="5" rx="2" fill="#0d1411" fill-opacity="0.45"/>
+          <circle cx="21" cy="7" r="2.4" fill="#ffffff"/>
+        </g>
+      </svg>\`;
+      return {
+        url: "data:image/svg+xml;charset=UTF-8," + encodeURIComponent(svg),
+        scaledSize: new google.maps.Size(42, 42),
+        anchor: new google.maps.Point(21, 21)
+      };
+    }
+
+    function iniciarSeguimientoChofer() {
+      if (!navigator.geolocation) {
+        mostrarAviso("amarillo", "⚠️ Tu teléfono no permite ubicación en vivo. Podés navegar igual con el botón de abajo.");
+        return;
+      }
+      watchIdChofer = navigator.geolocation.watchPosition(
+        (pos) => {
+          const p = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+          if (!choferMarker) {
+            choferMarker = new google.maps.Marker({
+              position: p, map, zIndex: 6, title: "Tu ubicación", icon: iconoAuto(pos.coords.heading)
+            });
+          } else {
+            choferMarker.setPosition(p);
+            choferMarker.setIcon(iconoAuto(pos.coords.heading));
+          }
+          if (!tengoUbiChofer) { tengoUbiChofer = true; map.setCenter(p); map.setZoom(16); }
+          else if (seguirChofer) { map.panTo(p); }
+        },
+        (err) => {
+          const msg = err.code === 1
+            ? "⚠️ Activá el permiso de ubicación para ver tu auto en el mapa."
+            : "⚠️ No pudimos leer tu GPS. Revisá que la ubicación esté encendida.";
+          mostrarAviso("amarillo", msg);
+        },
+        { enableHighAccuracy: true, maximumAge: 2000, timeout: 20000 }
+      );
+    }
+
+    function centrarEnChofer() {
+      seguirChofer = true;
+      if (choferMarker) { map.panTo(choferMarker.getPosition()); map.setZoom(16); }
     }
 
     function calcularRuta(esPrimeraVez) {
@@ -327,6 +401,7 @@ function generarHTML({ viajeId, origenLat, origenLng, origenNombre, destinoLat, 
         strokeColor: "#3b82f6", strokeOpacity: 0.6, strokeWeight: 4,
         icons: [{ icon: { path: "M 0,-1 0,1", strokeOpacity: 1, scale: 3 }, offset: "0", repeat: "14px" }]
       });
+      if (tengoUbiChofer) return; // ya seguimos al chofer: no le movemos la vista
       const b = new google.maps.LatLngBounds();
       puntos.forEach(p => b.extend(p));
       map.fitBounds(b, 60);
@@ -360,8 +435,9 @@ function generarHTML({ viajeId, origenLat, origenLng, origenNombre, destinoLat, 
         strokeColor: "#3b82f6", strokeWeight: 6, strokeOpacity: 0.9, zIndex: 2
       });
 
-      // Encuadrar el mapa a la ruta (solo la primera vez)
-      if (esPrimeraVez && rutas[mejorIdx].puntos.length) {
+      // Encuadrar el mapa a la ruta (solo la primera vez, y solo si todavía
+      // no estamos siguiendo al chofer — su ubicación en vivo tiene prioridad)
+      if (esPrimeraVez && rutas[mejorIdx].puntos.length && !tengoUbiChofer) {
         const b = new google.maps.LatLngBounds();
         rutas[mejorIdx].puntos.forEach(p => b.extend(p));
         map.fitBounds(b, 60);
