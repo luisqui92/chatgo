@@ -9,6 +9,7 @@ const CONFIG = {
   VERIFY_TOKEN: process.env.VERIFY_TOKEN,
   META_APP_SECRET: process.env.META_APP_SECRET,
   GOOGLE_MAPS_KEY: process.env.GOOGLE_MAPS_KEY,
+  GOOGLE_MAP_ID: process.env.GOOGLE_MAP_ID || "", // Map ID vectorial → navegación 3D (inclinación + rotación)
   OPENAI_KEY: process.env.OPENAI_KEY,
   MONGODB_URI: process.env.MONGODB_URI,
   ADMIN_PHONE: process.env.ADMIN_PHONE || "59162741818",

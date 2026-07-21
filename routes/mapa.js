@@ -65,6 +65,7 @@ module.exports = function (app) {
         paradas,
         linkGmaps,
         apiKey: CONFIG.GOOGLE_MAPS_KEY || "",
+        mapId: CONFIG.GOOGLE_MAP_ID || "",
       });
 
       res.setHeader("Content-Type", "text/html; charset=utf-8");
@@ -87,7 +88,7 @@ background:#0c1310;color:#e7efe9;font-family:system-ui,sans-serif;text-align:cen
 <p>Este enlace de navegación ya no está activo porque el viaje terminó.<br><br>Cuando tomes un nuevo viaje, ChatGo te manda un enlace nuevo.</p></div></body></html>`;
 }
 
-function generarHTML({ viajeId, origenLat, origenLng, origenNombre, destinoLat, destinoLng, destinoNombre, paradas, linkGmaps, apiKey }) {
+function generarHTML({ viajeId, origenLat, origenLng, origenNombre, destinoLat, destinoLng, destinoNombre, paradas, linkGmaps, apiKey, mapId }) {
   const paradasJson = JSON.stringify(paradas);
 
   return `<!DOCTYPE html>
@@ -211,9 +212,69 @@ function generarHTML({ viajeId, origenLat, origenLng, origenNombre, destinoLat, 
       color: #64748b; font-size: 12.5px; text-decoration: none; font-weight: 600;
     }
     #btn-gmaps:active { color: #94a3b8; }
+
+    /* ══ MODO NAVEGACIÓN 3D (estilo Google/Waze, colores ChatGo) ══ */
+    body.nav #header { display: none; }               /* pantalla completa al mapa */
+    body.nav #footer { display: none; }
+    body.nav #maniobra { display: none; }             /* usamos el banner grande */
+    body.nav #btn-aqui { bottom: 96px; }              /* subir el botón sobre la barra */
+
+    /* Cartel grande de maniobra (arriba), estilo nav */
+    #nav-top {
+      position: fixed; z-index: 30; top: 0; left: 0; right: 0;
+      display: none; align-items: center; gap: 15px;
+      background: #0f172a; color: #fff;
+      padding: 14px 18px; padding-top: max(14px, env(safe-area-inset-top));
+      box-shadow: 0 4px 18px rgba(0,0,0,.5);
+      border-bottom: 2px solid #22d3ee;
+    }
+    body.nav #nav-top { display: flex; }
+    #nav-flecha {
+      font-size: 44px; font-weight: 800; line-height: 1;
+      min-width: 52px; text-align: center; color: #22d3ee;
+    }
+    #nav-top .txt { min-width: 0; flex: 1; }
+    #nav-dist { font-size: 26px; font-weight: 800; line-height: 1.1; }
+    #nav-instr { font-size: 15px; font-weight: 600; color: #cbd5e1; margin-top: 2px;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+    /* Barra inferior: velocidad + ETA + salir (gradiente ChatGo) */
+    #nav-bottom {
+      position: fixed; z-index: 30; left: 0; right: 0; bottom: 0;
+      display: none; align-items: center; gap: 12px;
+      background: linear-gradient(135deg, #0e7490, #0f172a);
+      padding: 12px 16px; padding-bottom: max(12px, env(safe-area-inset-bottom));
+      box-shadow: 0 -4px 18px rgba(0,0,0,.5);
+    }
+    body.nav #nav-bottom { display: flex; }
+    #nav-vel { text-align: center; min-width: 62px; }
+    #nav-vel .n { font-size: 24px; font-weight: 800; color: #fff; line-height: 1; }
+    #nav-vel .u { font-size: 10px; color: #7dd3fc; letter-spacing: .5px; }
+    #nav-eta { flex: 1; text-align: center; color: #e2e8f0; }
+    #nav-eta .t { font-size: 20px; font-weight: 800; color: #22d3ee; line-height: 1.1; }
+    #nav-eta .d { font-size: 12px; color: #94a3b8; margin-top: 1px; }
+    #nav-salir {
+      background: rgba(255,255,255,.12); color: #fff; border: none;
+      border-radius: 10px; padding: 10px 14px; font-size: 13px; font-weight: 700; cursor: pointer;
+    }
+    #nav-salir:active { background: rgba(255,255,255,.22); }
   </style>
 </head>
 <body>
+  <!-- Modo navegación 3D: cartel de maniobra (arriba) y barra de velocidad/ETA (abajo) -->
+  <div id="nav-top">
+    <div id="nav-flecha">↑</div>
+    <div class="txt">
+      <div id="nav-dist">—</div>
+      <div id="nav-instr">Iniciando navegación…</div>
+    </div>
+  </div>
+  <div id="nav-bottom">
+    <div id="nav-vel"><div class="n" id="nav-vel-n">0</div><div class="u">km/h</div></div>
+    <div id="nav-eta"><div class="t" id="nav-eta-t">—</div><div class="d" id="nav-eta-d">al destino</div></div>
+    <button id="nav-salir" onclick="salirNavegacion()">✕ Salir</button>
+  </div>
+
   <div id="header">
     <div id="brand">
       <span>🚖</span>
@@ -279,6 +340,7 @@ function generarHTML({ viajeId, origenLat, origenLng, origenNombre, destinoLat, 
       destinoLng: ${destinoLng},
       paradas:    ${paradasJson}
     };
+    const MAP_ID = "${mapId || ""}"; // Map ID vectorial → 3D (inclinación + rotación heading-up)
 
     // ── COPILOTO DE VOZ (speechSynthesis del navegador: gratis y sin red) ──
     let vozActiva = true;
@@ -321,6 +383,7 @@ function generarHTML({ viajeId, origenLat, origenLng, origenNombre, destinoLat, 
     // Ubicación EN VIVO del chofer (GPS del propio celular)
     let choferMarker = null, seguirChofer = true, tengoUbiChofer = false, watchIdChofer = null;
     let navMode = false, ultimaPosChofer = null; // navegación turn-by-turn propia de ChatGo
+    let soporta3D = false, etaMin = null; // 3D disponible + ETA para la barra inferior
 
     function initMap() {
       const loading = document.getElementById("map-loading");
@@ -329,7 +392,7 @@ function generarHTML({ viajeId, origenLat, origenLng, origenNombre, destinoLat, 
       const origen  = { lat: VIAJE.origenLat,  lng: VIAJE.origenLng  };
       const destino = { lat: VIAJE.destinoLat, lng: VIAJE.destinoLng };
 
-      map = new google.maps.Map(mapEl, {
+      const opcionesMapa = {
         center: origen,
         zoom: 14,
         mapTypeControl: false,
@@ -337,11 +400,19 @@ function generarHTML({ viajeId, origenLat, origenLng, origenNombre, destinoLat, 
         fullscreenControl: false,
         zoomControl: true,
         gestureHandling: "greedy",
-        styles: [
+      };
+      // Con Map ID vectorial: mapa 3D (permite inclinación y rotación). Sin él:
+      // mapa raster clásico con estilos (la navegación funciona igual, pero 2D).
+      if (MAP_ID) {
+        opcionesMapa.mapId = MAP_ID;
+      } else {
+        opcionesMapa.styles = [
           { featureType: "poi.business", stylers: [{ visibility: "off" }] },
           { featureType: "transit",      stylers: [{ visibility: "off" }] }
-        ]
-      });
+        ];
+      }
+      map = new google.maps.Map(mapEl, opcionesMapa);
+      soporta3D = !!MAP_ID;
 
       // Tráfico en tiempo real
       new google.maps.TrafficLayer().setMap(map);
@@ -397,10 +468,21 @@ function generarHTML({ viajeId, origenLat, origenLng, origenNombre, destinoLat, 
             choferMarker.setPosition(p);
           }
           ultimaPosChofer = p;
-          if (!tengoUbiChofer) { tengoUbiChofer = true; map.setZoom(navMode ? 17 : 16); }
+          if (!tengoUbiChofer) { tengoUbiChofer = true; map.setZoom(navMode ? 18 : 16); }
           // El auto (logo de ChatGo) SIEMPRE queda en el centro; la ruta ya recorrida se borra.
           map.panTo(p);
           recortarRuta(p);
+          // En modo navegación 3D: girar el mapa hacia el rumbo (heading-up),
+          // inclinarlo y mostrar la velocidad del GPS.
+          if (navMode) {
+            const rumbo = pos.coords.heading;
+            if (soporta3D && typeof rumbo === "number" && !isNaN(rumbo)) {
+              map.moveCamera({ center: p, heading: rumbo, tilt: 55, zoom: 18 });
+            }
+            const vel = pos.coords.speed; // m/s
+            const kmh = (typeof vel === "number" && vel >= 0) ? Math.round(vel * 3.6) : null;
+            document.getElementById("nav-vel-n").textContent = kmh == null ? "—" : kmh;
+          }
           actualizarNavegacion(p); // maniobra + voz paso a paso
         },
         (err) => {
@@ -437,25 +519,35 @@ function generarHTML({ viajeId, origenLat, origenLng, origenNombre, destinoLat, 
       if (choferMarker) { map.panTo(choferMarker.getPosition()); map.setZoom(navMode ? 17 : 16); }
     }
 
-    // ── Navegación turn-by-turn PROPIA de ChatGo (nuestros colores, sin salir de la app) ──
+    // ── Navegación turn-by-turn 3D PROPIA de ChatGo (estilo Waze/Google, nuestros colores) ──
     function iniciarNavegacion() {
       navMode = true;
       seguirChofer = true;
-      if (!vozActiva) toggleVoz();   // asegurar la voz encendida
-      pedirWakeLock();               // pantalla siempre encendida
-      const b = document.getElementById("btn-navegar");
-      b.classList.add("activo");
-      b.innerHTML = "🧭 Navegando… (tocá para recentrar)";
-      b.onclick = centrarEnChofer;   // en modo nav, el botón recentра el auto
-      document.getElementById("maniobra").classList.add("show");
-      if (choferMarker) { map.panTo(choferMarker.getPosition()); map.setZoom(17); }
+      document.body.classList.add("nav");   // pantalla completa + banners de navegación
+      setTimeout(() => window.dispatchEvent(new Event("resize")), 60); // el mapa ocupa toda la pantalla
+      if (!vozActiva) toggleVoz();           // asegurar la voz encendida
+      pedirWakeLock();                       // pantalla siempre encendida
+      if (etaMin != null) document.getElementById("nav-eta-t").textContent = etaMin + " min";
+      if (choferMarker) {
+        const p = { lat: choferMarker.getPosition().lat(), lng: choferMarker.getPosition().lng() };
+        if (soporta3D) map.moveCamera({ center: p, tilt: 55, zoom: 18 });
+        else { map.panTo(p); map.setZoom(18); }
+      }
       if (ultimaPosChofer && pasos.length) {
         recomputarIdxPaso(ultimaPosChofer);
         actualizarNavegacion(ultimaPosChofer);
       } else {
-        document.getElementById("man-instr").textContent = "Buscando tu ubicación…";
-        document.getElementById("man-dist").textContent = "";
+        document.getElementById("nav-instr").textContent = "Buscando tu ubicación…";
+        document.getElementById("nav-dist").textContent = "";
       }
+    }
+
+    function salirNavegacion() {
+      navMode = false;
+      document.body.classList.remove("nav");
+      setTimeout(() => window.dispatchEvent(new Event("resize")), 60);
+      try { if (soporta3D) map.moveCamera({ tilt: 0, heading: 0 }); } catch (e) {}
+      if (choferMarker) { map.panTo(choferMarker.getPosition()); map.setZoom(16); }
     }
 
     // Recorta la ruta: borra lo YA recorrido y deja solo lo que falta (como una
@@ -509,10 +601,18 @@ function generarHTML({ viajeId, origenLat, origenLng, origenNombre, destinoLat, 
       while (idxPaso < pasos.length - 1 && distM(p.lat, p.lng, pasos[idxPaso].lat, pasos[idxPaso].lng) < 22) idxPaso++;
       const paso = pasos[idxPaso];
       const d = Math.round(distM(p.lat, p.lng, paso.lat, paso.lng));
+      const distTxt = d >= 1000 ? (d / 1000).toFixed(1) + " km" : d + " m";
+      const flechaTxt = flecha(paso.maniobra);
+      const instrTxt = paso.instruccion || "Seguí derecho";
+      // Cartel chico (modo mapa normal)
       document.getElementById("maniobra").classList.add("show");
-      document.getElementById("man-flecha").textContent = flecha(paso.maniobra);
-      document.getElementById("man-instr").textContent = paso.instruccion || "Seguí derecho";
-      document.getElementById("man-dist").textContent = d >= 1000 ? (d / 1000).toFixed(1) + " km" : d + " m";
+      document.getElementById("man-flecha").textContent = flechaTxt;
+      document.getElementById("man-instr").textContent = instrTxt;
+      document.getElementById("man-dist").textContent = distTxt;
+      // Cartel grande (modo navegación 3D)
+      document.getElementById("nav-flecha").textContent = flechaTxt;
+      document.getElementById("nav-dist").textContent = distTxt;
+      document.getElementById("nav-instr").textContent = instrTxt;
       const texto = paso.instruccion || "seguí derecho";
       if (d <= 170 && avisoLejos !== idxPaso) { avisoLejos = idxPaso; hablar("En " + d + " metros, " + texto); }
       if (d <= 45 && avisoCerca !== idxPaso) { avisoCerca = idxPaso; hablar(texto); }
@@ -616,6 +716,10 @@ function generarHTML({ viajeId, origenLat, origenLng, origenNombre, destinoLat, 
       etaEl.textContent = minCon + " min";
       etaEl.style.color = demoraMin >= 10 ? "#f87171" : demoraMin >= 4 ? "#fbbf24" : "#22d3ee";
       document.getElementById("dist-value").textContent = (distM / 1000).toFixed(1) + " km";
+      // Barra inferior del modo navegación 3D
+      etaMin = minCon;
+      document.getElementById("nav-eta-t").textContent = minCon + " min";
+      document.getElementById("nav-eta-d").textContent = (distM / 1000).toFixed(1) + " km al destino";
 
       // ── Mensaje del copiloto ──
       let nivel, textoAviso, textoVoz;
