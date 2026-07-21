@@ -307,6 +307,7 @@ function generarHTML({ viajeId, origenLat, origenLng, origenNombre, destinoLat, 
       map.addListener("dragstart", () => { seguirChofer = false; });
 
       iniciarSeguimientoChofer();
+      pedirWakeLock(); // mantener la pantalla encendida durante la navegación
       calcularRuta(true);
       // Re-chequear el tráfico cada 2 minutos: si empeora, el copiloto avisa
       setInterval(() => calcularRuta(false), 120000);
@@ -358,9 +359,28 @@ function generarHTML({ viajeId, origenLat, origenLng, origenNombre, destinoLat, 
             : "⚠️ No pudimos leer tu GPS. Revisá que la ubicación esté encendida.";
           mostrarAviso("amarillo", msg);
         },
-        { enableHighAccuracy: true, maximumAge: 2000, timeout: 20000 }
+        { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 }
       );
     }
+
+    // ── PANTALLA SIEMPRE ENCENDIDA (Wake Lock) ──
+    // Sin esto, al atenuarse la pantalla el navegador congela el GPS y el auto
+    // queda estático. Mantenerla encendida hace que el seguimiento no se corte.
+    let wakeLock = null;
+    async function pedirWakeLock() {
+      try {
+        if ("wakeLock" in navigator) {
+          wakeLock = await navigator.wakeLock.request("screen");
+          wakeLock.addEventListener("release", () => {});
+        }
+      } catch (e) { /* algunos navegadores exigen gesto del usuario; se reintenta al tocar */ }
+    }
+    // Reacquirir cuando la pestaña vuelve a estar visible (el lock se suelta al ocultarse)
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") pedirWakeLock();
+    });
+    // Reintentar en el primer toque (por si el navegador rechazó el pedido inicial sin gesto)
+    document.addEventListener("click", () => { if (!wakeLock) pedirWakeLock(); }, { once: false });
 
     function centrarEnChofer() {
       seguirChofer = true;
