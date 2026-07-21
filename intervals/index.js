@@ -349,7 +349,8 @@ setInterval(async () => {
 
           const choferColorGPS = await Chofer.findUnique({ where: { traccarId: viaje.choferTraccarId } });
           const colorGPS = choferColorGPS?.colorVehiculo ? ` ${choferColorGPS.colorVehiculo}` : "";
-          await enviarMensaje(
+          // Pedido web: el "llegó" se ve en la web, no por WhatsApp
+          if (!/🌐|desde la web/i.test(viaje.observaciones || "")) await enviarMensaje(
             viaje.usuarioPhone,
             `🚕 *¡Tu chofer llegó!*\n\n👤 ${viaje.choferNombre}\n${emoji} ${label}${colorGPS} · placa: ${viaje.choferPlaca}\n\nPor favor dirígete al vehículo. 🚖`
           );
@@ -382,7 +383,7 @@ setInterval(async () => {
           await Viaje.update({ where: { id: viaje.id }, data: { llegadaNotificada: true } });
           await enviarBotones(viaje.choferPhone, "📍 Parece que llegaste al destino. ¿Finalizas el viaje?",
             [{ id: "terminar_viaje", title: "🏁 Terminar viaje" }]);
-          await enviarMensaje(viaje.usuarioPhone, "📍 ¡Tu chofer llegó al destino!");
+          if (!/🌐|desde la web/i.test(viaje.observaciones || "")) await enviarMensaje(viaje.usuarioPhone, "📍 ¡Tu chofer llegó al destino!");
         }
       } catch { /* ignorar fallo individual */ }
     }

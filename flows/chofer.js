@@ -33,6 +33,13 @@ function esViajeDelivery(v) {
   return !!(v?.observaciones && v.observaciones.startsWith("🍔 DELIVERY"));
 }
 
+// Pedido hecho desde la WEB: el seguimiento (aceptado, llegó, en viaje) se
+// muestra en la propia web (polling de /api/web/estado). NO se le manda nada al
+// pasajero por WhatsApp durante el viaje; solo el "gracias" al finalizar.
+function esViajeWeb(v) {
+  return /🌐|desde la web/i.test(v?.observaciones || "");
+}
+
 async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, mensaje) {
   let chofer = await Chofer.findUnique({ where: { phone } });
 
@@ -130,6 +137,7 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
       if (!viaje) return enviarMensaje(phone, "No tienes viajes pendientes (quizás expiró).");
 
       const userPhone = viaje.usuarioPhone;
+      const esWeb = esViajeWeb(viaje); // pedido web: no avisar por WhatsApp (la web muestra todo)
       await Chofer.update({ where: { id: chofer.id }, data: { estado: "ocupado", viajeReservado: null, reservadoHasta: null } });
       await Viaje.update({ where: { id: viaje.id }, data: { estado: "en_camino", fechaAceptacion: new Date() } });
 
@@ -157,8 +165,11 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
       // Foto combinada para demo: si está configurada FOTO_DEMO_COMBINADA,
       // manda UNA sola imagen (auto grande + chofer en recuadro) en vez de dos.
       // Para producción normal, manda las dos fotos por separado como siempre.
+      // En pedidos WEB no se manda nada por WhatsApp: la web muestra al chofer.
       const fotoDemo = process.env.FOTO_DEMO_COMBINADA;
-      if (fotoDemo) {
+      if (esWeb) {
+        // web: sin fotos ni mensaje al pasajero por WhatsApp
+      } else if (fotoDemo) {
         await enviarImagen(
           userPhone,
           fotoDemo,
@@ -222,7 +233,7 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
         return;
       }
 
-      await enviarMensaje(
+      if (!esWeb) await enviarMensaje(
         userPhone,
         `🎉 *¡Viaje aceptado!*\n\n` +
           `👤 Chofer: *${chofer.nombre}*\n` +
@@ -308,7 +319,7 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
         );
         return;
       }
-      await enviarMensaje(viaje.usuarioPhone, `🚕 *¡Tu chofer llegó!*\n\n👤 ${chofer.nombre}\n${emoji} ${label}${colorLlegueManual} · placa: ${chofer.placa}\n\nDirígete al vehículo.`);
+      if (!esViajeWeb(viaje)) await enviarMensaje(viaje.usuarioPhone, `🚕 *¡Tu chofer llegó!*\n\n👤 ${chofer.nombre}\n${emoji} ${label}${colorLlegueManual} · placa: ${chofer.placa}\n\nDirígete al vehículo.`);
       const usuarioLlegueBtn = await Usuario.findUnique({ where: { phone: viaje.usuarioPhone } });
       const nombreLlegueBtn = usuarioLlegueBtn?.nombre ? `\n🙋 Pregunta por: *ChatGo para ${usuarioLlegueBtn.nombre}*` : "";
       await enviarBotones(
@@ -390,7 +401,7 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
         );
         return;
       }
-      await enviarMensaje(viaje.usuarioPhone, `🚖 *Viaje iniciado*\n\n¡Disfruta tu viaje con ChatGo!`);
+      if (!esViajeWeb(viaje)) await enviarMensaje(viaje.usuarioPhone, `🚖 *Viaje iniciado*\n\n¡Disfruta tu viaje con ChatGo!`);
       await enviarBotones(
         phone,
         `▶️ *Viaje iniciado*\n\n` +
@@ -419,7 +430,7 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
           },
         });
         await Chofer.update({ where: { id: chofer.id }, data: { estado: "libre" } });
-        await enviarMensaje(viaje.usuarioPhone, `❌ Tu chofer canceló el viaje. Puedes pedir otro cuando quieras.`);
+        if (!esViajeWeb(viaje)) await enviarMensaje(viaje.usuarioPhone, `❌ Tu chofer canceló el viaje. Puedes pedir otro cuando quieras.`);
         await enviarMensaje(phone, `❌ Viaje cancelado. Ya estás LIBRE.`);
         await deleteSession(viaje.usuarioPhone);
       }
@@ -521,15 +532,19 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
     }
   } catch (e) { log.error("[CROWDSOURCE_POST_VIAJE]", e.message); }
 
+        // Único WhatsApp al pasajero en un pedido WEB: el "gracias" final.
         await enviarMensaje(
           viaje.usuarioPhone,
-          esViajeDelivery(viaje)
-            ? `✅ *¡Pedido entregado!*\n\n¡Buen provecho! 🍔\n\nGracias por usar ChatGo Delivery 🛵`
-            : `✅ *Viaje completado*\n\n📏 ${viaje.distanciaKm} km\n💰 Bs ${viaje.precioTotal}\n\n¡Gracias por usar ChatGo! 🚖`
+          esViajeWeb(viaje)
+            ? `🙏 *¡Gracias por viajar con ChatGo!* 🚖\n\n¡Que tengas un buen día! Te esperamos para tu próximo viaje.`
+            : esViajeDelivery(viaje)
+              ? `✅ *¡Pedido entregado!*\n\n¡Buen provecho! 🍔\n\nGracias por usar ChatGo Delivery 🛵`
+              : `✅ *Viaje completado*\n\n📏 ${viaje.distanciaKm} km\n💰 Bs ${viaje.precioTotal}\n\n¡Gracias por usar ChatGo! 🚖`
         );
         // Nota: el botón "pedir otro taxi" aparece después del rating
 
-        if (promoCodigosActiva()) {
+        // En pedidos WEB no mandamos promo ni rating por WhatsApp (solo el gracias).
+        if (!esViajeWeb(viaje) && promoCodigosActiva()) {
           try {
             const nuevoCodigo = await crearCodigoPromo(viaje.usuarioPhone, "post_viaje");
             if (nuevoCodigo) {
@@ -548,8 +563,8 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
             phone,
             `⚠️ *Atención*: Finalizaste el viaje a *${distanciaAlDestino} metros* del destino acordado.\n\nRecuerda llevar al pasajero hasta el punto de destino.`
           );
-          // Consultar al pasajero
-          await enviarBotones(
+          // Consultar al pasajero (por WhatsApp solo si NO es pedido web)
+          if (!esViajeWeb(viaje)) await enviarBotones(
             viaje.usuarioPhone,
             `⚠️ Detectamos que el viaje finalizó a *${distanciaAlDestino} metros* del destino.\n\n¿Llegaste a tu destino correctamente?`,
             [
@@ -566,7 +581,7 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
         }
         // ─────────────────────────────────────────────────────────────────
 
-        await solicitarRating(viaje.usuarioPhone, viaje.id);
+        if (!esViajeWeb(viaje)) await solicitarRating(viaje.usuarioPhone, viaje.id);
 
         if (sigueAlDia) {
           await deleteSession(phone); // limpiar sesión para que el webhook no lo confunda con pasajero

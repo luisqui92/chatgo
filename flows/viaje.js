@@ -34,7 +34,7 @@ async function asignarChofer(userPhone, session, excludeTraccarIds = [], intento
     log.warn(`[ASIGNAR] Máximo de reintentos alcanzado para ${userPhone}`);
     await updateSession(userPhone, { ...session, step: "sin_chofer" });
     await addListaEspera(userPhone, { ...session, step: "sin_chofer" });
-    if (intento === CONFIG.MAX_REINTENTOS_ASIGNAR) {
+    if (intento === CONFIG.MAX_REINTENTOS_ASIGNAR && !session.origenWeb) {
       const tipoTexto = session.tipoVehiculoSolicitado === "moto" ? "moto" : session.tipoVehiculoSolicitado === "van" ? "van" : session.tipoVehiculoSolicitado === "auto" ? "auto" : "móvil";
       await enviarMensaje(userPhone, `⏳ Seguimos buscando tu ${tipoTexto}...\n\n_Escribe CANCELAR si quieres dejar de buscar._`);
     }
@@ -42,6 +42,8 @@ async function asignarChofer(userPhone, session, excludeTraccarIds = [], intento
   }
 
   const tipoSolicitado = session.tipoVehiculoSolicitado || null;
+  // Pedido WEB: el seguimiento se ve en la web; no spamear al pasajero por WhatsApp.
+  const esWeb = !!session.origenWeb || /🌐|desde la web/i.test(session.observaciones || "");
   // EXCLUSIONES ACUMULADAS: la oferta recorre a los choferes en orden de
   // distancia (el más cercano primero) y NUNCA vuelve a uno ya ofrecido — así
   // llega SÍ o SÍ a todos, del más cercano al más lejano, sin que la distancia
@@ -59,7 +61,7 @@ async function asignarChofer(userPhone, session, excludeTraccarIds = [], intento
     await addListaEspera(userPhone, { ...session, step: "sin_chofer" });
     // Solo mandar el mensaje "buscando" si es el primer intento (intento === 0)
     // Los reintentos por timeout del chofer no mandan mensaje para no spamear
-    if (intento === 0) {
+    if (intento === 0 && !esWeb) {
       const tipoTexto = tipoSolicitado === "moto" ? "moto" : tipoSolicitado === "auto" ? "auto" : "móvil";
       await enviarMensaje(userPhone, `⏳ Buscando un ${tipoTexto} cercano para ti...\n\n_Escribe CANCELAR si quieres dejar de buscar._`);
     }
@@ -161,7 +163,7 @@ async function asignarChofer(userPhone, session, excludeTraccarIds = [], intento
   // un chofer / no respondió" nuevo, y el pasajero terminaba spameado.
   // El timeout que avanza al siguiente chofer lo maneja el interval en
   // intervals/index.js (no dupliques acá: crea cascadas paralelas / viajes de golpe).
-  if (esFresco) {
+  if (esFresco && !esWeb) {
     await enviarMensaje(
       userPhone,
       esDelivery
