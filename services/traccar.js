@@ -127,9 +127,13 @@ async function buscarChoferDisponibleTraccar(origenUsuario, excludeTraccarIds = 
         log.warn(`[TRACCAR_PRUEBA] Chofer de prueba ${phone} sin posición GPS en vivo`);
         continue;
       }
+      // Antigüedad REAL de la posición (antes estaba fija en 0). Si el GPS del
+      // chofer no reportó hace rato, la distancia se calcula con una posición
+      // vieja — mostrar los minutos deja eso a la vista.
+      const minutosPos = pos.fixTime ? Math.round((Date.now() - new Date(pos.fixTime).getTime()) / 60000) : 0;
       candidatosPrueba.push({
         ...choferPrueba,
-        ubicacion: { lat: pos.latitude, lng: pos.longitude, minutos: 0 },
+        ubicacion: { lat: pos.latitude, lng: pos.longitude, minutos: minutosPos },
         distanciaAlUsuario: distanciaEntrePuntos(origenUsuario.lat, origenUsuario.lng, pos.latitude, pos.longitude),
       });
     }

@@ -142,7 +142,8 @@ async function asignarChofer(userPhone, session, excludeTraccarIds = [], intento
       `📏 Distancia ${esDelivery ? "recorrido" : "viaje"}: ${session.distancia} km\n` +
       `💰 ${esDelivery ? "Envío a cobrar" : "Precio a cobrar"}: Bs ${session.precio}\n` +
       textoDesc +
-      `📌 Estás a ${Math.round(chofer.distanciaAlUsuario * 10) / 10} km ${esDelivery ? "del local" : "del pasajero"}\n\n` +
+      `📌 Estás a ${Math.round(chofer.distanciaAlUsuario * 10) / 10} km ${esDelivery ? "del local" : "del pasajero"}` +
+      (chofer.ubicacion?.minutos > 2 ? ` _(⚠️ tu GPS reportó hace ${chofer.ubicacion.minutos} min — abrí la app si estás más cerca)_` : ` _(GPS al día ✅)_`) + `\n\n` +
       `📍 ${esDelivery ? "Recoger en" : "Origen"}: ${session.origen.nombre || "Ver mapa"}\n` +
       textoParadas +
       `🏁 ${esDelivery ? "Entregar en" : "Destino"}: ${session.destino.nombre || "Ver mapa"}\n` +
