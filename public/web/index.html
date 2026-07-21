@@ -661,8 +661,23 @@ document.querySelectorAll(".tipo").forEach(el => {
 $("btn-volver-mapa").onclick = () => { paso = "origen"; actualizarPaso(); mostrar("s-mapa"); };
 
 // ═══════════════ 5. Pedir y estado ═══════════════
+// Notificaciones al celular (Web Notifications): suenan/vibran aunque el pasajero
+// esté en otra app, siempre que la página siga abierta en segundo plano.
+let ultimoEstadoNotif = null;
+function pedirPermisoNotif() {
+  try { if ("Notification" in window && Notification.permission === "default") Notification.requestPermission(); } catch (e) {}
+}
+function notificar(titulo, cuerpo) {
+  try {
+    if (!("Notification" in window) || Notification.permission !== "granted") return;
+    const n = new Notification(titulo, { body: cuerpo || "", icon: "/logo.png", badge: "/logo.png", tag: "chatgo-viaje", renotify: true, vibrate: [200, 100, 200] });
+    n.onclick = () => { try { window.focus(); } catch (e) {} n.close(); };
+  } catch (e) {}
+}
+
 $("btn-pedir").onclick = async () => {
   $("btn-pedir").disabled = true;
+  pedirPermisoNotif(); // gesto del usuario → pedir permiso de notificaciones
   try {
     await api("/api/web/pedir", { body: { origen: puntoOrigen, destino: puntoDestino, tipoVehiculo: tipoElegido } });
     irAEstado();
@@ -674,6 +689,7 @@ $("btn-pedir").onclick = async () => {
 };
 
 function irAEstado() {
+  ultimoEstadoNotif = null; // nuevo viaje: notificar sus estados de cero
   mostrar("s-estado");
   $("estado-buscando").style.display = "block";
   $("estado-chofer").style.display = "none";
@@ -702,6 +718,19 @@ $("btn-cancelar-viaje").onclick = async () => {
 async function consultarEstado() {
   try {
     const r = await api(`/api/web/estado?token=${encodeURIComponent(token)}`);
+    // Notificar al celular en cada cambio de estado (aunque esté en otra app)
+    if (r.estado && r.estado !== ultimoEstadoNotif) {
+      const chof = (r.chofer && r.chofer.nombre) || "Tu chofer";
+      const N = {
+        en_camino: ["🚖 ¡Chofer en camino!", chof + " va hacia vos. Seguilo en la web."],
+        esperando_pasajero: ["📍 ¡Tu chofer llegó!", "Dirigite al vehículo."],
+        en_curso: ["🛣️ Viaje iniciado", "¡Buen viaje con ChatGo!"],
+        completado: ["🙏 ¡Gracias por viajar con ChatGo!", "¡Te esperamos pronto!"],
+        cancelado: ["❌ Viaje cancelado", ""],
+      };
+      if (N[r.estado]) notificar(N[r.estado][0], N[r.estado][1]);
+      ultimoEstadoNotif = r.estado;
+    }
     if (r.estado === "buscando" || r.estado === "pendiente") return; // sigue el spinner
     if (r.estado === "ninguno") { clearInterval(pollTimer); return; }
 
