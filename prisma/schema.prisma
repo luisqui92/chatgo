@@ -37,6 +37,7 @@ model Usuario {
   lugaresFrecuentes   Json?     // { casa, trabajo, otros:[{alias,lat,lng,nombre}] }
   ultimoViajeAt       DateTime?
   promoReactivacionEnviada Boolean @default(false)
+  pushWeb             Json?     // suscripción Web Push del navegador (pedidos web)
   createdAt           DateTime  @default(now())
   updatedAt           DateTime  @updatedAt
 

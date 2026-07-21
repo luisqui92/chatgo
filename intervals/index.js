@@ -9,6 +9,7 @@ const { calcularTiempoConTrafico, distanciaEntrePuntos: distPuntos } = require("
 const { distanciaEntrePuntos } = require("../services/google");
 const { registrarEventoChofer, registrarViajeEnDemanda, monitorearSeguridad, enviarAlertasChoferes, procesarReactivaciones, actualizarUltimoViaje } = require("../ai");
 const { asignarChofer } = require("../flows/viaje");
+const { enviarPushWeb } = require("../services/push");
 
 function iniciarIntervals(deps) {
   const {
@@ -349,11 +350,12 @@ setInterval(async () => {
 
           const choferColorGPS = await Chofer.findUnique({ where: { traccarId: viaje.choferTraccarId } });
           const colorGPS = choferColorGPS?.colorVehiculo ? ` ${choferColorGPS.colorVehiculo}` : "";
-          // Pedido web: el "llegó" se ve en la web, no por WhatsApp
+          // Pedido web: el "llegó" va por push al celular, no por WhatsApp
           if (!/🌐|desde la web/i.test(viaje.observaciones || "")) await enviarMensaje(
             viaje.usuarioPhone,
             `🚕 *¡Tu chofer llegó!*\n\n👤 ${viaje.choferNombre}\n${emoji} ${label}${colorGPS} · placa: ${viaje.choferPlaca}\n\nPor favor dirígete al vehículo. 🚖`
           );
+          else await enviarPushWeb(viaje.usuarioPhone, "📍 ¡Tu chofer llegó!", `${viaje.choferNombre} te espera. Dirigite al vehículo.`, "/pedir");
 
           // FIX BUG#3 — el GPS detectó llegada, le enviamos botones nuevos al chofer
           // y NO esperamos que presione el botón "Llegué" que ya está obsoleto

@@ -143,6 +143,15 @@ app.get("/bus-demo", (_req, res) => {
   res.sendFile(path.join(__dirname, "public", "bus-demo.html"));
 });
 
+// Service Worker de Web Push (debe servirse desde la raíz para tener scope global)
+app.get("/sw.js", (req, res) => {
+  const path = require("path");
+  res.setHeader("Content-Type", "application/javascript; charset=utf-8");
+  res.setHeader("Service-Worker-Allowed", "/");
+  res.setHeader("Cache-Control", "no-cache");
+  res.sendFile(path.join(__dirname, "public", "sw.js"));
+});
+
 // Servir logo público
 app.get("/logo.png", (req, res) => {
   const path = require("path");

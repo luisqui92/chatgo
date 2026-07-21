@@ -24,6 +24,7 @@ const { validarComprobantePago } = require("../services/openai");
 const { registrarEventoChofer, calcularMultiplierSurge, aplicarSurge, textoSurge, registrarViajeEnDemanda, actualizarUltimoViaje } = require("../ai");
 const { asignarChofer, procesarPedidoAyuda, solicitarRating } = require("../flows/viaje");
 const { calcularPrecio, choferPagoAlDia, crearCodigoPromo, enPromoGratis, enviarCodigoDescuento, esPedidoAyuda, esPlusCode, fechaStrBolivia, formatearFechaPromo, guardarRutaFrecuente, promoCodigosActiva } = require("../services/utils");
+const { enviarPushWeb, borrarSuscripcion } = require("../services/push");
 
 
 // ¿El viaje es un pedido de DELIVERY? (marcador que pone modules/delivery.js
@@ -242,6 +243,8 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
           `💬 Escribe cualquier mensaje para chatear con él.\n` +
           `_Escribe CANCELAR si necesitas cancelar, o AYUDA para soporte._`
       );
+      // Pedido web: push real al celular (funciona con el navegador cerrado)
+      if (esWeb) await enviarPushWeb(userPhone, "🚖 ¡Chofer en camino!", `${chofer.nombre} · ${chofer.placa} va hacia vos.`, "/pedir");
       await enviarBotones(
         phone,
         `✅ Viaje aceptado!\n\nCuando llegues al punto de recojo presiona el botón.`,
@@ -320,6 +323,7 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
         return;
       }
       if (!esViajeWeb(viaje)) await enviarMensaje(viaje.usuarioPhone, `🚕 *¡Tu chofer llegó!*\n\n👤 ${chofer.nombre}\n${emoji} ${label}${colorLlegueManual} · placa: ${chofer.placa}\n\nDirígete al vehículo.`);
+      else await enviarPushWeb(viaje.usuarioPhone, "📍 ¡Tu chofer llegó!", `${chofer.nombre} te espera. Dirigite al vehículo.`, "/pedir");
       const usuarioLlegueBtn = await Usuario.findUnique({ where: { phone: viaje.usuarioPhone } });
       const nombreLlegueBtn = usuarioLlegueBtn?.nombre ? `\n🙋 Pregunta por: *ChatGo para ${usuarioLlegueBtn.nombre}*` : "";
       await enviarBotones(
@@ -402,6 +406,7 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
         return;
       }
       if (!esViajeWeb(viaje)) await enviarMensaje(viaje.usuarioPhone, `🚖 *Viaje iniciado*\n\n¡Disfruta tu viaje con ChatGo!`);
+      else await enviarPushWeb(viaje.usuarioPhone, "🛣️ Viaje iniciado", "¡Disfrutá tu viaje con ChatGo!", "/pedir");
       await enviarBotones(
         phone,
         `▶️ *Viaje iniciado*\n\n` +
@@ -431,6 +436,7 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
         });
         await Chofer.update({ where: { id: chofer.id }, data: { estado: "libre" } });
         if (!esViajeWeb(viaje)) await enviarMensaje(viaje.usuarioPhone, `❌ Tu chofer canceló el viaje. Puedes pedir otro cuando quieras.`);
+        else await enviarPushWeb(viaje.usuarioPhone, "❌ Viaje cancelado", "El chofer canceló. Podés pedir otro cuando quieras.", "/pedir");
         await enviarMensaje(phone, `❌ Viaje cancelado. Ya estás LIBRE.`);
         await deleteSession(viaje.usuarioPhone);
       }
@@ -541,6 +547,11 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
               ? `✅ *¡Pedido entregado!*\n\n¡Buen provecho! 🍔\n\nGracias por usar ChatGo Delivery 🛵`
               : `✅ *Viaje completado*\n\n📏 ${viaje.distanciaKm} km\n💰 Bs ${viaje.precioTotal}\n\n¡Gracias por usar ChatGo! 🚖`
         );
+        // Pedido web: push final al celular y limpieza de la suscripción (viaje cerrado)
+        if (esViajeWeb(viaje)) {
+          await enviarPushWeb(viaje.usuarioPhone, "🙏 ¡Gracias por viajar con ChatGo!", "¡Que tengas un buen día! Te esperamos para tu próximo viaje.", "/pedir");
+          await borrarSuscripcion(viaje.usuarioPhone);
+        }
         // Nota: el botón "pedir otro taxi" aparece después del rating
 
         // En pedidos WEB no mandamos promo ni rating por WhatsApp (solo el gracias).

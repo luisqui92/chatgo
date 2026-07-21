@@ -33,6 +33,7 @@ const { transcribirAudioWeb, extraerUbicaciones } = require("../services/openai"
 const { calcularMultiplierSurge, aplicarSurge } = require("../ai");
 const { asignarChofer, procesarCancelacionPasajero } = require("../flows/viaje");
 const { getSession, updateSession } = require("../services/session");
+const { pushActivo, clavePublica, guardarSuscripcion } = require("../services/push");
 
 // ─── Límites (por IP) ────────────────────────────────────────────────────────
 const limitWeb = rateLimit("web", 60, 60 * 1000, "Demasiadas peticiones. Esperá un momento.");
@@ -501,6 +502,27 @@ module.exports = function (app) {
     } catch (e) {
       log.error("[WEB_ESTADO]", e.message);
       res.status(500).json({ error: "Error consultando el estado." });
+    }
+  });
+
+  // ── 8. Web Push: la web pide la clave pública VAPID ───────────────────────
+  app.get("/api/web/vapid", limitWeb, (req, res) => {
+    if (!pushActivo()) return res.json({ activo: false });
+    res.json({ activo: true, key: clavePublica() });
+  });
+
+  // ── 9. Web Push: guardar la suscripción del navegador ─────────────────────
+  // El navegador registra el Service Worker y manda su PushSubscription; la
+  // guardamos ligada al teléfono para poder avisarle aunque cierre la web.
+  app.post("/api/web/push-sub", limitWeb, requireTokenWeb, async (req, res) => {
+    try {
+      const sub = req.body?.subscription;
+      if (!sub || !sub.endpoint) return res.status(400).json({ error: "Suscripción inválida." });
+      const ok = await guardarSuscripcion(req.webPhone, sub);
+      res.json({ ok });
+    } catch (e) {
+      log.error("[WEB_PUSHSUB]", e.message);
+      res.status(500).json({ error: "No se pudo activar la notificación." });
     }
   });
 
