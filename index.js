@@ -120,6 +120,7 @@ require("./routes/mapa")(app);
 require("./routes/web")(app); // Canal web premium (Etapa 1) — GET /pedir
 require("./routes/bus")(app); // ChatGo Bus demo — GET /bus/:lineaId
 require("./routes/flota")(app); // Mapa de flota en vivo — GET /flota
+require("./routes/trufis")(app); // ChatGo Bus — simulación de trufis — GET /trufis
 
 // ─── INTERVALS ────────────────────────────────────────────────────────────────
 const { iniciarIntervals } = require("./intervals");
