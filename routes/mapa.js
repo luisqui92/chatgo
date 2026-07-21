@@ -37,7 +37,7 @@ module.exports = function (app) {
         return res.status(404).send("Viaje no encontrado.");
       }
       // El link de navegación SOLO vive mientras el viaje está activo. Al
-      // terminar/cancelar, se rompe (antes seguía activo para siempre).
+      // terminar/cancelar se rompe (antes seguía activo para siempre).
       const finalizado = /^(terminad|finalizad|cancelad|rechazad|completad)/i.test(viaje.estado || "");
       if (finalizado) {
         res.setHeader("Content-Type", "text/html; charset=utf-8");
@@ -79,6 +79,7 @@ module.exports = function (app) {
 function paginaFinalizado() {
   return `<!DOCTYPE html><html lang="es"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><title>Viaje finalizado</title>
+<link rel="icon" href="/logo.png">
 <style>body{margin:0;height:100vh;display:flex;align-items:center;justify-content:center;
 background:#0c1310;color:#e7efe9;font-family:system-ui,sans-serif;text-align:center;padding:24px}
 .c{max-width:340px}.e{font-size:52px}h1{font-size:20px;margin:14px 0 6px}p{color:#93a49a;font-size:14px;line-height:1.5}</style>
@@ -231,7 +232,7 @@ function generarHTML({ viajeId, origenLat, origenLng, origenNombre, destinoLat, 
       <div class="spinner"></div>
       <span style="font-size:13px">Cargando mapa y tráfico…</span>
     </div>
-    <button id="btn-aqui" onclick="centrarEnChofer()" title="Centrar en mi ubicación">📍 Aquí estoy</button>
+    <button id="btn-aqui" onclick="centrarEnChofer()" title="Centrar en mi ubicación">🧭 Centrar</button>
   </div>
 
   <div id="footer">
@@ -287,6 +288,7 @@ function generarHTML({ viajeId, origenLat, origenLng, origenNombre, destinoLat, 
 
     // ── MAPA + RUTAS ──────────────────────────────────────────────────────
     let map, rendererPrincipal, polysAlternativas = [], etaAnteriorMin = null;
+    let rutaPuntos = []; // puntos de la ruta recomendada (para recortar lo ya recorrido)
     // Ubicación EN VIVO del chofer (GPS del propio celular)
     let choferMarker = null, seguirChofer = true, tengoUbiChofer = false, watchIdChofer = null;
 
@@ -365,8 +367,9 @@ function generarHTML({ viajeId, origenLat, origenLng, origenNombre, destinoLat, 
             choferMarker.setPosition(p);
           }
           if (!tengoUbiChofer) { tengoUbiChofer = true; map.setZoom(16); }
-          // El auto (logo de ChatGo) SIEMPRE queda en el centro: el mapa lo sigue.
+          // El auto (logo de ChatGo) SIEMPRE queda en el centro; la ruta ya recorrida se borra.
           map.panTo(p);
+          recortarRuta(p);
         },
         (err) => {
           const msg = err.code === 1
@@ -400,6 +403,24 @@ function generarHTML({ viajeId, origenLat, origenLng, origenNombre, destinoLat, 
     function centrarEnChofer() {
       seguirChofer = true;
       if (choferMarker) { map.panTo(choferMarker.getPosition()); map.setZoom(16); }
+    }
+
+    // Recorta la ruta: borra lo YA recorrido y deja solo lo que falta (como una
+    // navegación real). Busca el punto de la ruta más cercano al chofer y dibuja
+    // desde ahí hasta el destino, arrancando en la posición exacta del auto.
+    function recortarRuta(pos) {
+      if (!rendererPrincipal || rutaPuntos.length < 2 || !pos) return;
+      const pLat = (typeof pos.lat === "function") ? pos.lat() : pos.lat;
+      const pLng = (typeof pos.lng === "function") ? pos.lng() : pos.lng;
+      let minD = Infinity, idx = 0;
+      for (let i = 0; i < rutaPuntos.length; i++) {
+        const pt = rutaPuntos[i];
+        const la = (typeof pt.lat === "function") ? pt.lat() : (pt.lat !== undefined ? pt.lat : pt[0]);
+        const ln = (typeof pt.lng === "function") ? pt.lng() : (pt.lng !== undefined ? pt.lng : pt[1]);
+        const d = (la - pLat) * (la - pLat) + (ln - pLng) * (ln - pLng);
+        if (d < minD) { minD = d; idx = i; }
+      }
+      rendererPrincipal.setPath([{ lat: pLat, lng: pLng }, ...rutaPuntos.slice(idx)]);
     }
 
     function calcularRuta(esPrimeraVez) {
@@ -465,10 +486,13 @@ function generarHTML({ viajeId, origenLat, origenLng, origenNombre, destinoLat, 
       });
 
       // Ruta recomendada en azul (encima)
+      rutaPuntos = rutas[mejorIdx].puntos || [];
       rendererPrincipal = new google.maps.Polyline({
-        map, path: rutas[mejorIdx].puntos,
+        map, path: rutaPuntos,
         strokeColor: "#3b82f6", strokeWeight: 6, strokeOpacity: 0.9, zIndex: 2
       });
+      // Si ya sabemos dónde está el chofer, recortar de una lo ya recorrido
+      if (choferMarker) recortarRuta(choferMarker.getPosition());
 
       // Encuadrar el mapa a la ruta (solo la primera vez, y solo si todavía
       // no estamos siguiendo al chofer — su ubicación en vivo tiene prioridad)
