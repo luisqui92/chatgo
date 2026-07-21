@@ -49,7 +49,7 @@ function posicionesAhora(ahoraMs) {
     const frac = raw <= 1 ? raw : 2 - raw; // ping-pong 0..1..0 (ida y vuelta)
     const p = puntoEnRuta(l.ruta, frac);
     return {
-      nombre: l.nombre, tipo: l.tipo, hacia: l.hacia, sindicato: l.sindicato,
+      id: i, nombre: l.nombre, badge: l.badge, tipo: l.tipo, hacia: l.hacia, sindicato: l.sindicato,
       lat: p[0], lng: p[1], haciaDestino: raw <= 1,
     };
   });
@@ -57,7 +57,7 @@ function posicionesAhora(ahoraMs) {
 
 // Rutas estáticas (para dibujarlas en el mapa una sola vez).
 function rutas() {
-  return LINEAS.map((l) => ({ nombre: l.nombre, tipo: l.tipo, hacia: l.hacia, sindicato: l.sindicato, ruta: l.ruta }));
+  return LINEAS.map((l, i) => ({ id: i, nombre: l.nombre, badge: l.badge, tipo: l.tipo, hacia: l.hacia, sindicato: l.sindicato, ruta: l.ruta }));
 }
 
 function total() { return LINEAS.length; }
