@@ -38,7 +38,7 @@ const CONFIG = {
   // URL pública de la app (Railway o dominio propio)
   APP_URL: process.env.APP_URL || "",
   // Máximo de reintentos en asignarChofer para evitar recursión infinita
-  MAX_REINTENTOS_ASIGNAR: 5,
+  MAX_REINTENTOS_ASIGNAR: 12,
   // TTL para deduplicación de mensajes WA (ms)
   MSG_DEDUP_TTL: 5 * 60 * 1000,
   // Choferes de prueba (SUPERCHOFERES forzados): siempre se les asigna el

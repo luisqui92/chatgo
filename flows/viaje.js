@@ -42,7 +42,16 @@ async function asignarChofer(userPhone, session, excludeTraccarIds = [], intento
   }
 
   const tipoSolicitado = session.tipoVehiculoSolicitado || null;
-  const chofer = await buscarChoferDisponibleTraccar(session.origen, excludeTraccarIds, tipoSolicitado);
+  // EXCLUSIONES ACUMULADAS: la oferta recorre a los choferes en orden de
+  // distancia (el más cercano primero) y NUNCA vuelve a uno ya ofrecido — así
+  // llega SÍ o SÍ a todos, del más cercano al más lejano, sin que la distancia
+  // deje a nadie afuera. Antes solo se excluía al último, así que hacía
+  // ping-pong entre los 2 más cercanos y jamás llegaba a los lejanos.
+  // Un pedido nuevo (intento 0 sin exclusiones) arranca la cascada limpia.
+  const excluidos = (intento === 0 && excludeTraccarIds.length === 0)
+    ? []
+    : [...new Set([...(session.choferesExcluidos || []), ...excludeTraccarIds])];
+  const chofer = await buscarChoferDisponibleTraccar(session.origen, excluidos, tipoSolicitado);
 
   if (!chofer) {
     await updateSession(userPhone, { ...session, step: "sin_chofer" });
@@ -91,7 +100,7 @@ async function asignarChofer(userPhone, session, excludeTraccarIds = [], intento
     log.warn(`[ASIGNAR] Chofer ${chofer.nombre} ya fue reservado. Reintentando...`);
     await Viaje.delete({ where: { id: viaje.id } });
     // FIX BUG#7: pasar intento + 1 en lugar de recursión sin límite
-    await asignarChofer(userPhone, session, [...excludeTraccarIds, chofer.traccarId], intento + 1);
+    await asignarChofer(userPhone, { ...session, choferesExcluidos: excluidos }, [...excluidos, chofer.traccarId], intento + 1);
     return;
   }
 
@@ -110,6 +119,7 @@ async function asignarChofer(userPhone, session, excludeTraccarIds = [], intento
     choferId: chofer.traccarId,
     choferPhone: chofer.phone,
     viajeId: viaje.id.toString(),
+    choferesExcluidos: excluidos,
   });
 
   const linkViaje = generarLinkMapaPropio(viaje.id);
@@ -150,6 +160,27 @@ async function asignarChofer(userPhone, session, excludeTraccarIds = [], intento
       ? `✅ *Tu pedido fue recibido* 🏪\n\nEstamos asignando un repartidor para recogerlo..._\n\n_Escribe CANCELAR si quieres cancelar._`
       : `🔍 Encontramos un chofer cerca.\n_Esperando confirmación (máx ${CONFIG.TIMEOUT_ACEPTACION_CHOFER}s)..._\n\n_Escribe CANCELAR si quieres cancelar._`
   );
+
+  // TIMEOUT DE ACEPTACIÓN: si el chofer no responde (ni acepta ni rechaza) en
+  // el tiempo dado, avanzamos SOLOS al siguiente chofer más cercano. Sin esto,
+  // un chofer que ignora la oferta dejaba el viaje trabado y nunca llegaba a
+  // los demás. Con esto, la oferta recorre a TODOS en orden de distancia.
+  const viajeIdTimeout = viaje.id;
+  const traccarTimeout = chofer.traccarId;
+  const phoneTimeout = chofer.phone;
+  setTimeout(async () => {
+    try {
+      const v = await Viaje.findUnique({ where: { id: viajeIdTimeout } });
+      if (!v || v.estado !== "pendiente") return; // aceptado, cancelado o ya avanzó
+      const sess = await getSession(userPhone);
+      if (!sess || String(sess.viajeId) !== String(viajeIdTimeout)) return; // el pasajero ya siguió otro camino
+      log.info(`[ASIGNAR] Timeout: ${phoneTimeout} no respondió en ${CONFIG.TIMEOUT_ACEPTACION_CHOFER}s → paso al siguiente`);
+      await Viaje.update({ where: { id: viajeIdTimeout }, data: { estado: "rechazado_chofer", cancelacionMotivo: "timeout_sin_respuesta" } }).catch(() => {});
+      await liberarReservaChoferTraccar(traccarTimeout).catch(() => {});
+      await enviarMensaje(phoneTimeout, "⏱️ Se te pasó el tiempo para aceptar el viaje. Pasamos al siguiente chofer.").catch(() => {});
+      await asignarChofer(userPhone, { ...sess, choferesExcluidos: [...excluidos, traccarTimeout] }, [...excluidos, traccarTimeout], intento + 1);
+    } catch (e) { log.error("[ASIGNAR_TIMEOUT]", e.message); }
+  }, (CONFIG.TIMEOUT_ACEPTACION_CHOFER + 3) * 1000);
 }
 
 

@@ -253,7 +253,10 @@ async function procesarMensajeChofer(phone, mensajeTexto, buttonId, mediaId, men
         const session = await getSession(viaje.usuarioPhone);
         if (session) {
           await enviarMensaje(viaje.usuarioPhone, "⏳ Buscando otro chofer...");
-          await asignarChofer(viaje.usuarioPhone, session, [chofer.traccarId]);
+          // Acumular al que rechazó para que la cascada siga al siguiente más
+          // cercano y no vuelva atrás (antes hacía ping-pong entre los 2 más cercanos)
+          const yaExcluidos = [...(session.choferesExcluidos || []), chofer.traccarId];
+          await asignarChofer(viaje.usuarioPhone, { ...session, choferesExcluidos: yaExcluidos }, yaExcluidos);
         }
       }
       return;
