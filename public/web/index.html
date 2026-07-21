@@ -671,10 +671,18 @@ async function pedirPermisoNotif() {
     }
   } catch (e) {}
 }
-function notificar(titulo, cuerpo) {
+async function notificar(titulo, cuerpo) {
   try {
     if (!("Notification" in window) || Notification.permission !== "granted") return;
-    const n = new Notification(titulo, { body: cuerpo || "", icon: "/logo.png", badge: "/logo.png", tag: "chatgo-viaje", renotify: true, vibrate: [200, 100, 200] });
+    const opts = { body: cuerpo || "", icon: "/logo.png", badge: "/logo.png", tag: "chatgo-viaje", renotify: true, vibrate: [200, 100, 200] };
+    // En Android/Chrome el constructor `new Notification` NO funciona: hay que
+    // usar el Service Worker. Preferimos siempre el SW y caemos al constructor
+    // solo en desktop si no hay SW disponible.
+    if ("serviceWorker" in navigator) {
+      const reg = await navigator.serviceWorker.getRegistration();
+      if (reg) { await reg.showNotification(titulo, opts); return; }
+    }
+    const n = new Notification(titulo, opts);
     n.onclick = () => { try { window.focus(); } catch (e) {} n.close(); };
   } catch (e) {}
 }
@@ -685,6 +693,11 @@ function notificar(titulo, cuerpo) {
 // mismo (push real) y desactivamos las notificaciones "en página" para no
 // duplicar. Todo es best-effort: si algo falla, seguimos con Web Notifications.
 let pushSuscrito = false;
+// Registrar el Service Worker apenas carga la página (necesario para que las
+// notificaciones funcionen en Android, donde `new Notification` no anda).
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("/sw.js").catch(() => {});
+}
 function urlB64ToUint8Array(base64String) {
   const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
   const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
@@ -709,8 +722,8 @@ async function activarPush() {
       });
     }
     const res = await api("/api/web/push-sub", { body: { subscription: sub } });
-    if (res && res.ok) pushSuscrito = true;
-  } catch (e) { /* best-effort: sin push seguimos con notificaciones en página */ }
+    if (res && res.ok) { pushSuscrito = true; console.log("[ChatGo] Push suscrito ✅"); }
+  } catch (e) { console.log("[ChatGo] Push no se pudo activar:", e && e.message); }
 }
 
 $("btn-pedir").onclick = async () => {
@@ -729,6 +742,7 @@ $("btn-pedir").onclick = async () => {
 
 function irAEstado() {
   ultimoEstadoNotif = null; // nuevo viaje: notificar sus estados de cero
+  if (!pushSuscrito) activarPush(); // reintento por si el permiso se dio recién
   mostrar("s-estado");
   $("estado-buscando").style.display = "block";
   $("estado-chofer").style.display = "none";

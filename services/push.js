@@ -72,7 +72,10 @@ async function enviarPushWeb(phone, titulo, cuerpo, url) {
   } catch (_) {
     return false;
   }
-  if (!sub) return false;
+  if (!sub) {
+    log.info(`[PUSH] ${phone}: sin suscripción guardada (el pasajero no activó las notificaciones) — "${titulo}"`);
+    return false;
+  }
 
   const payload = JSON.stringify({
     title: titulo || "ChatGo",
@@ -84,6 +87,7 @@ async function enviarPushWeb(phone, titulo, cuerpo, url) {
 
   try {
     await webpush.sendNotification(sub, payload);
+    log.info(`[PUSH] ✅ Enviado a ${phone}: "${titulo}"`);
     return true;
   } catch (e) {
     const code = e && e.statusCode;

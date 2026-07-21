@@ -195,11 +195,22 @@ function generarHTML({ viajeId, origenLat, origenLng, origenNombre, destinoLat, 
     }
     #btn-navegar {
       display: flex; align-items: center; justify-content: center; gap: 8px;
-      background: #2563eb; color: #fff; border-radius: 10px;
-      padding: 14px; font-size: 15px; font-weight: 600;
-      text-decoration: none; width: 100%;
+      background: linear-gradient(135deg, #22d3ee, #0e7490); color: #06202b;
+      border: none; border-radius: 12px;
+      padding: 15px; font-size: 16px; font-weight: 800;
+      width: 100%; cursor: pointer;
+      box-shadow: 0 4px 14px rgba(34,211,238,.35);
     }
-    #btn-navegar:active { background: #1d4ed8; }
+    #btn-navegar:active { filter: brightness(.92); }
+    #btn-navegar.activo {
+      background: linear-gradient(135deg, #16a34a, #15803d); color: #fff;
+      box-shadow: 0 4px 14px rgba(22,163,74,.4);
+    }
+    #btn-gmaps {
+      display: block; text-align: center; margin-top: 9px;
+      color: #64748b; font-size: 12.5px; text-decoration: none; font-weight: 600;
+    }
+    #btn-gmaps:active { color: #94a3b8; }
   </style>
 </head>
 <body>
@@ -253,9 +264,10 @@ function generarHTML({ viajeId, origenLat, origenLng, origenNombre, destinoLat, 
   </div>
 
   <div id="footer">
-    <a id="btn-navegar" href="${escHtml(linkGmaps)}" target="_blank" rel="noopener">
-      🗺️ Navegar con Google Maps
-    </a>
+    <button id="btn-navegar" onclick="iniciarNavegacion()">
+      <img src="/logo.png" alt="" style="width:22px;height:22px;border-radius:5px"> Iniciar navegación
+    </button>
+    <a id="btn-gmaps" href="${escHtml(linkGmaps)}" target="_blank" rel="noopener">Prefiero abrir Google Maps</a>
   </div>
 
   <script>
@@ -308,6 +320,7 @@ function generarHTML({ viajeId, origenLat, origenLng, origenNombre, destinoLat, 
     let rutaPuntos = []; // puntos de la ruta recomendada (para recortar lo ya recorrido)
     // Ubicación EN VIVO del chofer (GPS del propio celular)
     let choferMarker = null, seguirChofer = true, tengoUbiChofer = false, watchIdChofer = null;
+    let navMode = false, ultimaPosChofer = null; // navegación turn-by-turn propia de ChatGo
 
     function initMap() {
       const loading = document.getElementById("map-loading");
@@ -383,7 +396,8 @@ function generarHTML({ viajeId, origenLat, origenLng, origenNombre, destinoLat, 
           } else {
             choferMarker.setPosition(p);
           }
-          if (!tengoUbiChofer) { tengoUbiChofer = true; map.setZoom(16); }
+          ultimaPosChofer = p;
+          if (!tengoUbiChofer) { tengoUbiChofer = true; map.setZoom(navMode ? 17 : 16); }
           // El auto (logo de ChatGo) SIEMPRE queda en el centro; la ruta ya recorrida se borra.
           map.panTo(p);
           recortarRuta(p);
@@ -420,7 +434,28 @@ function generarHTML({ viajeId, origenLat, origenLng, origenNombre, destinoLat, 
 
     function centrarEnChofer() {
       seguirChofer = true;
-      if (choferMarker) { map.panTo(choferMarker.getPosition()); map.setZoom(16); }
+      if (choferMarker) { map.panTo(choferMarker.getPosition()); map.setZoom(navMode ? 17 : 16); }
+    }
+
+    // ── Navegación turn-by-turn PROPIA de ChatGo (nuestros colores, sin salir de la app) ──
+    function iniciarNavegacion() {
+      navMode = true;
+      seguirChofer = true;
+      if (!vozActiva) toggleVoz();   // asegurar la voz encendida
+      pedirWakeLock();               // pantalla siempre encendida
+      const b = document.getElementById("btn-navegar");
+      b.classList.add("activo");
+      b.innerHTML = "🧭 Navegando… (tocá para recentrar)";
+      b.onclick = centrarEnChofer;   // en modo nav, el botón recentра el auto
+      document.getElementById("maniobra").classList.add("show");
+      if (choferMarker) { map.panTo(choferMarker.getPosition()); map.setZoom(17); }
+      if (ultimaPosChofer && pasos.length) {
+        recomputarIdxPaso(ultimaPosChofer);
+        actualizarNavegacion(ultimaPosChofer);
+      } else {
+        document.getElementById("man-instr").textContent = "Buscando tu ubicación…";
+        document.getElementById("man-dist").textContent = "";
+      }
     }
 
     // Recorta la ruta: borra lo YA recorrido y deja solo lo que falta (como una
@@ -557,7 +592,7 @@ function generarHTML({ viajeId, origenLat, origenLng, origenNombre, destinoLat, 
       if (choferMarker) {
         const cp = { lat: choferMarker.getPosition().lat(), lng: choferMarker.getPosition().lng() };
         recortarRuta(choferMarker.getPosition());
-        if (pasos.length) recomputarIdxPaso(cp);
+        if (pasos.length) { recomputarIdxPaso(cp); actualizarNavegacion(cp); } // mostrar el cartel ya, sin esperar movimiento
       }
 
       // Encuadrar el mapa a la ruta (solo la primera vez, y solo si todavía

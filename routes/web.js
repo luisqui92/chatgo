@@ -519,6 +519,7 @@ module.exports = function (app) {
       const sub = req.body?.subscription;
       if (!sub || !sub.endpoint) return res.status(400).json({ error: "Suscripción inválida." });
       const ok = await guardarSuscripcion(req.webPhone, sub);
+      log.info(`[WEB_PUSHSUB] ${req.webPhone}: suscripción ${ok ? "guardada ✅" : "NO guardada ❌"}`);
       res.json({ ok });
     } catch (e) {
       log.error("[WEB_PUSHSUB]", e.message);
