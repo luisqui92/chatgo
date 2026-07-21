@@ -26,15 +26,16 @@ module.exports = function (app) {
         origen = { lat: dLat, lng: dLng };
         paradas = []; // al reroutear, vamos directo al destino
       }
-      // Reintento: la Routes API a veces falla por red y caía a la línea recta.
+      // Un reintento rápido: la Routes API a veces falla puntualmente por red.
+      // (Más reintentos hacían la respuesta tan lenta que el celular la cortaba.)
       let rutas = [], ultimoError = null;
-      for (let intento = 0; intento < 3; intento++) {
+      for (let intento = 0; intento < 2; intento++) {
         try {
           rutas = await calcularRutasConTrafico(origen, { lat: viaje.destinoLat, lng: viaje.destinoLng }, paradas);
           if (rutas && rutas.length) break;
         } catch (e) {
           ultimoError = e;
-          await new Promise(r => setTimeout(r, 400 * (intento + 1)));
+          if (intento === 0) await new Promise(r => setTimeout(r, 300));
         }
       }
       if (!rutas || !rutas.length) {
@@ -42,6 +43,8 @@ module.exports = function (app) {
         log.error("[MAPA_RUTA]", detalle);
         return res.json({ error: detalle });
       }
+      const totalPasos = rutas.reduce((n, r) => n + (r.pasos ? r.pasos.length : 0), 0);
+      log.info(`[MAPA_RUTA] ${req.params.viajeId}: ${rutas.length} ruta(s), ${totalPasos} pasos${req.query.desde ? " (reroute)" : ""}`);
       res.json({ rutas });
     } catch (e) {
       const detalle = e.response?.data?.error?.message || e.message;
@@ -588,17 +591,19 @@ function generarHTML({ viajeId, origenLat, origenLng, origenNombre, destinoLat, 
       const camino = [{ lat: pLat, lng: pLng }, ...rutaPuntos.slice(idx)];
       rendererPrincipal.setPath(camino);
       if (rendererCasing) rendererCasing.setPath(camino);
-      // Si el chofer se alejó de la ruta (tomó otra calle), recalcular desde
-      // su posición actual hasta el destino — como una nav real.
-      if (minM > 65) reruta({ lat: pLat, lng: pLng });
+      // Si el chofer se alejó de la ruta (tomó otra calle) de forma sostenida,
+      // recalcular desde su posición actual hasta el destino — como una nav real.
+      if (minM > 90) { fueraDeRuta++; if (fueraDeRuta >= 2) reruta({ lat: pLat, lng: pLng }); }
+      else fueraDeRuta = 0;
     }
 
     // Recalcular la ruta desde la posición actual (reroute). Con enfriamiento
     // para no pedir a Google en cada lectura del GPS.
-    let ultimaReruta = 0, rerutando = false;
+    let ultimaReruta = 0, rerutando = false, fueraDeRuta = 0;
     function reruta(pos) {
       const ahora = Date.now();
-      if (rerutando || (ahora - ultimaReruta) < 12000) return; // máx 1 cada 12s
+      if (rerutando || (ahora - ultimaReruta) < 15000) return; // máx 1 cada 15s
+      fueraDeRuta = 0;
       rerutando = true; ultimaReruta = ahora;
       fetch("/mapa/" + VIAJE.id + "/ruta?desde=" + pos.lat + "," + pos.lng)
         .then(r => r.json())
@@ -662,9 +667,10 @@ function generarHTML({ viajeId, origenLat, origenLng, origenNombre, destinoLat, 
       if (d <= 45 && avisoCerca !== idxPaso) { avisoCerca = idxPaso; hablar(texto); }
     }
 
-    function calcularRuta(esPrimeraVez) {
+    function calcularRuta(esPrimeraVez, reintento) {
       const origen  = { lat: VIAJE.origenLat,  lng: VIAJE.origenLng  };
       const destino = { lat: VIAJE.destinoLat, lng: VIAJE.destinoLng };
+      const yaHayRuta = rutaPuntos.length >= 2; // ya tenemos una ruta buena dibujada
 
       // Routes API vía nuestro backend (la Directions legacy del navegador
       // da REQUEST_DENIED en proyectos nuevos de Google Cloud)
@@ -672,10 +678,14 @@ function generarHTML({ viajeId, origenLat, origenLng, origenNombre, destinoLat, 
         .then(r => r.json())
         .then(d => {
           if (d.error || !d.rutas || !d.rutas.length) {
-            console.error("Ruta falló:", d.error);
+            // Si ya teníamos una ruta buena, la MANTENEMOS (no la borramos ni
+            // asustamos al chofer). Solo caemos a la línea directa si es el
+            // primer intento y todavía no hay ninguna ruta.
+            if (yaHayRuta) return;
+            if (!reintento) { setTimeout(() => calcularRuta(esPrimeraVez, true), 1500); return; }
             document.getElementById("eta-value").textContent = "—";
             document.getElementById("eta-value").style.color = "#64748b";
-            mostrarAviso("amarillo", "⚠️ No se pudo calcular la ruta con tráfico" + (d.error ? " (" + d.error + ")" : "") + ". Se muestra la ruta directa; usá el botón Navegar.");
+            mostrarAviso("amarillo", "⚠️ No se pudo calcular la ruta con tráfico. Se muestra la ruta directa; usá el botón de abajo.");
             dibujarLineaRespaldo(origen, destino);
             return;
           }
@@ -683,7 +693,9 @@ function generarHTML({ viajeId, origenLat, origenLng, origenNombre, destinoLat, 
         })
         .catch(e => {
           console.error("Ruta falló:", e);
-          mostrarAviso("amarillo", "⚠️ Error de red calculando la ruta. Se muestra la ruta directa.");
+          if (yaHayRuta) return;                       // mantener la ruta buena
+          if (!reintento) { setTimeout(() => calcularRuta(esPrimeraVez, true), 1500); return; }
+          mostrarAviso("amarillo", "⚠️ Error de red calculando la ruta. Reintentando…");
           dibujarLineaRespaldo(origen, destino);
         });
     }
