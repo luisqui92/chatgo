@@ -16,12 +16,32 @@ module.exports = function (app) {
       if (!viaje || !viaje.origenLat || !viaje.destinoLat) {
         return res.json({ error: "not_found" });
       }
-      const paradas = Array.isArray(viaje.paradas) ? viaje.paradas : [];
-      const rutas = await calcularRutasConTrafico(
-        { lat: viaje.origenLat, lng: viaje.origenLng },
-        { lat: viaje.destinoLat, lng: viaje.destinoLng },
-        paradas
-      );
+      // Reroute: si viene ?desde=lat,lng, calcular desde la posición actual del
+      // chofer (no desde el origen) — para recalcular cuando se desvía.
+      let origen = { lat: viaje.origenLat, lng: viaje.origenLng };
+      let paradas = Array.isArray(viaje.paradas) ? viaje.paradas : [];
+      const desde = String(req.query.desde || "").split(",");
+      const dLat = parseFloat(desde[0]), dLng = parseFloat(desde[1]);
+      if (!isNaN(dLat) && !isNaN(dLng)) {
+        origen = { lat: dLat, lng: dLng };
+        paradas = []; // al reroutear, vamos directo al destino
+      }
+      // Reintento: la Routes API a veces falla por red y caía a la línea recta.
+      let rutas = [], ultimoError = null;
+      for (let intento = 0; intento < 3; intento++) {
+        try {
+          rutas = await calcularRutasConTrafico(origen, { lat: viaje.destinoLat, lng: viaje.destinoLng }, paradas);
+          if (rutas && rutas.length) break;
+        } catch (e) {
+          ultimoError = e;
+          await new Promise(r => setTimeout(r, 400 * (intento + 1)));
+        }
+      }
+      if (!rutas || !rutas.length) {
+        const detalle = ultimoError?.response?.data?.error?.message || ultimoError?.message || "sin_rutas";
+        log.error("[MAPA_RUTA]", detalle);
+        return res.json({ error: detalle });
+      }
       res.json({ rutas });
     } catch (e) {
       const detalle = e.response?.data?.error?.message || e.message;
@@ -109,12 +129,12 @@ function generarHTML({ viajeId, origenLat, origenLng, origenNombre, destinoLat, 
       flex-shrink: 0;
     }
     #brand { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
-    #brand-name { color: #22d3ee; font-size: 15px; font-weight: 700; letter-spacing: .5px; }
+    #brand-name { color: #34d399; font-size: 15px; font-weight: 700; letter-spacing: .5px; }
     #btn-voz {
       margin-left: auto; background: #1e293b; border: 1px solid #334155; color: #e2e8f0;
       border-radius: 8px; padding: 5px 12px; font-size: 12px; font-weight: 600; cursor: pointer;
     }
-    #btn-voz.on { background: #164e63; border-color: #22d3ee; color: #22d3ee; }
+    #btn-voz.on { background: #0f3d2e; border-color: #34d399; color: #34d399; }
 
     #eta-row {
       display: flex;
@@ -128,7 +148,7 @@ function generarHTML({ viajeId, origenLat, origenLng, origenNombre, destinoLat, 
     #eta-icon { font-size: 22px; }
     #eta-info { flex: 1; }
     #eta-label { font-size: 10px; color: #64748b; text-transform: uppercase; letter-spacing: .8px; }
-    #eta-value { font-size: 20px; font-weight: 700; color: #22d3ee; line-height: 1.1; }
+    #eta-value { font-size: 20px; font-weight: 700; color: #34d399; line-height: 1.1; }
     #eta-dist { font-size: 11px; color: #94a3b8; text-align: right; line-height: 1.5; }
 
     /* Banner de tráfico / avisos del copiloto */
@@ -160,13 +180,13 @@ function generarHTML({ viajeId, origenLat, origenLng, origenNombre, destinoLat, 
       position: absolute; inset: 0; display: flex; flex-direction: column;
       align-items: center; justify-content: center; background: #0f172a; color: #475569; gap: 10px; z-index: 10;
     }
-    .spinner { width: 36px; height: 36px; border: 3px solid #1e293b; border-top-color: #22d3ee; border-radius: 50%; animation: spin .8s linear infinite; }
+    .spinner { width: 36px; height: 36px; border: 3px solid #1e293b; border-top-color: #34d399; border-radius: 50%; animation: spin .8s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
 
     /* Cartel de maniobra (turn-by-turn), estilo nav, colores ChatGo */
     #maniobra {
       position: absolute; z-index: 9; top: 10px; left: 10px; right: 10px;
-      background: #0e7490; color: #fff; border-radius: 14px; padding: 12px 15px;
+      background: #157a5a; color: #fff; border-radius: 14px; padding: 12px 15px;
       display: none; align-items: center; gap: 13px;
       box-shadow: 0 6px 20px rgba(0,0,0,.45);
     }
@@ -180,12 +200,12 @@ function generarHTML({ viajeId, origenLat, origenLng, origenNombre, destinoLat, 
       position: absolute; z-index: 9;
       right: 12px; bottom: 16px;
       display: flex; align-items: center; gap: 6px;
-      background: #0f172a; color: #22d3ee;
-      border: 1px solid #22d3ee; border-radius: 999px;
+      background: #0f172a; color: #34d399;
+      border: 1px solid #34d399; border-radius: 999px;
       padding: 9px 15px; font-size: 14px; font-weight: 700;
       box-shadow: 0 3px 12px rgba(0,0,0,.45); cursor: pointer;
     }
-    #btn-aqui:active { background: #164e63; }
+    #btn-aqui:active { background: #0f3d2e; }
 
     #footer {
       background: #0f172a;
@@ -196,7 +216,7 @@ function generarHTML({ viajeId, origenLat, origenLng, origenNombre, destinoLat, 
     }
     #btn-navegar {
       display: flex; align-items: center; justify-content: center; gap: 8px;
-      background: linear-gradient(135deg, #22d3ee, #0e7490); color: #06202b;
+      background: linear-gradient(135deg, #34d399, #157a5a); color: #06202b;
       border: none; border-radius: 12px;
       padding: 15px; font-size: 16px; font-weight: 800;
       width: 100%; cursor: pointer;
@@ -226,12 +246,12 @@ function generarHTML({ viajeId, origenLat, origenLng, origenNombre, destinoLat, 
       background: #0f172a; color: #fff;
       padding: 14px 18px; padding-top: max(14px, env(safe-area-inset-top));
       box-shadow: 0 4px 18px rgba(0,0,0,.5);
-      border-bottom: 2px solid #22d3ee;
+      border-bottom: 2px solid #34d399;
     }
     body.nav #nav-top { display: flex; }
     #nav-flecha {
       font-size: 44px; font-weight: 800; line-height: 1;
-      min-width: 52px; text-align: center; color: #22d3ee;
+      min-width: 52px; text-align: center; color: #34d399;
     }
     #nav-top .txt { min-width: 0; flex: 1; }
     #nav-dist { font-size: 26px; font-weight: 800; line-height: 1.1; }
@@ -242,16 +262,16 @@ function generarHTML({ viajeId, origenLat, origenLng, origenNombre, destinoLat, 
     #nav-bottom {
       position: fixed; z-index: 30; left: 0; right: 0; bottom: 0;
       display: none; align-items: center; gap: 12px;
-      background: linear-gradient(135deg, #0e7490, #0f172a);
+      background: linear-gradient(135deg, #157a5a, #0f172a);
       padding: 12px 16px; padding-bottom: max(12px, env(safe-area-inset-bottom));
       box-shadow: 0 -4px 18px rgba(0,0,0,.5);
     }
     body.nav #nav-bottom { display: flex; }
     #nav-vel { text-align: center; min-width: 62px; }
     #nav-vel .n { font-size: 24px; font-weight: 800; color: #fff; line-height: 1; }
-    #nav-vel .u { font-size: 10px; color: #7dd3fc; letter-spacing: .5px; }
+    #nav-vel .u { font-size: 10px; color: #6ee7b7; letter-spacing: .5px; }
     #nav-eta { flex: 1; text-align: center; color: #e2e8f0; }
-    #nav-eta .t { font-size: 20px; font-weight: 800; color: #22d3ee; line-height: 1.1; }
+    #nav-eta .t { font-size: 20px; font-weight: 800; color: #34d399; line-height: 1.1; }
     #nav-eta .d { font-size: 12px; color: #94a3b8; margin-top: 1px; }
     #nav-salir {
       background: rgba(255,255,255,.12); color: #fff; border: none;
@@ -378,7 +398,7 @@ function generarHTML({ viajeId, origenLat, origenLng, origenNombre, destinoLat, 
     }
 
     // ── MAPA + RUTAS ──────────────────────────────────────────────────────
-    let map, rendererPrincipal, polysAlternativas = [], etaAnteriorMin = null;
+    let map, rendererPrincipal, rendererCasing, polysAlternativas = [], etaAnteriorMin = null;
     let rutaPuntos = []; // puntos de la ruta recomendada (para recortar lo ya recorrido)
     // Ubicación EN VIVO del chofer (GPS del propio celular)
     let choferMarker = null, seguirChofer = true, tengoUbiChofer = false, watchIdChofer = null;
@@ -437,7 +457,7 @@ function generarHTML({ viajeId, origenLat, origenLng, origenNombre, destinoLat, 
       const rot = (typeof rumbo === "number" && !isNaN(rumbo)) ? rumbo : 0;
       const svg = \`<svg xmlns="http://www.w3.org/2000/svg" width="42" height="42" viewBox="0 0 42 42">
         <g transform="rotate(\${rot} 21 21)">
-          <circle cx="21" cy="21" r="20" fill="#22d3ee" fill-opacity="0.16"/>
+          <circle cx="21" cy="21" r="20" fill="#34d399" fill-opacity="0.16"/>
           <rect x="14" y="9" width="14" height="24" rx="5" fill="#f5b73d" stroke="#5a4310" stroke-width="1.6"/>
           <rect x="16" y="12" width="10" height="6" rx="2" fill="#0d1411" fill-opacity="0.75"/>
           <rect x="16" y="24" width="10" height="5" rx="2" fill="#0d1411" fill-opacity="0.45"/>
@@ -557,15 +577,39 @@ function generarHTML({ viajeId, origenLat, origenLng, origenNombre, destinoLat, 
       if (!rendererPrincipal || rutaPuntos.length < 2 || !pos) return;
       const pLat = (typeof pos.lat === "function") ? pos.lat() : pos.lat;
       const pLng = (typeof pos.lng === "function") ? pos.lng() : pos.lng;
-      let minD = Infinity, idx = 0;
+      let minD = Infinity, idx = 0, minM = Infinity;
       for (let i = 0; i < rutaPuntos.length; i++) {
         const pt = rutaPuntos[i];
         const la = (typeof pt.lat === "function") ? pt.lat() : (pt.lat !== undefined ? pt.lat : pt[0]);
         const ln = (typeof pt.lng === "function") ? pt.lng() : (pt.lng !== undefined ? pt.lng : pt[1]);
         const d = (la - pLat) * (la - pLat) + (ln - pLng) * (ln - pLng);
-        if (d < minD) { minD = d; idx = i; }
+        if (d < minD) { minD = d; idx = i; minM = distM(pLat, pLng, la, ln); }
       }
-      rendererPrincipal.setPath([{ lat: pLat, lng: pLng }, ...rutaPuntos.slice(idx)]);
+      const camino = [{ lat: pLat, lng: pLng }, ...rutaPuntos.slice(idx)];
+      rendererPrincipal.setPath(camino);
+      if (rendererCasing) rendererCasing.setPath(camino);
+      // Si el chofer se alejó de la ruta (tomó otra calle), recalcular desde
+      // su posición actual hasta el destino — como una nav real.
+      if (minM > 65) reruta({ lat: pLat, lng: pLng });
+    }
+
+    // Recalcular la ruta desde la posición actual (reroute). Con enfriamiento
+    // para no pedir a Google en cada lectura del GPS.
+    let ultimaReruta = 0, rerutando = false;
+    function reruta(pos) {
+      const ahora = Date.now();
+      if (rerutando || (ahora - ultimaReruta) < 12000) return; // máx 1 cada 12s
+      rerutando = true; ultimaReruta = ahora;
+      fetch("/mapa/" + VIAJE.id + "/ruta?desde=" + pos.lat + "," + pos.lng)
+        .then(r => r.json())
+        .then(d => {
+          if (d && d.rutas && d.rutas.length) {
+            pintarRutas(d.rutas, false);
+            hablar("Recalculando la ruta.");
+          }
+        })
+        .catch(() => {})
+        .finally(() => { rerutando = false; });
     }
 
     // ── NAVEGACIÓN PASO A PASO (turn-by-turn con voz, estilo Google) ──
@@ -649,7 +693,7 @@ function generarHTML({ viajeId, origenLat, origenLng, origenNombre, destinoLat, 
       const puntos = [origen, ...(VIAJE.paradas || []).map(p => ({ lat: p.lat, lng: p.lng })), destino];
       new google.maps.Polyline({
         map, path: puntos, geodesic: true,
-        strokeColor: "#3b82f6", strokeOpacity: 0.6, strokeWeight: 4,
+        strokeColor: "#1D9E75", strokeOpacity: 0.6, strokeWeight: 4,
         icons: [{ icon: { path: "M 0,-1 0,1", strokeOpacity: 1, scale: 3 }, offset: "0", repeat: "14px" }]
       });
       if (tengoUbiChofer) return; // ya seguimos al chofer: no le movemos la vista
@@ -666,6 +710,7 @@ function generarHTML({ viajeId, origenLat, origenLng, origenNombre, destinoLat, 
       });
 
       // Limpiar dibujos anteriores (refrescos)
+      if (rendererCasing) rendererCasing.setMap(null);
       if (rendererPrincipal) rendererPrincipal.setMap(null);
       polysAlternativas.forEach(p => p.setMap(null));
       polysAlternativas = [];
@@ -680,11 +725,16 @@ function generarHTML({ viajeId, origenLat, origenLng, origenNombre, destinoLat, 
         polysAlternativas.push(poly);
       });
 
-      // Ruta recomendada en azul (encima)
+      // Ruta recomendada: verde ChatGo con contorno oscuro (casing) para que
+      // resalte sobre el verde del tráfico del mapa.
       rutaPuntos = rutas[mejorIdx].puntos || [];
+      rendererCasing = new google.maps.Polyline({
+        map, path: rutaPuntos,
+        strokeColor: "#0b3b2c", strokeWeight: 10, strokeOpacity: 0.95, zIndex: 2
+      });
       rendererPrincipal = new google.maps.Polyline({
         map, path: rutaPuntos,
-        strokeColor: "#3b82f6", strokeWeight: 6, strokeOpacity: 0.9, zIndex: 2
+        strokeColor: "#1D9E75", strokeWeight: 6, strokeOpacity: 1, zIndex: 3
       });
       // Maniobras paso a paso (turn-by-turn con voz)
       pasos = rutas[mejorIdx].pasos || [];
@@ -714,7 +764,7 @@ function generarHTML({ viajeId, origenLat, origenLng, origenNombre, destinoLat, 
 
       const etaEl = document.getElementById("eta-value");
       etaEl.textContent = minCon + " min";
-      etaEl.style.color = demoraMin >= 10 ? "#f87171" : demoraMin >= 4 ? "#fbbf24" : "#22d3ee";
+      etaEl.style.color = demoraMin >= 10 ? "#f87171" : demoraMin >= 4 ? "#fbbf24" : "#34d399";
       document.getElementById("dist-value").textContent = (distM / 1000).toFixed(1) + " km";
       // Barra inferior del modo navegación 3D
       etaMin = minCon;
