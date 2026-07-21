@@ -171,7 +171,7 @@ function microMasProximo(linea, tParada, cuando = Date.now()) {
 // ─── Buscar línea para un viaje ──────────────────────────────────────────────
 // Devuelve las líneas que pasan cerca de AMBOS puntos, ordenadas por cercanía
 // combinada. maxM = qué tan lejos puede quedar la parada (caminata razonable).
-function buscarLineasParaViaje(origen, destino, maxM = 800) {
+function buscarLineasParaViaje(origen, destino, maxM = 1200) {
   const candidatas = [];
   for (const linea of LINEAS) {
     const pO = proyectarPunto(linea, origen.lat, origen.lng);
