@@ -267,8 +267,44 @@ function generarLinkRastreoPropio(viajeId) {
   return `https://chatgo.ia.bo/rastreo.html?id=${viajeId}&api=${apiUrl}`;
 }
 
+// FLOTA EN VIVO: todos los choferes con GPS, su posición real y su estado.
+// Usada por el mapa de flota (/flota). Marca la antigüedad del GPS para
+// distinguir a los que reportan al día de los que tienen la app cerrada.
+async function obtenerFlotaEnVivo() {
+  await asegurarSnapshot();
+  const choferes = await Chofer.findMany({
+    where: { traccarId: { not: null } },
+    select: { phone: true, nombre: true, placa: true, estado: true, tipoVehiculo: true, traccarId: true },
+  });
+  const ahora = Date.now();
+  const out = [];
+  for (const c of choferes) {
+    const pos = snapshotPosiciones[String(c.traccarId)];
+    if (!pos) continue;
+    const minutos = pos.fixTime ? Math.round((ahora - new Date(pos.fixTime).getTime()) / 60000) : 999;
+    // Estado efectivo: si el GPS no reporta hace más de 15 min lo damos por
+    // desconectado aunque la base diga "libre".
+    let estado = c.estado || "offline";
+    if (minutos > 15) estado = "sin_gps";
+    out.push({
+      nombre: c.nombre || "Chofer",
+      placa: c.placa || "",
+      phoneMask: c.phone ? "*** " + String(c.phone).slice(-4) : "",
+      estado,
+      tipoVehiculo: c.tipoVehiculo || "auto",
+      lat: pos.latitude,
+      lng: pos.longitude,
+      minutos,
+      velocidadKmh: Math.round((pos.speed || 0) * 1.852), // nudos → km/h
+      rumbo: Math.round(pos.course || 0),
+    });
+  }
+  return out;
+}
+
 module.exports = {
   obtenerUbicacionChofer,
+  obtenerFlotaEnVivo,
   buscarChoferDisponibleTraccar,
   reservarChoferTraccar,
   liberarReservaChoferTraccar,
