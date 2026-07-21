@@ -1,6 +1,6 @@
 // ChatGo Bus — Mapa de simulación de trufis con sus rutas reales
 //
-// GET /trufis        → mapa con las RUTAS dibujadas + los micros moviéndose
+// GET /trufis        → mapa con las RUTAS + los micros (con su número) moviéndose
 // GET /trufis/rutas  → JSON [{ nombre, tipo, hacia, sindicato, ruta:[[lat,lng]] }]
 // GET /trufis/pos    → JSON [{ nombre, tipo, hacia, sindicato, lat, lng }]
 //
@@ -41,17 +41,26 @@ const PAGINA = `<!DOCTYPE html>
   *{box-sizing:border-box}
   html,body{margin:0;height:100%;font-family:var(--sans);background:var(--bg);color:var(--text)}
   #app{display:flex;flex-direction:column;height:100%}
-  header{background:var(--panel);border-bottom:1px solid var(--border);padding:10px 14px;
-    display:flex;align-items:center;gap:12px;flex-wrap:wrap;z-index:1000}
-  .logo{font-weight:800;letter-spacing:-.02em;font-size:17px}
+  header{background:var(--panel);border-bottom:1px solid var(--border);padding:9px 12px;
+    display:flex;align-items:center;gap:10px;flex-wrap:wrap;z-index:1000}
+  .logo{font-weight:800;letter-spacing:-.02em;font-size:16px}
   .logo b{color:#f5b73d}
-  .tag{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
-  .count{margin-left:auto;font-size:13px;font-weight:700;color:var(--muted)}
+  .tag{font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)}
+  #buscar{margin-left:auto;background:#0c1310;border:1px solid var(--border);color:var(--text);
+    border-radius:8px;padding:7px 11px;font-size:13px;font-family:inherit;width:150px;outline:none}
+  #buscar:focus{border-color:#f5b73d}
+  .count{font-size:12.5px;font-weight:700;color:var(--muted)}
   .count b{color:var(--text)}
   #map{flex:1}
   .leaflet-container{background:#0c1310}
-  #demo{position:absolute;left:12px;bottom:12px;z-index:1000;background:rgba(18,27,22,.92);
-    border:1px solid var(--border);border-radius:10px;padding:8px 12px;font-size:12px;color:var(--muted);max-width:78%}
+  /* Ícono del micro: número siempre visible */
+  .micro{display:flex;align-items:center;justify-content:center;min-width:20px;height:18px;
+    padding:0 5px;border-radius:9px;border:1.5px solid #0c1310;font-size:11px;font-weight:800;
+    color:#0c1310;box-shadow:0 1px 3px rgba(0,0,0,.5);white-space:nowrap;transform:translate(-50%,-50%)}
+  .micro.dim{opacity:.18}
+  .ruta-dim{opacity:.06 !important}
+  #demo{position:absolute;left:10px;bottom:10px;z-index:1000;background:rgba(18,27,22,.92);
+    border:1px solid var(--border);border-radius:10px;padding:7px 11px;font-size:11.5px;color:var(--muted);max-width:80%}
   #demo b{color:#f5b73d}
   #empty{position:absolute;inset:0;display:none;align-items:center;justify-content:center;
     text-align:center;color:var(--muted);font-size:14px;padding:24px;z-index:1001;background:var(--bg)}
@@ -67,11 +76,12 @@ const PAGINA = `<!DOCTYPE html>
     <span class="logo">ChatGo <b>Bus</b></span>
     <span class="tag">Trufis en vivo</span>
     <span class="count" id="count">—</span>
+    <input id="buscar" placeholder="🔍 buscar línea…" autocomplete="off">
   </header>
   <div id="map"></div>
 </div>
 <div id="empty">🌎 Todavía no hay rutas cargadas.<br>Corré <b>node scripts/geocodificar_lineas.js</b> en el servidor y recargá.</div>
-<div id="demo">🚧 <b>Simulación</b> · nombres, destinos y sindicatos reales (141 líneas). La ruta es el camino por calles al destino; el recorrido oficial y la posición real llegan con el GPS del sindicato.</div>
+<div id="demo">🚧 <b>Simulación</b> · nombres, destinos y sindicatos reales. La ruta es el camino por calles al destino; el recorrido oficial llega con el GPS del sindicato.</div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
@@ -79,43 +89,71 @@ const PAGINA = `<!DOCTYPE html>
   L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{maxZoom:19}).addTo(map);
   var canvas = L.canvas({padding:0.5});
   var COLOR = { micro:'#f5b73d', minibus:'#ef8a52', trufi:'#2acb8c', tren:'#5aa6ef', teleferico:'#c084fc' };
-  var markers = {};
+  var markers = {};    // nombre -> marker (micro)
+  var lineasRuta = {}; // nombre -> polyline
+  var filtro = '';
 
+  function numDe(nombre){
+    var n = nombre.replace(/^(MicroBus|MiniBus|Trufi|L[ií]nea)\\s*/i,'').trim();
+    return n.length > 6 ? n.slice(0,5)+'…' : n;
+  }
   function popupHtml(m){
     return '<div class="pop"><b>'+m.nombre+'</b>'
       + '<div class="r">➡️ '+m.hacia+'</div>'
       + (m.sindicato?('<div class="r">🏛️ '+m.sindicato+'</div>'):'')
       + '<div class="r">💰 Tarifa aprox. Bs 2.50</div></div>';
   }
+  function iconMicro(m){
+    var color = COLOR[m.tipo]||'#f5b73d';
+    return L.divIcon({ className:'', iconSize:[0,0],
+      html:'<div class="micro" style="background:'+color+'">'+numDe(m.nombre)+'</div>' });
+  }
+  function coincide(nombre){ return !filtro || nombre.toLowerCase().indexOf(filtro) !== -1; }
 
-  // 1) Dibujar las RUTAS una sola vez
+  // 1) Dibujar RUTAS una sola vez
   fetch('/trufis/rutas').then(function(r){return r.json();}).then(function(d){
     var lineas = d.lineas||[];
     document.getElementById('empty').style.display = lineas.length ? 'none' : 'flex';
     lineas.forEach(function(l){
       var color = COLOR[l.tipo]||'#f5b73d';
-      L.polyline(l.ruta,{renderer:canvas,color:color,weight:2,opacity:0.35})
+      lineasRuta[l.nombre] = L.polyline(l.ruta,{renderer:canvas,color:color,weight:2,opacity:0.35})
         .addTo(map).bindPopup(popupHtml(l));
     });
   }).catch(function(e){console.error(e);});
 
-  // 2) Mover los MICROS cada 2s
+  // 2) Mover MICROS cada 2s
   function render(data){
     var micros = data.micros||[];
     document.getElementById('count').innerHTML = '<b>'+micros.length+'</b> micros';
     var vistos={};
     micros.forEach(function(m){
       var k=m.nombre; vistos[k]=true;
-      var color=COLOR[m.tipo]||'#f5b73d';
       if(markers[k]){ markers[k].setLatLng([m.lat,m.lng]); }
       else{
-        markers[k]=L.circleMarker([m.lat,m.lng],{renderer:canvas,radius:5,
-          color:'#0c1310',weight:1.5,fillColor:color,fillOpacity:1})
-          .addTo(map).bindPopup(popupHtml(m));
+        markers[k]=L.marker([m.lat,m.lng],{icon:iconMicro(m)}).addTo(map).bindPopup(popupHtml(m));
       }
+      aplicarFiltroA(k);
     });
     Object.keys(markers).forEach(function(k){ if(!vistos[k]){ map.removeLayer(markers[k]); delete markers[k]; }});
   }
+  function aplicarFiltroA(k){
+    var el = markers[k] && markers[k].getElement();
+    if(el){ var d=el.querySelector('.micro'); if(d) d.classList.toggle('dim', !coincide(k)); }
+    if(lineasRuta[k]){ var p=lineasRuta[k].getElement && lineasRuta[k].getElement();
+      if(p){ p.classList.toggle('ruta-dim', !coincide(k)); } }
+  }
+  function aplicarFiltro(){
+    Object.keys(markers).forEach(aplicarFiltroA);
+    // resaltar rutas por opacidad (canvas: se re-dibuja subiendo opacidad de las que coinciden)
+    Object.keys(lineasRuta).forEach(function(k){
+      lineasRuta[k].setStyle({ opacity: (!filtro || coincide(k)) ? 0.35 : 0.05, weight: coincide(k)&&filtro?3.5:2 });
+    });
+  }
+  document.getElementById('buscar').addEventListener('input', function(e){
+    filtro = (e.target.value||'').trim().toLowerCase();
+    aplicarFiltro();
+  });
+
   function tick(){ fetch('/trufis/pos').then(function(r){return r.json();}).then(render).catch(function(e){console.error(e);}); }
   tick();
   setInterval(tick, 2000);
