@@ -25,8 +25,10 @@ const path = require("path");
   } catch (_) {}
 })();
 
-const { geocodificarConMemoria } = require("../services/google");
+const { geocodificarConMemoria, calcularRutasConTrafico } = require("../services/google");
 const { TODAS } = require("../services/lineasreales");
+
+const CENTRO = { lat: -17.3895, lng: -66.1568 }; // Plaza Colón — arranque simulado de cada línea
 
 // Destinos que NO son lugares (colores, descriptores) → no se geocodifican
 function esVago(hacia) {
@@ -47,13 +49,22 @@ async function main() {
     let g = null;
     try { g = await geocodificarConMemoria(l.hacia, "Cochabamba"); } catch (_) {}
     if (g && g.lat) {
-      out.push({ nombre: l.nombre, hacia: l.hacia, sindicato: l.sindicato, tipo: l.tipo, lat: g.lat, lng: g.lng });
-      console.log(`  ✅ ${l.nombre} → ${l.hacia}  (${g.lat.toFixed(4)}, ${g.lng.toFixed(4)})`);
+      // Recorrido por CALLES REALES del centro al destino (para dibujar la ruta
+      // y mover el micro por ella). Si la ruta falla, queda la recta centro→destino.
+      let ruta = [[CENTRO.lat, CENTRO.lng], [g.lat, g.lng]];
+      try {
+        const rutas = await calcularRutasConTrafico(CENTRO, { lat: g.lat, lng: g.lng });
+        if (rutas && rutas[0] && rutas[0].puntos && rutas[0].puntos.length > 1) {
+          ruta = rutas[0].puntos.map((p) => [Number(p.lat.toFixed(5)), Number(p.lng.toFixed(5))]);
+        }
+      } catch (_) {}
+      out.push({ nombre: l.nombre, hacia: l.hacia, sindicato: l.sindicato, tipo: l.tipo, lat: g.lat, lng: g.lng, ruta });
+      console.log(`  ✅ ${l.nombre} → ${l.hacia}  (${g.lat.toFixed(4)}, ${g.lng.toFixed(4)}) · ${ruta.length} pts`);
     } else {
       fallos++;
       console.log(`  ⚠️  ${l.nombre} → ${l.hacia}  (no se pudo ubicar)`);
     }
-    await sleep(120);
+    await sleep(150);
   }
   const dest = path.join(__dirname, "..", "data", "lineas_coords.json");
   fs.writeFileSync(dest, JSON.stringify(out, null, 2));

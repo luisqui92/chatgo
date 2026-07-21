@@ -1,14 +1,21 @@
-// ChatGo Bus — Mapa de simulación de trufis en movimiento
+// ChatGo Bus — Mapa de simulación de trufis con sus rutas reales
 //
-// GET /trufis      → mapa con los micros moviéndose hacia sus destinos REALES
-// GET /trufis/pos  → JSON [{ nombre, tipo, hacia, sindicato, lat, lng }]
+// GET /trufis        → mapa con las RUTAS dibujadas + los micros moviéndose
+// GET /trufis/rutas  → JSON [{ nombre, tipo, hacia, sindicato, ruta:[[lat,lng]] }]
+// GET /trufis/pos    → JSON [{ nombre, tipo, hacia, sindicato, lat, lng }]
 //
-// SIMULACIÓN: los destinos y nombres son reales (141 líneas de Cochabamba),
-// pero el recorrido exacto es estimado hasta que el sindicato suma su GPS.
+// SIMULACIÓN: nombres y destinos reales (141 líneas de Cochabamba); la ruta es
+// el camino por calles del centro al destino. El recorrido oficial exacto y la
+// posición en vivo llegan cuando el sindicato suma su GPS.
 
-const { posicionesAhora, total } = require("../services/simtrufis");
+const { posicionesAhora, rutas, total } = require("../services/simtrufis");
 
 module.exports = function (app) {
+
+  app.get("/trufis/rutas", (_req, res) => {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.json({ lineas: rutas(), total: total() });
+  });
 
   app.get("/trufis/pos", (_req, res) => {
     res.setHeader("Access-Control-Allow-Origin", "*");
@@ -48,7 +55,10 @@ const PAGINA = `<!DOCTYPE html>
   #demo b{color:#f5b73d}
   #empty{position:absolute;inset:0;display:none;align-items:center;justify-content:center;
     text-align:center;color:var(--muted);font-size:14px;padding:24px;z-index:1001;background:var(--bg)}
-  .leaflet-tooltip{background:var(--panel);color:var(--text);border:1px solid var(--border);font-weight:700}
+  #empty b{color:#f5b73d}
+  .leaflet-popup-content-wrapper{background:var(--panel);color:var(--text);border-radius:12px}
+  .leaflet-popup-tip{background:var(--panel)}
+  .pop b{font-size:14px}.pop .r{font-size:12.5px;color:var(--muted);margin-top:3px}
 </style>
 </head>
 <body>
@@ -60,8 +70,8 @@ const PAGINA = `<!DOCTYPE html>
   </header>
   <div id="map"></div>
 </div>
-<div id="empty">🌎 Todavía no hay líneas geocodificadas.<br>Corré <b>node scripts/geocodificar_lineas.js</b> en el servidor y recargá.</div>
-<div id="demo">🚧 <b>Simulación</b> · nombres y destinos reales (141 líneas de Cochabamba). El recorrido exacto y la posición real llegan cuando el sindicato suma su GPS.</div>
+<div id="empty">🌎 Todavía no hay rutas cargadas.<br>Corré <b>node scripts/geocodificar_lineas.js</b> en el servidor y recargá.</div>
+<div id="demo">🚧 <b>Simulación</b> · nombres, destinos y sindicatos reales (141 líneas). La ruta es el camino por calles al destino; el recorrido oficial y la posición real llegan con el GPS del sindicato.</div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
@@ -71,28 +81,41 @@ const PAGINA = `<!DOCTYPE html>
   var COLOR = { micro:'#f5b73d', minibus:'#ef8a52', trufi:'#2acb8c', tren:'#5aa6ef', teleferico:'#c084fc' };
   var markers = {};
 
-  function key(m){ return m.nombre; }
+  function popupHtml(m){
+    return '<div class="pop"><b>'+m.nombre+'</b>'
+      + '<div class="r">➡️ '+m.hacia+'</div>'
+      + (m.sindicato?('<div class="r">🏛️ '+m.sindicato+'</div>'):'')
+      + '<div class="r">💰 Tarifa aprox. Bs 2.50</div></div>';
+  }
 
+  // 1) Dibujar las RUTAS una sola vez
+  fetch('/trufis/rutas').then(function(r){return r.json();}).then(function(d){
+    var lineas = d.lineas||[];
+    document.getElementById('empty').style.display = lineas.length ? 'none' : 'flex';
+    lineas.forEach(function(l){
+      var color = COLOR[l.tipo]||'#f5b73d';
+      L.polyline(l.ruta,{renderer:canvas,color:color,weight:2,opacity:0.35})
+        .addTo(map).bindPopup(popupHtml(l));
+    });
+  }).catch(function(e){console.error(e);});
+
+  // 2) Mover los MICROS cada 2s
   function render(data){
     var micros = data.micros||[];
     document.getElementById('count').innerHTML = '<b>'+micros.length+'</b> micros';
-    document.getElementById('empty').style.display = micros.length ? 'none' : 'flex';
-    var vistos = {};
+    var vistos={};
     micros.forEach(function(m){
-      var k = key(m); vistos[k]=true;
-      var color = COLOR[m.tipo]||'#f5b73d';
-      if (markers[k]) {
-        markers[k].setLatLng([m.lat,m.lng]);
-      } else {
-        markers[k] = L.circleMarker([m.lat,m.lng],{renderer:canvas,radius:5,
-          color:'#0c1310',weight:1.5,fillColor:color,fillOpacity:0.95})
-          .addTo(map)
-          .bindTooltip(m.nombre+' → '+m.hacia, {direction:'top',opacity:0.95});
+      var k=m.nombre; vistos[k]=true;
+      var color=COLOR[m.tipo]||'#f5b73d';
+      if(markers[k]){ markers[k].setLatLng([m.lat,m.lng]); }
+      else{
+        markers[k]=L.circleMarker([m.lat,m.lng],{renderer:canvas,radius:5,
+          color:'#0c1310',weight:1.5,fillColor:color,fillOpacity:1})
+          .addTo(map).bindPopup(popupHtml(m));
       }
     });
     Object.keys(markers).forEach(function(k){ if(!vistos[k]){ map.removeLayer(markers[k]); delete markers[k]; }});
   }
-
   function tick(){ fetch('/trufis/pos').then(function(r){return r.json();}).then(render).catch(function(e){console.error(e);}); }
   tick();
   setInterval(tick, 2000);
