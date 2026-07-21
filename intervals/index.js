@@ -185,10 +185,13 @@ setInterval(async () => {
             await updateSession(viaje.usuarioPhone, { step: "inicio" });
             await enviarMensaje(viaje.usuarioPhone, "⏳ Hubo un problema buscando chofer. Por favor intenta de nuevo.");
           } else {
-            // Pequeño delay para que el mensaje de timeout llegue antes que el de nuevo chofer
-          await enviarMensaje(viaje.usuarioPhone, "⏳ El chofer no respondió a tiempo. Buscando otro...");
-          await new Promise(r => setTimeout(r, 1500));
-          await asignarChofer(viaje.usuarioPhone, session, [viaje.choferTraccarId]);
+            // Avanzar al siguiente chofer SIN spamear al pasajero: la cascada
+            // recorre a todos en silencio; el pasajero solo vio el "Buscando tu
+            // chofer" inicial y verá el "Viaje aceptado" cuando alguno confirme.
+            // Acumular el chofer que no respondió (si no, hace ping-pong entre
+            // los 2 más cercanos y nunca llega a los lejanos).
+            const yaExcluidos = [...(session.choferesExcluidos || []), viaje.choferTraccarId];
+            await asignarChofer(viaje.usuarioPhone, { ...session, choferesExcluidos: yaExcluidos }, yaExcluidos);
           }
         }
       } catch (eInner) {
