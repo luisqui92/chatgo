@@ -303,6 +303,7 @@
       </div>
     </div>
     <a class="btn" id="btn-tracking" href="#" target="_blank" style="display:block;text-align:center;text-decoration:none;">🗺️ Ver llegada en el mapa</a>
+    <button class="btn secundario" id="btn-compartir" style="display:none;margin-top:10px;">📤 Compartir viaje</button>
   </div>
   <div id="estado-fin" style="display:none;">
     <div class="estado-txt" id="fin-titulo">✅ Viaje finalizado</div>
@@ -818,12 +819,47 @@ async function consultarEstado() {
       $("chofer-rating").textContent = r.chofer.rating ? "★ " + r.chofer.rating : "";
       if (r.chofer.fotoChofer) $("chofer-foto").src = r.chofer.fotoChofer;
     }
-    if (r.tracking) { $("btn-tracking").href = r.tracking; $("btn-tracking").style.display = "block"; }
-    else $("btn-tracking").style.display = "none";
+    if (r.tracking) {
+      $("btn-tracking").href = r.tracking;
+      $("btn-tracking").style.display = "block";
+      // Link para compartir: la MISMA página pública de rastreo, que se apaga
+      // sola cuando el viaje termina (muestra "Viaje finalizado"). Debe ser
+      // absoluto para que funcione al mandarlo a otra persona.
+      linkCompartir = /^https?:\/\//.test(r.tracking) ? r.tracking : (location.origin + r.tracking);
+      $("btn-compartir").style.display = "block";
+    } else {
+      $("btn-tracking").style.display = "none";
+      $("btn-compartir").style.display = "none";
+      linkCompartir = null;
+    }
   } catch (e) {
     // errores transitorios de red: seguir intentando en el próximo poll
   }
 }
+
+// ── Compartir viaje ──────────────────────────────────────────────────────────
+// Usa el link público de rastreo (/track/:id). Ese link deja de mostrar la
+// ubicación en cuanto el viaje termina, así que "se rompe" solo. Web Share API
+// nativa (WhatsApp, etc.) y, si no hay, copia al portapapeles.
+let linkCompartir = null;
+$("btn-compartir").onclick = async () => {
+  if (!linkCompartir) return;
+  const texto = "🚖 Seguí mi viaje ChatGo en vivo:";
+  const url = linkCompartir;
+  try {
+    if (navigator.share) {
+      await navigator.share({ title: "Mi viaje ChatGo", text: texto, url });
+      return;
+    }
+  } catch (e) { if (e && e.name === "AbortError") return; }
+  // Sin Web Share: copiar al portapapeles
+  try {
+    await navigator.clipboard.writeText(texto + " " + url);
+    toast("Link copiado ✅ Pegalo en WhatsApp para compartir.");
+  } catch (e) {
+    toast("Copiá este link: " + url);
+  }
+};
 
 $("btn-otro").onclick = () => {
   puntoOrigen = puntoDestino = null;
