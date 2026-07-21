@@ -36,6 +36,13 @@ module.exports = function (app) {
       if (!viaje || !viaje.origenLat || !viaje.destinoLat) {
         return res.status(404).send("Viaje no encontrado.");
       }
+      // El link de navegación SOLO vive mientras el viaje está activo. Al
+      // terminar/cancelar, se rompe (antes seguía activo para siempre).
+      const finalizado = /^(terminad|finalizad|cancelad|rechazad|completad)/i.test(viaje.estado || "");
+      if (finalizado) {
+        res.setHeader("Content-Type", "text/html; charset=utf-8");
+        return res.status(410).send(paginaFinalizado());
+      }
 
       const paradas = Array.isArray(viaje.paradas) ? viaje.paradas : [];
       const origenNombre = viaje.origenNombre || "Origen";
@@ -68,6 +75,16 @@ module.exports = function (app) {
     }
   });
 };
+
+function paginaFinalizado() {
+  return `<!DOCTYPE html><html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>Viaje finalizado</title>
+<style>body{margin:0;height:100vh;display:flex;align-items:center;justify-content:center;
+background:#0c1310;color:#e7efe9;font-family:system-ui,sans-serif;text-align:center;padding:24px}
+.c{max-width:340px}.e{font-size:52px}h1{font-size:20px;margin:14px 0 6px}p{color:#93a49a;font-size:14px;line-height:1.5}</style>
+</head><body><div class="c"><div class="e">🏁</div><h1>Viaje finalizado</h1>
+<p>Este enlace de navegación ya no está activo porque el viaje terminó.<br><br>Cuando tomes un nuevo viaje, ChatGo te manda un enlace nuevo.</p></div></body></html>`;
+}
 
 function generarHTML({ viajeId, origenLat, origenLng, origenNombre, destinoLat, destinoLng, destinoNombre, paradas, linkGmaps, apiKey }) {
   const paradasJson = JSON.stringify(paradas);
@@ -302,10 +319,7 @@ function generarHTML({ viajeId, origenLat, origenLng, origenNombre, destinoLat, 
       new google.maps.Marker({ position: origen, map, zIndex: 3, title: "Origen", icon: svgPin("#22c55e", "A") });
       new google.maps.Marker({ position: destino, map, zIndex: 3, title: "Destino", icon: svgPin("#ef4444", "B") });
 
-      // Si el chofer arrastra el mapa, dejamos de seguirlo (para que pueda
-      // mirar adelante). El botón "Aquí estoy" vuelve a activar el seguimiento.
-      map.addListener("dragstart", () => { seguirChofer = false; });
-
+      // El auto queda SIEMPRE centrado (seguimiento permanente, como una nav real).
       iniciarSeguimientoChofer();
       pedirWakeLock(); // mantener la pantalla encendida durante la navegación
       calcularRuta(true);
@@ -344,14 +358,15 @@ function generarHTML({ viajeId, origenLat, origenLng, origenNombre, destinoLat, 
           const p = { lat: pos.coords.latitude, lng: pos.coords.longitude };
           if (!choferMarker) {
             choferMarker = new google.maps.Marker({
-              position: p, map, zIndex: 6, title: "Tu ubicación", icon: iconoAuto(pos.coords.heading)
+              position: p, map, zIndex: 6, title: "Tu ubicación",
+              icon: { url: "/logo.png", scaledSize: new google.maps.Size(42, 42), anchor: new google.maps.Point(21, 21) }
             });
           } else {
             choferMarker.setPosition(p);
-            choferMarker.setIcon(iconoAuto(pos.coords.heading));
           }
-          if (!tengoUbiChofer) { tengoUbiChofer = true; map.setCenter(p); map.setZoom(16); }
-          else if (seguirChofer) { map.panTo(p); }
+          if (!tengoUbiChofer) { tengoUbiChofer = true; map.setZoom(16); }
+          // El auto (logo de ChatGo) SIEMPRE queda en el centro: el mapa lo sigue.
+          map.panTo(p);
         },
         (err) => {
           const msg = err.code === 1
