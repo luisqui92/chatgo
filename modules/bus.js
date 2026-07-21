@@ -1,202 +1,113 @@
-// ChatGo — Módulo BUS (demo con las 25 líneas simuladas)
+// ChatGo — Módulo BUS con las 141 líneas REALES de Cochabamba.
 //
-// El pasajero pregunta "¿qué línea me lleva del correo a la universidad?"
-// y recibe SU línea con SOLO el micro que viene hacia él (no toda la flota):
-// nombre de línea, a cuántos metros le queda la parada, ETA del micro más
-// próximo, y un link para verlo venir en vivo en el mapa (/bus/:id).
-//
-// Flujo: pregunta (texto o audio, parseada con la MISMA IA del taxi) →
-// resolver origen/destino (pin o texto con el geocoder validado) → respuesta.
+// Los datos son reales (nombre, destino, sindicato) pero NO tienen el recorrido
+// en coordenadas, así que el bot funciona como BUSCADOR POR DESTINO:
+//   "¿qué línea me lleva a la Tamborada?" → líneas reales que van ahí.
+// El mapa con el recorrido y el micro en vivo llegan cuando el sindicato suma
+// su GPS (RastreoPlus). No inventamos rutas.
 
-const { CONFIG, log } = require("../config");
+const { log } = require("../config");
 const { updateSession, deleteSession } = require("../services/session");
 const { enviarMensaje } = require("../services/whatsapp");
-const { geocodificarConMemoria, obtenerDireccion, guardarReferenciaVoz } = require("../services/google");
-const { buscarEsquinaMapeada, guardarEsquina } = require("../services/utils");
-const { extraerUbicaciones } = require("../services/openai");
-const { buscarLineasParaViaje, microMasProximo } = require("../services/buslineas");
+const { buscarPorDestino, buscarPorNombre, totalLineas, TODAS } = require("../services/lineasreales");
 const { textoDeMensaje } = require("./util");
 
-function linkBus(lineaId, parada) {
-  const base = CONFIG.APP_URL || "https://api.chatgo.ia.bo";
-  return `${base}/bus/${lineaId}?p=${parada.lat.toFixed(5)},${parada.lng.toFixed(5)}`;
+const EMOJI_TIPO = { micro: "🚌", minibus: "🚐", trufi: "🚕", tren: "🚈", teleferico: "🚡" };
+
+function formatearLinea(l) {
+  const e = EMOJI_TIPO[l.tipo] || "🚌";
+  const sind = l.sindicato ? ` · _${l.sindicato}_` : "";
+  return `${e} *${l.nombre}* → ${l.hacia}${sind}`;
 }
 
-async function resolverPuntoBus(msg, texto, detalle = null) {
-  const lat = parseFloat(msg?.location?.latitude ?? msg?.location?.lat);
-  const lng = parseFloat(msg?.location?.longitude ?? msg?.location?.lng);
-  if (!isNaN(lat) && !isNaN(lng)) {
-    const nombre = (await obtenerDireccion(lat, lng).catch(() => null)) || "Tu ubicación";
-    return { lat, lng, nombre };
-  }
-  // Esquina crowdsourced primero ("Juan de la Rosa y Melchor" que un vecino
-  // ya confirmó con su pin) — con match difuso anti errores de dicción
-  if (detalle?.tipo === "esquina" && detalle.calle1 && detalle.calle2) {
-    const r = await buscarEsquinaMapeada(detalle.calle1, detalle.calle2, detalle.zona || null).catch(() => null);
-    if (r?.esquina?.lat) {
-      return { lat: r.esquina.lat, lng: r.esquina.lng, nombre: `${detalle.calle1} y ${detalle.calle2}` };
-    }
-  }
-  if (texto) {
-    const g = await geocodificarConMemoria(texto, "Cochabamba").catch(() => null);
-    // Para una parada de micro, un resultado _incierto alcanza (tolerancia a pie)
-    if (g?.lat) return { lat: g.lat, lng: g.lng, nombre: g.nombre || texto };
-  }
+// Extrae el destino de una frase: "qué línea me lleva a la Tamborada" → "Tamborada"
+function extraerDestino(texto) {
+  if (!texto) return null;
+  const m = texto.match(/\b(?:a|hacia|hasta|para)\s+(?:la\s+|el\s+|los\s+|las\s+)?(.+)$/i);
+  if (m && m[1] && m[1].trim().length >= 3) return m[1].trim();
   return null;
 }
 
-// APRENDIZAJE: cuando el usuario manda el pin de un lugar que el sistema no
-// supo resolver, esa asociación queda guardada PARA SIEMPRE (memoria de
-// referencias + esquina crowdsourced). La próxima vez nadie pide el pin.
-async function aprenderDePin(punto, textoFallido, detalle) {
-  if (!textoFallido || !punto?.lat) return;
-  try {
-    await guardarReferenciaVoz(textoFallido, punto.lat, punto.lng, punto.nombre || textoFallido, "Cochabamba");
-    if (detalle?.tipo === "esquina" && detalle.calle1 && detalle.calle2) {
-      await guardarEsquina(detalle.calle1, detalle.calle2, punto.lat, punto.lng, { zona: detalle.zona || null, ciudad: "Cochabamba" });
+// Responde con las líneas reales que van hacia un destino.
+// opts.conservarSesion: llamado desde el cross-sell del taxi (no borra la sesión).
+async function responderHacia(phone, destinoTexto, opts = {}) {
+  const lineas = buscarPorDestino(destinoTexto);
+  if (!lineas.length) {
+    if (!opts.conservarSesion) {
+      await enviarMensaje(phone,
+        `😕 No encontré una línea que vaya a *"${destinoTexto}"*.\n\n` +
+        `Probá con el nombre de la zona o avenida (ej: _Tamborada_, _Sacaba_, _Chilimarca_, _Quillacollo_), ` +
+        `o escribí *LÍNEAS* para ver todas.`);
     }
-    log.info(`[MOD:bus] Aprendido: "${textoFallido}" → ${punto.lat},${punto.lng}`);
-  } catch (e) { log.error("[MOD:bus] Error aprendiendo:", e.message); }
+    return false;
+  }
+  const top = lineas.slice(0, 6);
+  let msg = `🚌 *Líneas que van a "${destinoTexto}"*\n\n` + top.map(formatearLinea).join("\n") +
+    `\n\n💰 Tarifa aprox. *Bs 2.50*`;
+  if (lineas.length > top.length) msg += `\n_+${lineas.length - top.length} línea(s) más._`;
+  msg += `\n\n_ℹ️ Datos de ${totalLineas()} líneas reales de Cochabamba. El recorrido en el mapa y el micro en vivo llegan cuando el sindicato suma su GPS._`;
+
+  if (opts.conservarSesion) {
+    await enviarMensaje(phone, msg + `\n\n🚖 _¿Preferís el taxi? Elegí Auto/Moto/Van arriba 👆_`);
+  } else {
+    await deleteSession(phone);
+    await enviarMensaje(phone, msg);
+  }
+  return true;
 }
 
-// Respuesta final: la línea + SOLO el micro que viene hacia el pasajero.
-// opts.conservarSesion: cuando se llama desde el flujo TAXI (cross-sell), la
-// sesión del pedido de taxi NO se toca — el pasajero puede seguir y pedir Auto.
-async function responderLinea(phone, origen, destino, opts = {}) {
-  const candidatas = buscarLineasParaViaje(origen, destino);
-  if (!candidatas.length) {
-    if (!opts.conservarSesion) await deleteSession(phone);
-    await enviarMensaje(phone,
-      `😕 Ninguna de nuestras líneas cubre el tramo\n📍 ${origen.nombre}\n🏁 ${destino.nombre}\n\n` +
-      (opts.conservarSesion
-        ? `🚖 Seguí con tu taxi: elegí Auto, Moto o Van arriba 👆`
-        : `🚖 Si querés, pedí un taxi: escribí a dónde vas y te cotizamos al toque.`));
-    return true;
+async function responderDirectorio(phone) {
+  const porTipo = {};
+  TODAS.forEach((l) => { (porTipo[l.tipo] = porTipo[l.tipo] || []).push(l.nombre); });
+  const nom = { micro: "Microbuses", minibus: "Minibuses", trufi: "Trufis", tren: "Mi Tren", teleferico: "Teleférico" };
+  let msg = `🚌 *ChatGo Bus — ${TODAS.length} líneas de Cochabamba*\n\n`;
+  for (const t of Object.keys(porTipo)) {
+    const lista = porTipo[t];
+    msg += `*${nom[t] || t}* (${lista.length}): ${lista.slice(0, 25).join(", ")}${lista.length > 25 ? "…" : ""}\n\n`;
   }
-
-  const mejor = candidatas[0];
-  const micro = microMasProximo(mejor.linea, mejor.pO.t);
-  const alternativa = candidatas[1]
-    ? `\n_También te sirve la ${candidatas[1].linea.nombre} (parada a ${candidatas[1].pO.distM} m)._`
-    : "";
-
-  if (!opts.conservarSesion) await deleteSession(phone);
-  await enviarMensaje(phone,
-    `🚌 *${mejor.linea.nombre}* (${mejor.linea.origen} → ${mejor.linea.destino})\n\n` +
-    `📍 Tu parada queda a *${mejor.pO.distM} m* de donde estás\n` +
-    `🏁 Te deja a *${mejor.pD.distM} m* de tu destino\n\n` +
-    `🚌 El más próximo (Micro ${micro.id}) llega a tu parada en *~${micro.etaMin} min* ` +
-    `(está a ${micro.kmDeDistancia} km)\n\n` +
-    `🗺️ Miralo venir en vivo:\n${linkBus(mejor.linea.id, origen)}` +
-    alternativa +
-    (opts.conservarSesion ? `\n\n🚖 _¿Preferís el taxi al final? Elegí Auto, Moto o Van arriba 👆_` : "") +
-    `\n\n_🚧 DEMO: líneas simuladas de ChatGo Bus._`);
-  log.info(`[MOD:bus] ${phone}: ${origen.nombre} → ${destino.nombre} = ${mejor.linea.nombre}, micro ${micro.id} en ${micro.etaMin} min`);
+  msg += `_Decime a dónde querés ir y te digo qué línea tomar. Ej: "a la Tamborada"._`;
+  await deleteSession(phone);
+  await enviarMensaje(phone, msg);
   return true;
 }
 
 async function iniciar(phone, msg, session) {
-  const base = { ...(session || {}), modulo: "bus", step: "mod_bus_pregunta" };
   const { texto } = await textoDeMensaje(msg);
-  // Si la pregunta de entrada ya trae el tramo ("qué línea me lleva del correo
-  // a la universidad"), procesarla directo sin repreguntar
-  if (texto && /\bde\b|\bdesde\b|\bal?\b/i.test(texto) && texto.split(/\s+/).length >= 4) {
-    await updateSession(phone, base);
-    return await procesar(phone, msg, null, base);
-  }
+  if (texto && /^(lineas|l[ií]neas|todas|lista)$/i.test(texto.trim())) return await responderDirectorio(phone);
+  // Si la pregunta ya trae el destino ("qué línea me lleva a la Tamborada"), responder directo
+  const destino = extraerDestino(texto);
+  if (destino) return await responderHacia(phone, destino);
+  await updateSession(phone, { ...(session || {}), modulo: "bus", step: "mod_bus_destino" });
   await enviarMensaje(phone,
-    "🚌 *ChatGo Bus*\n\n¿De dónde a dónde querés ir?\n\n_Ej: \"del correo a la UMSS\" — por texto o audio._\n\nEscribe CANCELAR para salir.");
-  await updateSession(phone, base);
+    `🚌 *ChatGo Bus*\n\n¿A dónde querés ir? Decime la zona o avenida.\n\n` +
+    `_Ej: "a la Tamborada", "a Sacaba", "a Chilimarca"._\n\n` +
+    `Escribí *LÍNEAS* para ver todas · *CANCELAR* para salir.`);
   return true;
 }
 
 async function procesar(phone, msg, buttonId, session) {
   const { texto } = await textoDeMensaje(msg);
-
-  if (/^cancelar$/i.test(texto)) {
+  if (/^cancelar$/i.test((texto || "").trim())) {
     await deleteSession(phone);
-    await enviarMensaje(phone, "❌ Listo. Escribe *bus* cuando quieras saber qué línea te lleva. 🚌");
+    await enviarMensaje(phone, "❌ Listo. Escribí *bus* cuando quieras saber qué línea te lleva. 🚌");
     return true;
   }
-
-  switch (session.step) {
-
-    // ── 1. La pregunta completa: extraer origen y destino con la IA del taxi ──
-    case "mod_bus_pregunta": {
-      // ¿Mandó un pin directamente? → es su origen, falta el destino
-      if (msg?.location) {
-        const origen = await resolverPuntoBus(msg, null);
-        if (origen) {
-          await updateSession(phone, { ...session, step: "mod_bus_destino", busOrigen: origen });
-          await enviarMensaje(phone, `✅ Estás en: *${origen.nombre}*\n\n🏁 ¿A dónde querés ir?`);
-          return true;
-        }
-      }
-      if (!texto) {
-        await enviarMensaje(phone, "🙏 Contame de dónde a dónde vas (texto o audio), o mandame tu 📍 ubicación.");
-        return true;
-      }
-
-      const ubi = await extraerUbicaciones(texto).catch(() => null);
-      const txtOrigen = (ubi?.origenDetalle?.texto || ubi?.origen || "").trim();
-      const txtDestino = (ubi?.destinoDetalle?.texto || ubi?.destino || "").trim();
-
-      if (!txtDestino && !txtOrigen) {
-        await enviarMensaje(phone, `🤔 No entendí el recorrido. Decime por ejemplo: _"del correo a la UMSS"_ o mandá tu 📍 ubicación.`);
-        return true;
-      }
-
-      // Resolver lo que tengamos (esquinas guardadas primero, luego geocoder)
-      const detOrigen = ubi?.origenDetalle || null;
-      const detDestino = ubi?.destinoDetalle || null;
-      const origen = txtOrigen ? await resolverPuntoBus(null, txtOrigen, detOrigen) : null;
-      const destino = txtDestino ? await resolverPuntoBus(null, txtDestino, detDestino) : null;
-
-      if (origen && destino) return await responderLinea(phone, origen, destino);
-
-      if (destino && !origen) {
-        // Guardar el TEXTO que no supimos resolver: cuando llegue el pin, se aprende
-        await updateSession(phone, { ...session, step: "mod_bus_origen", busDestino: destino, busTextoOrigen: txtOrigen || null, busDetalleOrigen: detOrigen });
-        await enviarMensaje(phone, `🏁 Destino: *${destino.nombre}*\n\n📍 ¿Desde dónde salís? Mandame tu ubicación (pin) o escribí el lugar.` + (txtOrigen ? `\n\n_No encontré "${txtOrigen}" — con tu pin lo aprendo para la próxima._` : ""));
-        return true;
-      }
-      if (origen && !destino) {
-        await updateSession(phone, { ...session, step: "mod_bus_destino", busOrigen: origen, busTextoDestino: txtDestino || null, busDetalleDestino: detDestino });
-        await enviarMensaje(phone, `📍 Origen: *${origen.nombre}*\n\n🏁 ¿A dónde querés ir?` + (txtDestino ? `\n\n_No encontré "${txtDestino}" — con tu pin lo aprendo para la próxima._` : ""));
-        return true;
-      }
-
-      await updateSession(phone, { ...session, step: "mod_bus_origen", busDestino: null, busTextoOrigen: txtOrigen || null, busDetalleOrigen: detOrigen, busTextoDestino: txtDestino || null, busDetalleDestino: detDestino });
-      await enviarMensaje(phone, `😕 No pude ubicar "${txtOrigen || txtDestino}". Mandame tu 📍 pin (lo aprendo para la próxima) o probá con otro nombre.`);
-      return true;
-    }
-
-    // ── 2. Falta el origen ─────────────────────────────────────────────────
-    case "mod_bus_origen": {
-      const origen = await resolverPuntoBus(msg, texto);
-      if (!origen) { await enviarMensaje(phone, "🙏 Mandame tu 📍 ubicación o escribí el lugar de donde salís."); return true; }
-      // Si vino por PIN y había un texto que no supimos resolver: APRENDER
-      if (msg?.location && session.busTextoOrigen) await aprenderDePin(origen, session.busTextoOrigen, session.busDetalleOrigen);
-      if (!session.busDestino) {
-        await updateSession(phone, { ...session, step: "mod_bus_destino", busOrigen: origen });
-        await enviarMensaje(phone, `📍 Origen: *${origen.nombre}*\n\n🏁 ¿A dónde querés ir?`);
-        return true;
-      }
-      return await responderLinea(phone, origen, session.busDestino);
-    }
-
-    // ── 3. Falta el destino ────────────────────────────────────────────────
-    case "mod_bus_destino": {
-      const destino = await resolverPuntoBus(msg, texto);
-      if (!destino) { await enviarMensaje(phone, "🙏 Escribime a dónde vas o mandá el 📍 pin del lugar."); return true; }
-      if (msg?.location && session.busTextoDestino) await aprenderDePin(destino, session.busTextoDestino, session.busDetalleDestino);
-      return await responderLinea(phone, session.busOrigen, destino);
-    }
-
-    default:
-      await deleteSession(phone);
-      return false;
-  }
+  if (/^(lineas|l[ií]neas|todas|lista)$/i.test((texto || "").trim())) return await responderDirectorio(phone);
+  if (!texto) { await enviarMensaje(phone, "🙏 Decime a qué zona querés ir (ej: _a la Tamborada_)."); return true; }
+  const destino = extraerDestino(texto) || texto.trim();
+  return await responderHacia(phone, destino);
 }
 
-module.exports = { id: "bus", iniciar, procesar, responderLinea };
+// Cross-sell desde el taxi: usa el NOMBRE del destino del viaje para sugerir líneas.
+async function responderLinea(phone, origen, destino, opts = {}) {
+  const destTxt = destino?.nombre || "";
+  if (!destTxt || destTxt.length < 3) return false;
+  return await responderHacia(phone, destTxt, opts);
+}
+
+// ¿Hay alguna línea real que vaya al destino? (para decidir el cross-sell del taxi)
+function hayLineaHacia(destinoTexto) {
+  return buscarPorDestino(destinoTexto || "").length > 0;
+}
+
+module.exports = { id: "bus", iniciar, procesar, responderLinea, hayLineaHacia };

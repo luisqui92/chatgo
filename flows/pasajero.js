@@ -292,17 +292,18 @@ async function procesarCalculoViaje(phone, session) {
       ]
     );
 
-    // CROSS-SELL BUS: si el módulo bus está activo y alguna línea de transporte
-    // público cubre este mismo tramo, ofrecerla debajo de la cotización.
-    // La búsqueda es geometría pura (sin APIs): costo cero.
+    // CROSS-SELL BUS: si el módulo bus está activo y alguna línea REAL va hacia
+    // el destino del viaje, ofrecerla debajo de la cotización (datos reales de
+    // 141 líneas de Cochabamba; búsqueda por texto, costo cero).
     try {
-      if (CONFIG.MODULOS_ACTIVOS.includes("bus") && session.origen?.lat && session.destino?.lat) {
-        const { buscarLineasParaViaje } = require("../services/buslineas");
-        const lineasBus = buscarLineasParaViaje(session.origen, session.destino);
+      if (CONFIG.MODULOS_ACTIVOS.includes("bus") && session.destino?.nombre) {
+        const { buscarPorDestino } = require("../services/lineasreales");
+        const lineasBus = buscarPorDestino(session.destino.nombre);
         if (lineasBus.length) {
+          const nombres = lineasBus.slice(0, 3).map((l) => l.nombre).join(", ");
           await enviarMensaje(phone,
-            `🚌 _¿Preferís transporte público? La *${lineasBus[0].linea.nombre}* también te lleva ` +
-            `(parada a ${lineasBus[0].pO.distM} m). Escribí *BUS* para ver cuál te sirve y cuándo pasa._`);
+            `🚌 _¿Preferís transporte público? Las líneas *${nombres}* van para ese lado ` +
+            `(tarifa ~Bs 2.50). Escribí *BUS* para ver todas las que te sirven._`);
         }
       }
     } catch (e) { log.warn("[CROSS_BUS]", e.message); }
