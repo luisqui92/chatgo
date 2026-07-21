@@ -162,6 +162,19 @@ function generarHTML({ viajeId, origenLat, origenLng, origenNombre, destinoLat, 
     .spinner { width: 36px; height: 36px; border: 3px solid #1e293b; border-top-color: #22d3ee; border-radius: 50%; animation: spin .8s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
 
+    /* Cartel de maniobra (turn-by-turn), estilo nav, colores ChatGo */
+    #maniobra {
+      position: absolute; z-index: 9; top: 10px; left: 10px; right: 10px;
+      background: #0e7490; color: #fff; border-radius: 14px; padding: 12px 15px;
+      display: none; align-items: center; gap: 13px;
+      box-shadow: 0 6px 20px rgba(0,0,0,.45);
+    }
+    #maniobra.show { display: flex; }
+    #man-flecha { font-size: 32px; font-weight: 800; line-height: 1; min-width: 34px; text-align: center; }
+    .man-txt { min-width: 0; }
+    #man-instr { font-size: 15px; font-weight: 700; line-height: 1.25; }
+    #man-dist { font-size: 12.5px; opacity: .9; margin-top: 2px; font-weight: 600; }
+
     #btn-aqui {
       position: absolute; z-index: 9;
       right: 12px; bottom: 16px;
@@ -231,6 +244,10 @@ function generarHTML({ viajeId, origenLat, origenLng, origenNombre, destinoLat, 
     <div id="map-loading">
       <div class="spinner"></div>
       <span style="font-size:13px">Cargando mapa y tráfico…</span>
+    </div>
+    <div id="maniobra">
+      <span id="man-flecha">↑</span>
+      <div class="man-txt"><div id="man-instr">Iniciando navegación…</div><div id="man-dist"></div></div>
     </div>
     <button id="btn-aqui" onclick="centrarEnChofer()" title="Centrar en mi ubicación">🧭 Centrar</button>
   </div>
@@ -370,6 +387,7 @@ function generarHTML({ viajeId, origenLat, origenLng, origenNombre, destinoLat, 
           // El auto (logo de ChatGo) SIEMPRE queda en el centro; la ruta ya recorrida se borra.
           map.panTo(p);
           recortarRuta(p);
+          actualizarNavegacion(p); // maniobra + voz paso a paso
         },
         (err) => {
           const msg = err.code === 1
@@ -421,6 +439,48 @@ function generarHTML({ viajeId, origenLat, origenLng, origenNombre, destinoLat, 
         if (d < minD) { minD = d; idx = i; }
       }
       rendererPrincipal.setPath([{ lat: pLat, lng: pLng }, ...rutaPuntos.slice(idx)]);
+    }
+
+    // ── NAVEGACIÓN PASO A PASO (turn-by-turn con voz, estilo Google) ──
+    let pasos = [], idxPaso = 0, avisoLejos = -1, avisoCerca = -1;
+    function flecha(m) {
+      m = (m || "").toUpperCase();
+      if (m.includes("UTURN")) return "↩";
+      if (m.includes("ROUNDABOUT") || m.includes("CIRCLE") || m.includes("ROTARY")) return "⟳";
+      if (m.includes("SHARP_RIGHT")) return "⤵";
+      if (m.includes("SHARP_LEFT")) return "⤴";
+      if (m.includes("RIGHT")) return "↱";
+      if (m.includes("LEFT")) return "↰";
+      if (m.includes("RAMP") || m.includes("MERGE") || m.includes("FORK")) return "↗";
+      if (m.includes("DESTINATION")) return "🏁";
+      return "↑";
+    }
+    function distM(la1, ln1, la2, ln2) {
+      const R = 6371000, dLa = (la2 - la1) * Math.PI / 180, dLn = (ln2 - ln1) * Math.PI / 180;
+      const a = Math.sin(dLa / 2) ** 2 + Math.cos(la1 * Math.PI / 180) * Math.cos(la2 * Math.PI / 180) * Math.sin(dLn / 2) ** 2;
+      return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    }
+    function recomputarIdxPaso(p) {
+      let min = Infinity, idx = 0;
+      for (let i = 0; i < pasos.length; i++) {
+        const d = distM(p.lat, p.lng, pasos[i].lat, pasos[i].lng);
+        if (d < min) { min = d; idx = i; }
+      }
+      idxPaso = idx; avisoLejos = -1; avisoCerca = -1;
+    }
+    function actualizarNavegacion(p) {
+      if (!pasos.length) return;
+      // Avanzar cuando ya estamos muy cerca del punto de la maniobra actual
+      while (idxPaso < pasos.length - 1 && distM(p.lat, p.lng, pasos[idxPaso].lat, pasos[idxPaso].lng) < 22) idxPaso++;
+      const paso = pasos[idxPaso];
+      const d = Math.round(distM(p.lat, p.lng, paso.lat, paso.lng));
+      document.getElementById("maniobra").classList.add("show");
+      document.getElementById("man-flecha").textContent = flecha(paso.maniobra);
+      document.getElementById("man-instr").textContent = paso.instruccion || "Seguí derecho";
+      document.getElementById("man-dist").textContent = d >= 1000 ? (d / 1000).toFixed(1) + " km" : d + " m";
+      const texto = paso.instruccion || "seguí derecho";
+      if (d <= 170 && avisoLejos !== idxPaso) { avisoLejos = idxPaso; hablar("En " + d + " metros, " + texto); }
+      if (d <= 45 && avisoCerca !== idxPaso) { avisoCerca = idxPaso; hablar(texto); }
     }
 
     function calcularRuta(esPrimeraVez) {
@@ -491,8 +551,14 @@ function generarHTML({ viajeId, origenLat, origenLng, origenNombre, destinoLat, 
         map, path: rutaPuntos,
         strokeColor: "#3b82f6", strokeWeight: 6, strokeOpacity: 0.9, zIndex: 2
       });
-      // Si ya sabemos dónde está el chofer, recortar de una lo ya recorrido
-      if (choferMarker) recortarRuta(choferMarker.getPosition());
+      // Maniobras paso a paso (turn-by-turn con voz)
+      pasos = rutas[mejorIdx].pasos || [];
+      // Si ya sabemos dónde está el chofer, recortar lo recorrido y ubicar la maniobra
+      if (choferMarker) {
+        const cp = { lat: choferMarker.getPosition().lat(), lng: choferMarker.getPosition().lng() };
+        recortarRuta(choferMarker.getPosition());
+        if (pasos.length) recomputarIdxPaso(cp);
+      }
 
       // Encuadrar el mapa a la ruta (solo la primera vez, y solo si todavía
       // no estamos siguiendo al chofer — su ubicación en vivo tiene prioridad)

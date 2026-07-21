@@ -740,7 +740,7 @@ async function calcularRutasConTrafico(origen, destino, paradas = []) {
       headers: {
         "Content-Type": "application/json",
         "X-Goog-Api-Key": CONFIG.GOOGLE_MAPS_KEY,
-        "X-Goog-FieldMask": "routes.duration,routes.staticDuration,routes.distanceMeters,routes.polyline.encodedPolyline,routes.description",
+        "X-Goog-FieldMask": "routes.duration,routes.staticDuration,routes.distanceMeters,routes.polyline.encodedPolyline,routes.description,routes.legs.steps.navigationInstruction,routes.legs.steps.startLocation,routes.legs.steps.distanceMeters",
       },
       timeout: CONFIG.TIMEOUT_GOOGLE,
     }
@@ -752,6 +752,14 @@ async function calcularRutasConTrafico(origen, destino, paradas = []) {
     via: r.description || "",
     polilineaCodificada: r.polyline?.encodedPolyline || null,
     puntos: r.polyline?.encodedPolyline ? decodificarPolyline(r.polyline.encodedPolyline) : [],
+    // Maniobras paso a paso (para la navegación con voz del chofer)
+    pasos: (r.legs || []).reduce((acc, leg) => acc.concat((leg.steps || []).map(s => ({
+      instruccion: s.navigationInstruction?.instructions || "",
+      maniobra: s.navigationInstruction?.maneuver || "",
+      lat: s.startLocation?.latLng?.latitude,
+      lng: s.startLocation?.latLng?.longitude,
+      distanciaM: s.distanceMeters || 0,
+    }))), []).filter(p => p.lat != null),
   }));
 }
 
