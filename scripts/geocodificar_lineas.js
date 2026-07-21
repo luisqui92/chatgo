@@ -25,7 +25,9 @@ const path = require("path");
   } catch (_) {}
 })();
 
-const { geocodificarConMemoria, calcularRutasConTrafico } = require("../services/google");
+// Geocodificador CRUDO (no el estricto del taxi): para la simulación del bus
+// un punto aproximado del destino alcanza, así entran barrios, calles y zonas.
+const { geocodificarDireccion, calcularRutasConTrafico, dentroDeCocha } = require("../services/google");
 const { TODAS } = require("../services/lineasreales");
 
 const CENTRO = { lat: -17.3895, lng: -66.1568 }; // Plaza Colón — arranque simulado de cada línea
@@ -47,8 +49,10 @@ async function main() {
   for (const l of TODAS) {
     if (esVago(l.hacia)) { vagos++; continue; }
     let g = null;
-    try { g = await geocodificarConMemoria(l.hacia, "Cochabamba"); } catch (_) {}
-    if (g && g.lat) {
+    try { g = await geocodificarDireccion(l.hacia, true, "Cochabamba"); } catch (_) {}
+    // Aceptar cualquier resultado dentro del área metropolitana de Cochabamba
+    const enCocha = g && g.lat && (typeof dentroDeCocha !== "function" || dentroDeCocha(g.lat, g.lng));
+    if (enCocha) {
       // Recorrido por CALLES REALES del centro al destino (para dibujar la ruta
       // y mover el micro por ella). Si la ruta falla, queda la recta centro→destino.
       let ruta = [[CENTRO.lat, CENTRO.lng], [g.lat, g.lng]];
