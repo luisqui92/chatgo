@@ -1,11 +1,8 @@
 // ChatGo Bus — Mapa de trufis con sus rutas REALES (140 líneas de Cochabamba)
 //
-// GET /trufis        → mapa con las RUTAS reales + los micros (con su número) moviéndose
+// GET /trufis        → mapa con las RUTAS reales + micros + lista de líneas
 // GET /trufis/rutas  → JSON [{ id, nombre, badge, tipo, hacia, sindicato, ruta:[[lat,lng]] }]
 // GET /trufis/pos    → JSON [{ id, nombre, badge, tipo, hacia, sindicato, lat, lng }]
-//
-// Los recorridos son REALES (importados de los HTML de líneas). La posición del
-// micro es una simulación determinista por reloj hasta que el sindicato suma su GPS.
 
 const { posicionesAhora, rutas, total } = require("../services/simtrufis");
 
@@ -33,35 +30,55 @@ const PAGINA = `<!DOCTYPE html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>ChatGo Bus — Trufis en vivo</title>
+<link rel="icon" href="/logo.png">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <style>
   :root{ --bg:#0c1310; --panel:#121b16; --border:#25342b; --text:#e7efe9; --muted:#93a49a;
     --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
   *{box-sizing:border-box}
-  html,body{margin:0;height:100%;font-family:var(--sans);background:var(--bg);color:var(--text)}
+  html,body{margin:0;height:100%;font-family:var(--sans);background:var(--bg);color:var(--text);overflow:hidden}
   #app{display:flex;flex-direction:column;height:100%}
-  header{background:var(--panel);border-bottom:1px solid var(--border);padding:9px 12px;
-    display:flex;align-items:center;gap:10px;flex-wrap:wrap;z-index:1000}
+  header{background:var(--panel);border-bottom:1px solid var(--border);padding:8px 12px;
+    display:flex;align-items:center;gap:10px;z-index:1100}
+  header img{width:26px;height:26px;border-radius:6px}
   .logo{font-weight:800;letter-spacing:-.02em;font-size:16px}
   .logo b{color:#f5b73d}
-  .tag{font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)}
-  #buscar{margin-left:auto;background:#0c1310;border:1px solid var(--border);color:var(--text);
-    border-radius:8px;padding:7px 11px;font-size:13px;font-family:inherit;width:150px;outline:none}
-  #buscar:focus{border-color:#f5b73d}
-  .count{font-size:12.5px;font-weight:700;color:var(--muted)}
+  .count{margin-left:auto;font-size:12.5px;font-weight:700;color:var(--muted)}
   .count b{color:var(--text)}
-  #map{flex:1}
+  #btn-lista{background:#0c1310;border:1px solid var(--border);color:var(--text);border-radius:8px;
+    padding:7px 12px;font-size:13px;font-weight:700;cursor:pointer}
+  #btn-lista:active{border-color:#f5b73d}
+  #map{flex:1;position:relative}
   .leaflet-container{background:#0c1310}
-  .micro{display:flex;align-items:center;justify-content:center;min-width:20px;height:18px;
-    padding:0 5px;border-radius:9px;border:1.5px solid #0c1310;font-size:11px;font-weight:800;
-    color:#0c1310;box-shadow:0 1px 3px rgba(0,0,0,.5);white-space:nowrap;transform:translate(-50%,-50%)}
-  .micro.dim{opacity:.15}
-  #demo{position:absolute;left:10px;bottom:10px;z-index:1000;background:rgba(18,27,22,.92);
-    border:1px solid var(--border);border-radius:10px;padding:7px 11px;font-size:11.5px;color:var(--muted);max-width:80%}
+  /* micro: logo ChatGo + número */
+  .micro{position:relative;width:26px;height:26px;transform:translate(-50%,-50%)}
+  .micro img{width:26px;height:26px;border-radius:50%;border:2px solid #0c1310;background:#0c1310;display:block}
+  .micro .n{position:absolute;bottom:-5px;right:-6px;min-width:16px;height:14px;padding:0 3px;border-radius:7px;
+    border:1px solid #0c1310;font-size:9px;font-weight:800;color:#0c1310;display:flex;align-items:center;justify-content:center;white-space:nowrap}
+  /* panel lista */
+  #panel{position:absolute;top:0;left:0;bottom:0;width:290px;max-width:82%;background:var(--panel);
+    border-right:1px solid var(--border);z-index:1200;display:flex;flex-direction:column;
+    transform:translateX(-102%);transition:transform .22s ease;box-shadow:6px 0 24px rgba(0,0,0,.4)}
+  #panel.open{transform:translateX(0)}
+  .ptop{padding:12px;border-bottom:1px solid var(--border);display:flex;gap:8px;align-items:center}
+  .ptop b{font-size:14px}
+  #cerrar{margin-left:auto;background:none;border:none;color:var(--muted);font-size:20px;cursor:pointer;line-height:1}
+  #buscar{width:100%;margin:10px 12px 0;background:#0c1310;border:1px solid var(--border);color:var(--text);
+    border-radius:8px;padding:8px 11px;font-size:13px;font-family:inherit;outline:none;width:calc(100% - 24px)}
+  #buscar:focus{border-color:#f5b73d}
+  #lista{flex:1;overflow-y:auto;padding:8px}
+  .item{display:flex;align-items:center;gap:9px;padding:9px 10px;border-radius:8px;cursor:pointer;font-size:13px}
+  .item:hover{background:#0c1310}
+  .item.sel{background:rgba(245,183,61,.14)}
+  .dot{width:10px;height:10px;border-radius:50%;flex:none}
+  .item .nm{font-weight:700}
+  .item .hc{color:var(--muted);font-size:11.5px}
+  .todas{color:#f5b73d;font-weight:800}
+  #overlay{position:absolute;inset:0;background:rgba(0,0,0,.4);z-index:1150;display:none}
+  #overlay.show{display:block}
+  #demo{position:absolute;left:10px;bottom:10px;z-index:900;background:rgba(18,27,22,.92);
+    border:1px solid var(--border);border-radius:10px;padding:7px 11px;font-size:11.5px;color:var(--muted);max-width:74%}
   #demo b{color:#f5b73d}
-  #empty{position:absolute;inset:0;display:none;align-items:center;justify-content:center;
-    text-align:center;color:var(--muted);font-size:14px;padding:24px;z-index:1001;background:var(--bg)}
-  #empty b{color:#f5b73d}
   .leaflet-popup-content-wrapper{background:var(--panel);color:var(--text);border-radius:12px}
   .leaflet-popup-tip{background:var(--panel)}
   .pop b{font-size:14px}.pop .r{font-size:12.5px;color:var(--muted);margin-top:3px}
@@ -70,15 +87,21 @@ const PAGINA = `<!DOCTYPE html>
 <body>
 <div id="app">
   <header>
-    <span class="logo">ChatGo <b>Bus</b></span>
-    <span class="tag">Trufis en vivo</span>
+    <img src="/logo.png" alt="ChatGo">
+    <span class="logo">Chat<b>Go</b> Bus</span>
     <span class="count" id="count">—</span>
-    <input id="buscar" placeholder="🔍 buscar línea…" autocomplete="off">
+    <button id="btn-lista" onclick="abrirPanel()">☰ Líneas</button>
   </header>
-  <div id="map"></div>
+  <div id="map">
+    <div id="overlay" onclick="cerrarPanel()"></div>
+    <div id="panel">
+      <div class="ptop"><b>Líneas de Cochabamba</b><button id="cerrar" onclick="cerrarPanel()">✕</button></div>
+      <input id="buscar" placeholder="🔍 buscar línea o zona…" autocomplete="off">
+      <div id="lista"></div>
+    </div>
+    <div id="demo">🚌 <b>Rutas reales</b> · tocá <b>☰ Líneas</b> para ver una sola. Posición del micro simulada hasta que el sindicato suma su GPS.</div>
+  </div>
 </div>
-<div id="empty">🌎 Todavía no hay rutas cargadas.<br>Corré el importador y recargá.</div>
-<div id="demo">🚌 <b>Rutas reales</b> de Cochabamba · posición del micro simulada hasta que el sindicato suma su GPS.</div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
@@ -86,70 +109,93 @@ const PAGINA = `<!DOCTYPE html>
   L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{maxZoom:19}).addTo(map);
   var canvas = L.canvas({padding:0.5});
   var COLOR = { micro:'#f5b73d', minibus:'#ef8a52', trufi:'#2acb8c', tren:'#5aa6ef', teleferico:'#c084fc' };
-  var markers = {};    // id -> marker (micro)
-  var lineasRuta = {}; // id -> polyline
-  var nombreDe = {};   // id -> nombre (para el buscador)
-  var filtro = '';
+  var markers={}, rutasLayer={}, info={};   // id -> ...
+  var seleccion = null; // null = todas; id = solo esa línea
 
-  function labelDe(m){
-    if (m.badge) return m.badge;
-    var n = m.nombre.replace(/^(MicroBus|MiniBus|Trufi|L[ií]nea)\\s*/i,'').trim();
-    return n.length > 6 ? n.slice(0,5)+'…' : n;
-  }
-  function popupHtml(m){
-    return '<div class="pop"><b>'+m.nombre+'</b>'
+  function labelDe(m){ if(m.badge) return m.badge;
+    var n=m.nombre.replace(/^(MicroBus|MiniBus|Trufi|L[ií]nea)\\s*/i,'').trim(); return n.length>5?n.slice(0,4)+'…':n; }
+  function popupHtml(m){ return '<div class="pop"><b>'+m.nombre+'</b>'
       + (m.hacia?('<div class="r">➡️ '+m.hacia+'</div>'):'')
       + (m.sindicato?('<div class="r">🏛️ '+m.sindicato+'</div>'):'')
-      + '<div class="r">💰 Tarifa aprox. Bs 2.50</div></div>';
-  }
-  function iconMicro(m){
-    var color = COLOR[m.tipo]||'#f5b73d';
-    return L.divIcon({ className:'', iconSize:[0,0],
-      html:'<div class="micro" style="background:'+color+'">'+labelDe(m)+'</div>' });
-  }
-  function coincide(id){ return !filtro || (nombreDe[id]||'').toLowerCase().indexOf(filtro) !== -1; }
+      + '<div class="r">💰 Tarifa aprox. Bs 2.50</div></div>'; }
+  function iconMicro(m){ var c=COLOR[m.tipo]||'#f5b73d';
+    return L.divIcon({className:'',iconSize:[0,0],
+      html:'<div class="micro"><img src="/logo.png"><span class="n" style="background:'+c+'">'+labelDe(m)+'</span></div>'}); }
+  function visible(id){ return seleccion===null || String(seleccion)===String(id); }
 
-  // 1) Dibujar RUTAS reales una sola vez
+  // ── RUTAS (una vez) + LISTA ──
   fetch('/trufis/rutas').then(function(r){return r.json();}).then(function(d){
-    var lineas = d.lineas||[];
-    document.getElementById('empty').style.display = lineas.length ? 'none' : 'flex';
+    var lineas=(d.lineas||[]).slice();
     lineas.forEach(function(l){
-      nombreDe[l.id] = l.nombre;
-      var color = COLOR[l.tipo]||'#f5b73d';
-      lineasRuta[l.id] = L.polyline(l.ruta,{renderer:canvas,color:color,weight:2,opacity:0.35})
-        .addTo(map).bindPopup(popupHtml(l));
+      info[l.id]=l;
+      rutasLayer[l.id]=L.polyline(l.ruta,{renderer:canvas,color:COLOR[l.tipo]||'#f5b73d',weight:2,opacity:0.35}).bindPopup(popupHtml(l));
+      rutasLayer[l.id].addTo(map);
     });
+    construirLista(lineas);
   }).catch(function(e){console.error(e);});
 
-  // 2) Mover MICROS cada 2.5s
+  function construirLista(lineas){
+    lineas.sort(function(a,b){ return String(a.nombre).localeCompare(String(b.nombre),'es',{numeric:true}); });
+    window._lineas = lineas;
+    pintarLista('');
+  }
+  function pintarLista(q){
+    q=(q||'').toLowerCase();
+    var cont=document.getElementById('lista');
+    var html='<div class="item" onclick="verTodas()"><span class="dot" style="background:#f5b73d"></span><span class="nm todas">▸ Ver todas</span></div>';
+    (window._lineas||[]).forEach(function(l){
+      if(q && (l.nombre+' '+(l.hacia||'')).toLowerCase().indexOf(q)===-1) return;
+      var c=COLOR[l.tipo]||'#f5b73d';
+      html+='<div class="item'+(String(seleccion)===String(l.id)?' sel':'')+'" onclick="seleccionar('+l.id+')">'
+        +'<span class="dot" style="background:'+c+'"></span>'
+        +'<span><span class="nm">'+l.nombre+'</span>'+(l.hacia?(' <span class="hc">→ '+l.hacia+'</span>'):'')+'</span></div>';
+    });
+    cont.innerHTML=html;
+  }
+
+  // ── Selección: mostrar SOLO esa línea ──
+  function aplicarSeleccion(){
+    Object.keys(rutasLayer).forEach(function(id){
+      var vis=visible(id), lyr=rutasLayer[id];
+      if(vis && !map.hasLayer(lyr)) lyr.addTo(map);
+      if(!vis && map.hasLayer(lyr)) map.removeLayer(lyr);
+      if(vis) lyr.setStyle({opacity: seleccion!==null?0.9:0.35, weight: seleccion!==null?5:2});
+    });
+    Object.keys(markers).forEach(function(id){
+      var vis=visible(id), mk=markers[id];
+      if(vis && !map.hasLayer(mk)) mk.addTo(map);
+      if(!vis && map.hasLayer(mk)) map.removeLayer(mk);
+    });
+  }
+  function seleccionar(id){
+    seleccion=id;
+    aplicarSeleccion();
+    var l=info[id];
+    if(l && l.ruta && l.ruta.length){ map.fitBounds(l.ruta,{padding:[40,40]}); }
+    pintarLista(document.getElementById('buscar').value);
+    cerrarPanel();
+  }
+  function verTodas(){ seleccion=null; aplicarSeleccion(); pintarLista(document.getElementById('buscar').value); cerrarPanel(); }
+
+  function abrirPanel(){ document.getElementById('panel').classList.add('open'); document.getElementById('overlay').classList.add('show'); }
+  function cerrarPanel(){ document.getElementById('panel').classList.remove('open'); document.getElementById('overlay').classList.remove('show'); }
+  document.getElementById('buscar').addEventListener('input',function(e){ pintarLista(e.target.value); });
+
+  // ── MICROS (cada 2.5s) ──
   function render(data){
-    var micros = data.micros||[];
-    document.getElementById('count').innerHTML = '<b>'+micros.length+'</b> micros';
+    var micros=data.micros||[];
+    document.getElementById('count').innerHTML='<b>'+micros.length+'</b> micros';
     var vistos={};
     micros.forEach(function(m){
-      var k=m.id; vistos[k]=true; nombreDe[k]=m.nombre;
+      var k=m.id; vistos[k]=true;
       if(markers[k]){ markers[k].setLatLng([m.lat,m.lng]); }
-      else{ markers[k]=L.marker([m.lat,m.lng],{icon:iconMicro(m)}).addTo(map).bindPopup(popupHtml(m)); }
-      var el=markers[k].getElement(); if(el){var dd=el.querySelector('.micro'); if(dd) dd.classList.toggle('dim',!coincide(k));}
-    });
-    Object.keys(markers).forEach(function(k){ if(!vistos[k]){ map.removeLayer(markers[k]); delete markers[k]; }});
-  }
-  function aplicarFiltro(){
-    Object.keys(markers).forEach(function(k){
-      var el=markers[k].getElement(); if(el){var dd=el.querySelector('.micro'); if(dd) dd.classList.toggle('dim',!coincide(k));}
-    });
-    Object.keys(lineasRuta).forEach(function(k){
-      var ok = coincide(k);
-      lineasRuta[k].setStyle({ opacity: (!filtro||ok)?0.35:0.05, weight: (filtro&&ok)?4:2 });
+      else{ markers[k]=L.marker([m.lat,m.lng],{icon:iconMicro(m)}).bindPopup(popupHtml(m)); if(visible(k)) markers[k].addTo(map); }
+      if(visible(k) && !map.hasLayer(markers[k])) markers[k].addTo(map);
+      if(!visible(k) && map.hasLayer(markers[k])) map.removeLayer(markers[k]);
     });
   }
-  document.getElementById('buscar').addEventListener('input', function(e){
-    filtro = (e.target.value||'').trim().toLowerCase(); aplicarFiltro();
-  });
-
   function tick(){ fetch('/trufis/pos').then(function(r){return r.json();}).then(render).catch(function(e){console.error(e);}); }
-  tick();
-  setInterval(tick, 2500);
+  tick(); setInterval(tick,2500);
 </script>
 </body>
 </html>`;
