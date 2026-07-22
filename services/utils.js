@@ -329,6 +329,9 @@ function enPromoGratis() {
 
 function choferPagoAlDia(chofer) {
   if (!chofer) return false;
+  // Los superchoferes (números de prueba) están EXENTOS del pago diario:
+  // siempre se consideran al día para poder recibir viajes sin pagar la cuota.
+  if (chofer.phone && CONFIG.CHOFER_PRUEBA_PHONES.includes(chofer.phone)) return true;
   return chofer.pagoDiarioPagado && chofer.pagoDiarioAprobado && chofer.pagoDiarioFechaStr === fechaStrBolivia().split("T")[0];
 }
 
