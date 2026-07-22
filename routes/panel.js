@@ -121,18 +121,63 @@ function construirFlota(ciudadId, ciudadNombre, cantidad, reales, offsetReal, no
 
     const ingresos = viajes * (tipo === "moto" ? 9 : 16);
 
+    // Posición en el mapa: sobre una calle real, a velocidad realista.
+    const pos = (estado === "offline") ? null : posCarro(gi + 1, ciudadId, now);
+
     choferes.push({
       id: ciudadId + "-" + gi,
-      posSeed: gi + 1,          // seed estable para la posición en el mapa
+      posSeed: gi + 1,
       nombre, tipo, placa, color,
       rating, ratingCant,
       viajes, ingresos, estado,
       ciudad: ciudadNombre,
       esReal: !!real,
       foto: real ? (real.fotoChofer || null) : null,
+      lat: pos ? pos[0] : null,
+      lng: pos ? pos[1] : null,
     });
   }
   return choferes;
+}
+
+// ── Posición del auto sobre una calle real, a velocidad de auto ──────────────
+// CBBA: recorre un tramo de una ruta real de micro (ida y vuelta). SCZ: circula
+// por una manzana en cuadrícula. Determinista por seed + reloj.
+function puntoEnRuta(ruta, frac) {
+  const n = ruta.length;
+  if (n < 2) return ruta[0];
+  const x = Math.max(0, Math.min(1, frac)) * (n - 1);
+  const i = Math.floor(x), t = x - i;
+  const a = ruta[Math.min(i, n - 1)], b = ruta[Math.min(i + 1, n - 1)];
+  return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+}
+function rutaCarro(seed, ciudadKey) {
+  const r = rng(seed * 3187 + 11);
+  if (ciudadKey === "cbba") {
+    const L = cargarLineas();
+    if (!L.length) return null;
+    const ln = L[Math.floor(r() * L.length)].ruta;
+    const segLen = 30 + Math.floor(r() * 40);
+    const start = Math.floor(r() * Math.max(1, ln.length - segLen));
+    const seg = ln.slice(start, Math.min(ln.length, start + segLen));
+    return seg.length >= 2 ? seg : ln.slice(0, Math.min(ln.length, 30));
+  }
+  // Santa Cruz: rectángulo (manzana) en cuadrícula
+  const g = GEO.scz, box = 0.04, paso = 0.0016;
+  const cx = g.lat + (r() - 0.5) * box, cy = g.lng + (r() - 0.5) * box;
+  const w = 0.006 + r() * 0.012, h = 0.006 + r() * 0.012;
+  const c1 = [snap(cx, paso), snap(cy, paso)], c2 = [snap(cx, paso), snap(cy + w, paso)];
+  const c3 = [snap(cx + h, paso), snap(cy + w, paso)], c4 = [snap(cx + h, paso), snap(cy, paso)];
+  return lpath(c1, c2, paso).concat(lpath(c2, c3, paso).slice(1), lpath(c3, c4, paso).slice(1), lpath(c4, c1, paso).slice(1));
+}
+function posCarro(seed, ciudadKey, now) {
+  const ruta = rutaCarro(seed, ciudadKey);
+  if (!ruta || ruta.length < 2) return null;
+  const r = rng(seed * 77 + 5);
+  const periodo = 300000 + Math.floor(r() * 240000); // 5–9 min por tramo (ida)
+  const t = ((now / periodo) + r()) % 1;
+  const tri = t < 0.5 ? t * 2 : (1 - t) * 2;          // ping-pong: va y vuelve
+  return puntoEnRuta(ruta, tri);
 }
 
 // Feed de últimos viajes (determinista por bucket de tiempo)
@@ -551,17 +596,6 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","
 function estrellas(r){return "★ "+(r||0).toFixed(1);}
 function haceTxt(s){ if(s<60)return "hace "+s+"s"; const m=Math.floor(s/60); return "hace "+m+" min"; }
 
-// PRNG idéntico al del servidor (para calcular la posición en el navegador)
-function rng(seed){let t=seed>>>0;return function(){t+=0x6D2B79F5;let x=Math.imul(t^(t>>>15),1|t);x^=x+Math.imul(x^(x>>>7),61|x);return ((x^(x>>>14))>>>0)/4294967296;};}
-function posDe(seed, ciudad, t){
-  const R=rng(seed*7919+3);const c=CIUDAD_GEO[ciudad];
-  const clat=c.lat+(R()-0.5)*c.spread*2, clng=c.lng+(R()-0.5)*c.spread*2;
-  const A=0.005+R()*0.02, B=0.005+R()*0.02;
-  const w=0.02+R()*0.05, p1=R()*6.283, p2=R()*6.283;
-  const ts=t/1000;
-  return [clat+A*Math.sin(w*ts+p1), clng+B*Math.cos(w*0.8*ts+p2)];
-}
-
 function initMap(){
   map=L.map("map",{zoomControl:true,attributionControl:false}).setView([CIUDAD_GEO.cbba.lat,CIUDAD_GEO.cbba.lng],CIUDAD_GEO.cbba.zoom);
   L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",{maxZoom:19}).addTo(map);
@@ -569,25 +603,41 @@ function initMap(){
 function iconoCar(ch){
   return L.divIcon({className:"",html:'<div class="car '+ch.estado+'">'+(ch.tipo==="moto"?"🏍️":"🚗")+'</div>',iconSize:[26,26],iconAnchor:[13,13]});
 }
-function tickMapa(){
+// Actualiza los destinos de cada auto con las posiciones REALES del servidor
+// (sobre calles). El movimiento suave lo hace el tween de abajo.
+function actualizarMapa(){
   if(!DATA||!map) return;
   const cd=DATA.ciudades.find(c=>c.id===SEL); if(!cd) return;
-  const t=Date.now(); const vistos=new Set();
+  const vistos=new Set();
   cd.choferes.forEach(ch=>{
-    if(ch.estado==="offline") return;
+    if(ch.estado==="offline"||typeof ch.lat!=="number") return;
     vistos.add(ch.id);
-    const p=posDe(ch.posSeed,SEL,t);
-    let mk=markers[ch.id];
-    if(!mk){ mk=L.marker(p,{icon:iconoCar(ch)}); mk.addTo(map); mk.on("click",()=>abrir(ch.id)); markers[ch.id]=mk; mk._estado=ch.estado; }
-    else { mk.setLatLng(p); if(mk._estado!==ch.estado){ mk.setIcon(iconoCar(ch)); mk._estado=ch.estado; } }
+    let m=markers[ch.id];
+    if(!m){
+      const mk=L.marker([ch.lat,ch.lng],{icon:iconoCar(ch)}); mk.addTo(map); mk.on("click",()=>abrir(ch.id));
+      markers[ch.id]={mk,cur:[ch.lat,ch.lng],tgt:[ch.lat,ch.lng],estado:ch.estado};
+    } else {
+      m.tgt=[ch.lat,ch.lng];
+      if(m.estado!==ch.estado){ m.mk.setIcon(iconoCar(ch)); m.estado=ch.estado; }
+    }
   });
-  Object.keys(markers).forEach(id=>{ if(!vistos.has(id)){ map.removeLayer(markers[id]); delete markers[id]; } });
+  Object.keys(markers).forEach(id=>{ if(!vistos.has(id)){ map.removeLayer(markers[id].mk); delete markers[id]; } });
+}
+// Tween: mueve cada auto suavemente hacia su destino (a paso de auto)
+function tickMapa(){
+  for(const id in markers){ const m=markers[id];
+    const dLat=m.tgt[0]-m.cur[0], dLng=m.tgt[1]-m.cur[1];
+    if(Math.abs(dLat)>1e-7||Math.abs(dLng)>1e-7){
+      m.cur[0]+=dLat*0.06; m.cur[1]+=dLng*0.06;
+      m.mk.setLatLng(m.cur);
+    }
+  }
 }
 
 function cambiarCiudad(id){
   if(SEL===id) return;
   SEL=id;
-  Object.keys(markers).forEach(k=>{ map.removeLayer(markers[k]); delete markers[k]; });
+  Object.keys(markers).forEach(k=>{ map.removeLayer(markers[k].mk); delete markers[k]; });
   const g=CIUDAD_GEO[id]; map.setView([g.lat,g.lng],g.zoom);
   pintar();
 }
@@ -631,6 +681,8 @@ function pintar(){
     '<div class="est '+ch.estado+'"></div>'+
     '<div class="f-viajes"><div class="n">'+ch.viajes+'</div><div class="l">viajes</div></div></div>'
   ).join("");
+
+  actualizarMapa(); // posiciones reales de los autos (sobre calles)
 }
 
 function abrir(id){
