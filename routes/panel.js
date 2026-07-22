@@ -1,12 +1,14 @@
 // ChatGo — Panel de Operaciones (simulación por ciudad)
 //
-// GET /panel        → dashboard con 2 ciudades (Cochabamba y Santa Cruz)
-// GET /panel/datos  → JSON con viajes por ciudad y por chofer (poll cada 5s)
+// GET /panel        → dashboard con selector de ciudad, mapa en vivo y feed
+// GET /panel/datos  → JSON con viajes por ciudad, choferes y feed (poll cada 4s)
 //
 // TODO es determinista y CALCULADO en base a la hora (no se escribe en la base):
 // por eso el link NUNCA se rompe y "se reinicia" solo a las 4:00 AM (los conteos
 // son función del tiempo transcurrido desde las 4am). Usa los nombres reales de
 // choferes de la base y completa hasta 140 autos (120 Cochabamba + 20 Santa Cruz).
+// Las posiciones del mapa se calculan en el navegador (movimiento suave) a partir
+// de un seed estable que manda el servidor.
 
 const { Chofer } = require("../db/models");
 const { log } = require("../config");
@@ -14,14 +16,13 @@ const { log } = require("../config");
 const FLOTA_CBBA = 120;
 const FLOTA_SCZ = 20;
 
-// Curva de demanda por hora (misma forma que el demo): pico mañana/mediodía/tarde
+// Curva de demanda por hora (pico mañana/mediodía/tarde)
 function factorHora(h) {
   const c = [0.2,0.1,0.1,0.1,0.2,0.4, 0.8,1.4,1.6,1.2,0.9,1.0, 1.5,1.4,1.0,0.9,1.0,1.3, 1.8,1.6,1.4,1.0,0.6,0.4];
   return c[h] || 1.0;
 }
 const TOTAL_DIA = (() => { let s = 0; for (let h = 0; h < 24; h++) s += factorHora(h); return s; })();
 
-// Unidades de demanda acumuladas desde las 4:00 AM hasta "ahora"
 function unidadesDesde4(now) {
   const d = new Date(now);
   const h = d.getHours(), m = d.getMinutes();
@@ -31,14 +32,10 @@ function unidadesDesde4(now) {
   u += factorHora(h) * (m / 60);
   return u;
 }
-
-// Id de día que cambia a las 4am (para variar la simulación cada día, estable dentro del día)
 function diaId4am(now) {
   const d = new Date(now - 4 * 3600 * 1000);
   return d.getFullYear() * 10000 + (d.getMonth() + 1) * 100 + d.getDate();
 }
-
-// PRNG determinista (mulberry32)
 function rng(seed) {
   let t = seed >>> 0;
   return function () {
@@ -49,33 +46,34 @@ function rng(seed) {
   };
 }
 
-// Nombres bolivianos para completar la flota simulada (los reales salen primero)
 const NOMBRES = ["Carlos","José","Luis","Juan","Marco","Freddy","Rodrigo","Álvaro","Grover","Wilson","Edwin","Ramiro","René","Óscar","Javier","Mauricio","Gonzalo","Iván","David","Richard","Gabriel","Nelson","Rubén","Hugo","Fernando","Roberto","Miguel","Sergio","Daniel","Pablo","Ariel","Cristian","Jhonny","Limbert","Vladimir","Boris","Wálter","Germán","Marcelo","Ronald","Adhemar","Willy","Elvis","Franz","Efraín","Delfín","Saúl","Abraham","Néstor","Vicente"];
 const APELLIDOS = ["Mamani","Quispe","Choque","Flores","Condori","Vargas","Rojas","Colque","Ticona","Apaza","Gutiérrez","Fernández","Rodríguez","Villca","Cruz","Torrez","Camacho","Céspedes","Ledezma","Zeballos","Arispe","Montaño","Balderrama","Sejas","Terrazas","Claros","Peredo","Antezana","Escóbar","Ovando","Guzmán","Salvatierra","Suárez","Áñez","Justiniano","Roca","Cuéllar","Menacho","Parada","Áñez"];
+const PASAJEROS = ["Ana","María","Sofía","Lucía","Carla","Daniela","Fernanda","Gabriela","Rocío","Susana","Andrea","Paola","Valeria","Jorge","Pedro","Diego","Mateo","Sergio","Bruno","Iván","Camila","Noelia","Fabiola","Ximena"];
+const ZONAS = {
+  cbba: ["Cala Cala","El Prado","Plaza Colón","Av. América","Quillacollo","Sacaba","La Recoleta","Muyurina","Av. Blanco Galindo","Zona Sur","Tiquipaya","Centro","Hipódromo","Av. Heroínas","Sarco","Temporal","Villa Busch","Colcapirhua"],
+  scz: ["Equipetrol","Plan 3000","Monseñor Rivero","2do Anillo","Las Palmas","Urubó","Cristo Redentor","4to Anillo","La Ramada","Villa 1ro de Mayo","Ventura Mall","Av. Alemana","Los Pozos","Av. Banzer","6to Anillo","Sirari"],
+};
 
 function nombreGenerado(i) {
   const r = rng(i * 2654435761 + 12345);
-  const n = NOMBRES[Math.floor(r() * NOMBRES.length)];
-  const a = APELLIDOS[Math.floor(r() * APELLIDOS.length)];
-  return n + " " + a;
+  return NOMBRES[Math.floor(r() * NOMBRES.length)] + " " + APELLIDOS[Math.floor(r() * APELLIDOS.length)];
 }
 function placaGenerada(i) {
   const r = rng(i * 40503 + 777);
   const num = 1000 + Math.floor(r() * 8999);
-  const letras = "ABCDEFGHJKLMNPRSTUVXYZ";
-  return num + "-" + letras[Math.floor(r() * letras.length)] + letras[Math.floor(r() * letras.length)] + letras[Math.floor(r() * letras.length)];
+  const L = "ABCDEFGHJKLMNPRSTUVXYZ";
+  return num + "-" + L[Math.floor(r() * L.length)] + L[Math.floor(r() * L.length)] + L[Math.floor(r() * L.length)];
 }
 
-// Construye la flota de una ciudad: usa choferes reales primero, completa con generados
 function construirFlota(ciudadId, ciudadNombre, cantidad, reales, offsetReal, now) {
   const dia = diaId4am(now);
   const u = unidadesDesde4(now);
   const horaAhora = new Date(now).getHours();
-  const bucket = Math.floor((Date.now() % (24 * 3600 * 1000)) / (8 * 60 * 1000)); // bucket de 8 min
+  const bucket = Math.floor(now / (8 * 60 * 1000)); // bucket de 8 min para el estado
 
   const choferes = [];
   for (let k = 0; k < cantidad; k++) {
-    const gi = offsetReal + k; // índice global estable
+    const gi = offsetReal + k;
     const real = reales[gi] || null;
     const seed = (gi + 1) * 7919 + dia;
     const r = rng(seed);
@@ -85,12 +83,10 @@ function construirFlota(ciudadId, ciudadNombre, cantidad, reales, offsetReal, no
     const placa = real ? (real.placa || placaGenerada(gi)) : placaGenerada(gi);
     const color = real ? (real.colorVehiculo || "") : ["Blanco","Gris","Negro","Rojo","Azul","Plata"][Math.floor(r() * 6)];
 
-    // Actividad personal del chofer (estable en el día)
-    const actividad = 0.6 + r() * 0.9; // 0.6 .. 1.5
-    const baseDaily = 12 + Math.floor(r() * 8); // 12..19 viajes/día a full
+    const actividad = 0.6 + r() * 0.9;
+    const baseDaily = 12 + Math.floor(r() * 8);
     const viajes = Math.max(0, Math.round(actividad * baseDaily * (u / TOTAL_DIA)));
 
-    // Rating: real si existe, si no determinista alto
     let rating, ratingCant;
     if (real && real.ratingCantidad > 0) {
       rating = Math.round(real.ratingPromedio * 10) / 10;
@@ -100,7 +96,6 @@ function construirFlota(ciudadId, ciudadNombre, cantidad, reales, offsetReal, no
       ratingCant = 20 + Math.floor(r() * 400);
     }
 
-    // Estado ahora (varía por bucket de tiempo): offline de noche, ocupado en horas pico
     const rt = rng(seed + bucket * 104729);
     const probOffline = (horaAhora < 6 || horaAhora >= 23) ? 0.6 : 0.12;
     const probOcupado = Math.min(0.75, 0.30 * factorHora(horaAhora));
@@ -114,6 +109,7 @@ function construirFlota(ciudadId, ciudadNombre, cantidad, reales, offsetReal, no
 
     choferes.push({
       id: ciudadId + "-" + gi,
+      posSeed: gi + 1,          // seed estable para la posición en el mapa
       nombre, tipo, placa, color,
       rating, ratingCant,
       viajes, ingresos, estado,
@@ -123,6 +119,30 @@ function construirFlota(ciudadId, ciudadNombre, cantidad, reales, offsetReal, no
     });
   }
   return choferes;
+}
+
+// Feed de últimos viajes (determinista por bucket de tiempo)
+function generarFeed(ciudadKey, choferes, now) {
+  const zonas = ZONAS[ciudadKey];
+  const horaAhora = new Date(now).getHours();
+  const intervalo = (ciudadKey === "cbba" ? 45000 : 150000) / Math.max(0.4, factorHora(horaAhora)); // ms entre viajes
+  const feed = [];
+  const bucketAhora = Math.floor(now / intervalo);
+  for (let k = 0; k < 9; k++) {
+    const b = bucketAhora - k;
+    const r = rng(b * 2246822519 + (ciudadKey === "cbba" ? 11 : 97));
+    const ch = choferes[Math.floor(r() * choferes.length)];
+    let oi = Math.floor(r() * zonas.length), di = Math.floor(r() * zonas.length);
+    if (di === oi) di = (di + 1) % zonas.length;
+    const precio = (ch.tipo === "moto" ? 6 : 9) + Math.floor(r() * 22);
+    const haceSeg = Math.round((now - b * intervalo) / 1000);
+    feed.push({
+      chofer: ch.nombre, pasajero: PASAJEROS[Math.floor(r() * PASAJEROS.length)],
+      origen: zonas[oi], destino: zonas[di], precio, haceSeg,
+      tipo: ch.tipo,
+    });
+  }
+  return feed;
 }
 
 async function armarDatos() {
@@ -155,15 +175,14 @@ async function armarDatos() {
     offline: lista.filter(c => c.estado === "offline").length,
   });
 
-  // Ordenar choferes por viajes (desc) para el ranking
-  cbba.sort((a, b) => b.viajes - a.viajes);
-  scz.sort((a, b) => b.viajes - a.viajes);
+  const rankCbba = [...cbba].sort((a, b) => b.viajes - a.viajes);
+  const rankScz = [...scz].sort((a, b) => b.viajes - a.viajes);
 
   return {
     hora: now,
     ciudades: [
-      { id: "cbba", nombre: "Cochabamba", ...resumen(cbba), choferes: cbba },
-      { id: "scz", nombre: "Santa Cruz", ...resumen(scz), choferes: scz },
+      { id: "cbba", nombre: "Cochabamba", ...resumen(cbba), choferes: rankCbba, feed: generarFeed("cbba", cbba, now) },
+      { id: "scz", nombre: "Santa Cruz", ...resumen(scz), choferes: rankScz, feed: generarFeed("scz", scz, now) },
     ],
   };
 }
@@ -195,52 +214,74 @@ const PAGINA = `<!DOCTYPE html>
 <meta name="theme-color" content="#0c1310">
 <link rel="icon" href="/logo.png">
 <title>ChatGo — Panel de Operaciones</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <style>
   *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
   :root{--verde:#1D9E75;--verde2:#34d399;--fondo:#0c1310;--card:#131c18;--card2:#0f1713;--borde:#1e2b24;--txt:#e7efe9;--gris:#7f948b;}
   body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--fondo);color:var(--txt);min-height:100vh;}
-  header{position:sticky;top:0;z-index:10;background:linear-gradient(180deg,#0c1310,#0c1310ee);backdrop-filter:blur(6px);border-bottom:1px solid var(--borde);padding:12px 16px;display:flex;align-items:center;gap:12px;}
-  header img{width:32px;height:32px;border-radius:8px;}
-  .h-t{font-size:16px;font-weight:800;letter-spacing:.3px;}
-  .h-t span{color:var(--verde2);}
-  .h-sub{font-size:11px;color:var(--gris);margin-top:1px;}
+  header{position:sticky;top:0;z-index:1000;background:#0c1310ee;backdrop-filter:blur(6px);border-bottom:1px solid var(--borde);padding:11px 16px;display:flex;align-items:center;gap:12px;}
+  header img{width:30px;height:30px;border-radius:8px;}
+  .h-t{font-size:15px;font-weight:800;} .h-t span{color:var(--verde2);}
+  .h-sub{font-size:10px;color:var(--gris);margin-top:1px;}
   .reloj{margin-left:auto;text-align:right;}
-  .reloj .r{font-size:20px;font-weight:800;color:var(--verde2);line-height:1;font-variant-numeric:tabular-nums;}
+  .reloj .r{font-size:19px;font-weight:800;color:var(--verde2);line-height:1;font-variant-numeric:tabular-nums;}
   .reloj .s{font-size:10px;color:var(--gris);}
-  .wrap{max-width:1200px;margin:0 auto;padding:16px;display:grid;grid-template-columns:1fr 1fr;gap:16px;}
-  @media(max-width:820px){.wrap{grid-template-columns:1fr;}}
-  .ciudad{background:var(--card);border:1px solid var(--borde);border-radius:16px;overflow:hidden;display:flex;flex-direction:column;}
-  .c-head{padding:14px 16px;border-bottom:1px solid var(--borde);}
-  .c-nom{font-size:17px;font-weight:800;display:flex;align-items:center;gap:8px;}
-  .c-dot{width:9px;height:9px;border-radius:50%;background:var(--verde2);box-shadow:0 0 8px var(--verde2);animation:pulso 2s infinite;}
-  @keyframes pulso{0%,100%{opacity:1}50%{opacity:.35}}
+  .tabs{display:flex;gap:8px;padding:12px 16px 4px;max-width:1200px;margin:0 auto;}
+  .tab{flex:1;background:var(--card);border:1px solid var(--borde);color:var(--gris);border-radius:12px;padding:11px;font-size:14px;font-weight:800;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;transition:.15s;}
+  .tab.act{background:linear-gradient(135deg,var(--verde2),var(--verde));color:#04140d;border-color:transparent;}
+  .tab .cnt{font-size:11px;opacity:.85;font-weight:700;}
+  .wrap{max-width:1200px;margin:0 auto;padding:8px 16px 24px;}
+  #map{height:44vh;min-height:280px;border-radius:16px;border:1px solid var(--borde);overflow:hidden;margin-top:8px;background:#0a0f0c;}
+  .leaflet-tile{filter:brightness(.85) saturate(.85);}
+  .car{width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:13px;border:2px solid #04140d;box-shadow:0 2px 6px rgba(0,0,0,.5);}
+  .car.libre{background:var(--verde2);} .car.en_viaje{background:#fbbf24;}
   .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:12px;}
-  .kpi{background:var(--card2);border:1px solid var(--borde);border-radius:10px;padding:8px 6px;text-align:center;}
-  .kpi .n{font-size:19px;font-weight:800;color:var(--verde2);line-height:1;font-variant-numeric:tabular-nums;}
+  .kpi{background:var(--card);border:1px solid var(--borde);border-radius:12px;padding:11px 6px;text-align:center;}
+  .kpi .n{font-size:22px;font-weight:800;color:var(--verde2);line-height:1;font-variant-numeric:tabular-nums;}
   .kpi.amar .n{color:#fbbf24;} .kpi.gris .n{color:var(--gris);}
-  .kpi .l{font-size:9px;color:var(--gris);text-transform:uppercase;letter-spacing:.4px;margin-top:4px;}
-  .lista{max-height:62vh;overflow-y:auto;}
-  .fila{display:flex;align-items:center;gap:10px;padding:9px 16px;border-bottom:1px solid #0e1512;cursor:pointer;transition:background .12s;}
+  .kpi .l{font-size:9px;color:var(--gris);text-transform:uppercase;letter-spacing:.4px;margin-top:5px;}
+  .cols{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px;}
+  @media(max-width:820px){.cols{grid-template-columns:1fr;}}
+  .panel{background:var(--card);border:1px solid var(--borde);border-radius:16px;overflow:hidden;}
+  .p-head{padding:12px 15px;border-bottom:1px solid var(--borde);font-size:13px;font-weight:800;display:flex;align-items:center;gap:8px;}
+  .p-head .dot{width:8px;height:8px;border-radius:50%;background:var(--verde2);box-shadow:0 0 8px var(--verde2);animation:pulso 2s infinite;}
+  @keyframes pulso{0%,100%{opacity:1}50%{opacity:.35}}
+  .lista{max-height:52vh;overflow-y:auto;}
+  .fila{display:flex;align-items:center;gap:10px;padding:9px 15px;border-bottom:1px solid #0e1512;cursor:pointer;}
   .fila:hover{background:#16211b;}
-  .rank{width:22px;text-align:center;font-size:12px;font-weight:800;color:var(--gris);}
-  .av{width:34px;height:34px;border-radius:50%;background:#0e1a15;border:1px solid var(--borde);object-fit:cover;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:15px;}
+  .rank{width:20px;text-align:center;font-size:12px;font-weight:800;color:var(--gris);}
+  .av{width:32px;height:32px;border-radius:50%;background:#0e1a15;border:1px solid var(--borde);flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:14px;overflow:hidden;}
+  .av img{width:100%;height:100%;object-fit:cover;}
   .f-info{flex:1;min-width:0;}
-  .f-nom{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:flex;align-items:center;gap:6px;}
-  .badge-real{font-size:8px;background:#0e3a2a;color:var(--verde2);border:1px solid #14532d;border-radius:5px;padding:1px 5px;font-weight:700;letter-spacing:.3px;}
+  .f-nom{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .badge-real{font-size:8px;background:#0e3a2a;color:var(--verde2);border:1px solid #14532d;border-radius:5px;padding:1px 5px;font-weight:700;margin-left:4px;}
   .f-sub{font-size:11px;color:var(--gris);margin-top:1px;}
   .est{width:8px;height:8px;border-radius:50%;flex-shrink:0;}
   .est.en_viaje{background:#fbbf24;} .est.libre{background:var(--verde2);} .est.offline{background:#3b4a43;}
   .f-viajes{text-align:right;flex-shrink:0;}
-  .f-viajes .n{font-size:16px;font-weight:800;color:var(--txt);line-height:1;font-variant-numeric:tabular-nums;}
+  .f-viajes .n{font-size:16px;font-weight:800;font-variant-numeric:tabular-nums;}
   .f-viajes .l{font-size:9px;color:var(--gris);text-transform:uppercase;}
-  /* Modal chofer */
-  .modal{display:none;position:fixed;inset:0;background:rgba(4,8,6,.75);z-index:50;align-items:flex-end;justify-content:center;}
+  /* Feed */
+  .feed{max-height:52vh;overflow-y:auto;}
+  .fe{display:flex;gap:10px;padding:10px 15px;border-bottom:1px solid #0e1512;align-items:flex-start;}
+  .fe .ic{font-size:16px;margin-top:1px;}
+  .fe .t{flex:1;min-width:0;}
+  .fe .l1{font-size:12.5px;font-weight:600;}
+  .fe .l1 b{color:var(--verde2);font-weight:700;}
+  .fe .l2{font-size:11px;color:var(--gris);margin-top:2px;}
+  .fe .meta{text-align:right;flex-shrink:0;}
+  .fe .pr{font-size:13px;font-weight:800;color:var(--verde2);}
+  .fe .hs{font-size:10px;color:var(--gris);margin-top:2px;}
+  .nuevo{animation:destello 1.2s;}
+  @keyframes destello{from{background:#123a2a;}to{background:transparent;}}
+  /* Modal */
+  .modal{display:none;position:fixed;inset:0;background:rgba(4,8,6,.75);z-index:2000;align-items:flex-end;justify-content:center;}
   .modal.show{display:flex;}
-  .m-card{background:var(--card);border:1px solid var(--borde);border-radius:20px 20px 0 0;width:100%;max-width:460px;padding:22px;animation:sube .25s;}
+  .m-card{background:var(--card);border:1px solid var(--borde);border-radius:20px 20px 0 0;width:100%;max-width:460px;padding:22px;}
   @media(min-width:560px){.modal{align-items:center;}.m-card{border-radius:20px;}}
-  @keyframes sube{from{transform:translateY(30px);opacity:.6}to{transform:translateY(0);opacity:1}}
   .m-top{display:flex;align-items:center;gap:14px;margin-bottom:16px;}
-  .m-av{width:64px;height:64px;border-radius:50%;background:#0e1a15;border:2px solid var(--verde);object-fit:cover;display:flex;align-items:center;justify-content:center;font-size:28px;}
+  .m-av{width:64px;height:64px;border-radius:50%;background:#0e1a15;border:2px solid var(--verde);display:flex;align-items:center;justify-content:center;font-size:28px;overflow:hidden;}
+  .m-av img{width:100%;height:100%;object-fit:cover;}
   .m-nom{font-size:20px;font-weight:800;}
   .m-ciudad{font-size:12px;color:var(--gris);margin-top:2px;}
   .m-rating{color:#fbbf24;font-weight:700;font-size:14px;margin-top:4px;}
@@ -250,7 +291,6 @@ const PAGINA = `<!DOCTYPE html>
   .m-item .v{font-size:18px;font-weight:800;color:var(--verde2);margin-top:3px;}
   .m-item .v.blanco{color:var(--txt);}
   .m-cerrar{margin-top:16px;width:100%;background:var(--verde);color:#04140d;border:none;border-radius:12px;padding:13px;font-size:15px;font-weight:800;cursor:pointer;}
-  .m-cerrar:active{filter:brightness(.92);}
 </style>
 </head>
 <body>
@@ -258,93 +298,141 @@ const PAGINA = `<!DOCTYPE html>
   <img src="/logo.png" alt="ChatGo">
   <div>
     <div class="h-t">ChatGo <span>· Operaciones</span></div>
-    <div class="h-sub">Simulación en vivo · se reinicia a las 4:00 AM</div>
+    <div class="h-sub">En vivo · se reinicia a las 4:00 AM</div>
   </div>
-  <div class="reloj">
-    <div class="r" id="reloj">--:--</div>
-    <div class="s" id="totviajes">— viajes hoy</div>
-  </div>
+  <div class="reloj"><div class="r" id="reloj">--:--</div><div class="s" id="totviajes">— viajes hoy</div></div>
 </header>
 
-<div class="wrap" id="wrap"></div>
-
-<div class="modal" id="modal" onclick="if(event.target===this)cerrarModal()">
-  <div class="m-card" id="m-card"></div>
+<div class="tabs" id="tabs"></div>
+<div class="wrap">
+  <div id="map"></div>
+  <div class="kpis" id="kpis"></div>
+  <div class="cols">
+    <div class="panel">
+      <div class="p-head"><span class="dot"></span> Viajes en vivo</div>
+      <div class="feed" id="feed"></div>
+    </div>
+    <div class="panel">
+      <div class="p-head">🏆 Ranking de choferes</div>
+      <div class="lista" id="ranking"></div>
+    </div>
+  </div>
 </div>
 
+<div class="modal" id="modal" onclick="if(event.target===this)cerrarModal()"><div class="m-card" id="m-card"></div></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-let DATA = null;
+const CIUDAD_GEO = {
+  cbba: { lat:-17.3895, lng:-66.1568, spread:0.045, zoom:13 },
+  scz:  { lat:-17.7833, lng:-63.1821, spread:0.060, zoom:12 },
+};
+let DATA=null, SEL="cbba", map, markers={};
 function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));}
 function estrellas(r){return "★ "+(r||0).toFixed(1);}
+function haceTxt(s){ if(s<60)return "hace "+s+"s"; const m=Math.floor(s/60); return "hace "+m+" min"; }
+
+// PRNG idéntico al del servidor (para calcular la posición en el navegador)
+function rng(seed){let t=seed>>>0;return function(){t+=0x6D2B79F5;let x=Math.imul(t^(t>>>15),1|t);x^=x+Math.imul(x^(x>>>7),61|x);return ((x^(x>>>14))>>>0)/4294967296;};}
+function posDe(seed, ciudad, t){
+  const R=rng(seed*7919+3);const c=CIUDAD_GEO[ciudad];
+  const clat=c.lat+(R()-0.5)*c.spread*2, clng=c.lng+(R()-0.5)*c.spread*2;
+  const A=0.005+R()*0.02, B=0.005+R()*0.02;
+  const w=0.02+R()*0.05, p1=R()*6.283, p2=R()*6.283;
+  const ts=t/1000;
+  return [clat+A*Math.sin(w*ts+p1), clng+B*Math.cos(w*0.8*ts+p2)];
+}
+
+function initMap(){
+  map=L.map("map",{zoomControl:true,attributionControl:false}).setView([CIUDAD_GEO.cbba.lat,CIUDAD_GEO.cbba.lng],CIUDAD_GEO.cbba.zoom);
+  L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",{maxZoom:19}).addTo(map);
+}
+function iconoCar(ch){
+  return L.divIcon({className:"",html:'<div class="car '+ch.estado+'">'+(ch.tipo==="moto"?"🏍️":"🚗")+'</div>',iconSize:[26,26],iconAnchor:[13,13]});
+}
+function tickMapa(){
+  if(!DATA||!map) return;
+  const cd=DATA.ciudades.find(c=>c.id===SEL); if(!cd) return;
+  const t=Date.now(); const vistos=new Set();
+  cd.choferes.forEach(ch=>{
+    if(ch.estado==="offline") return;
+    vistos.add(ch.id);
+    const p=posDe(ch.posSeed,SEL,t);
+    let mk=markers[ch.id];
+    if(!mk){ mk=L.marker(p,{icon:iconoCar(ch)}); mk.addTo(map); mk.on("click",()=>abrir(ch.id)); markers[ch.id]=mk; mk._estado=ch.estado; }
+    else { mk.setLatLng(p); if(mk._estado!==ch.estado){ mk.setIcon(iconoCar(ch)); mk._estado=ch.estado; } }
+  });
+  Object.keys(markers).forEach(id=>{ if(!vistos.has(id)){ map.removeLayer(markers[id]); delete markers[id]; } });
+}
+
+function cambiarCiudad(id){
+  if(SEL===id) return;
+  SEL=id;
+  Object.keys(markers).forEach(k=>{ map.removeLayer(markers[k]); delete markers[k]; });
+  const g=CIUDAD_GEO[id]; map.setView([g.lat,g.lng],g.zoom);
+  pintar();
+}
 
 async function cargar(){
-  try{
-    const r = await fetch("/panel/datos");
-    DATA = await r.json();
-    pintar();
-  }catch(e){ /* reintenta en el próximo tick */ }
+  try{ const r=await fetch("/panel/datos"); DATA=await r.json(); pintar(); }catch(e){}
 }
 
 function pintar(){
   if(!DATA||!DATA.ciudades) return;
-  const d = new Date(DATA.hora);
-  document.getElementById("reloj").textContent = String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0");
-  const totViajes = DATA.ciudades.reduce((s,c)=>s+c.viajes,0);
-  document.getElementById("totviajes").textContent = totViajes.toLocaleString("es-BO")+" viajes hoy";
+  const d=new Date(DATA.hora);
+  document.getElementById("reloj").textContent=String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0");
+  document.getElementById("totviajes").textContent=DATA.ciudades.reduce((s,c)=>s+c.viajes,0).toLocaleString("es-BO")+" viajes hoy";
 
-  document.getElementById("wrap").innerHTML = DATA.ciudades.map(c => \`
-    <div class="ciudad">
-      <div class="c-head">
-        <div class="c-nom"><span class="c-dot"></span>\${esc(c.nombre)}</div>
-        <div class="kpis">
-          <div class="kpi"><div class="n">\${c.viajes.toLocaleString("es-BO")}</div><div class="l">Viajes hoy</div></div>
-          <div class="kpi amar"><div class="n">\${c.enViaje}</div><div class="l">En viaje</div></div>
-          <div class="kpi"><div class="n">\${c.libres}</div><div class="l">Libres</div></div>
-          <div class="kpi gris"><div class="n">\${c.total}</div><div class="l">Autos</div></div>
-        </div>
-      </div>
-      <div class="lista">
-        \${c.choferes.map((ch,idx)=>\`
-          <div class="fila" onclick="abrir('\${ch.id}')">
-            <div class="rank">\${idx+1}</div>
-            <div class="av">\${ch.foto?\`<img src="\${esc(ch.foto)}" style="width:100%;height:100%;border-radius:50%;object-fit:cover">\`:(ch.tipo==="moto"?"🏍️":"🚗")}</div>
-            <div class="f-info">
-              <div class="f-nom">\${esc(ch.nombre)} \${ch.esReal?'<span class="badge-real">REAL</span>':''}</div>
-              <div class="f-sub">\${estrellas(ch.rating)} · \${esc(ch.placa)}</div>
-            </div>
-            <div class="est \${ch.estado}"></div>
-            <div class="f-viajes"><div class="n">\${ch.viajes}</div><div class="l">viajes</div></div>
-          </div>\`).join("")}
-      </div>
-    </div>\`).join("");
+  document.getElementById("tabs").innerHTML=DATA.ciudades.map(c=>
+    '<button class="tab '+(c.id===SEL?"act":"")+'" onclick="cambiarCiudad(\\''+c.id+'\\')">'+esc(c.nombre)+' <span class="cnt">'+c.viajes.toLocaleString("es-BO")+'</span></button>'
+  ).join("");
+
+  const c=DATA.ciudades.find(x=>x.id===SEL);
+  document.getElementById("kpis").innerHTML=
+    '<div class="kpi"><div class="n">'+c.viajes.toLocaleString("es-BO")+'</div><div class="l">Viajes hoy</div></div>'+
+    '<div class="kpi amar"><div class="n">'+c.enViaje+'</div><div class="l">En viaje</div></div>'+
+    '<div class="kpi"><div class="n">'+c.libres+'</div><div class="l">Libres</div></div>'+
+    '<div class="kpi gris"><div class="n">'+c.total+'</div><div class="l">Autos</div></div>';
+
+  document.getElementById("feed").innerHTML=c.feed.map(f=>
+    '<div class="fe"><div class="ic">'+(f.tipo==="moto"?"🏍️":"🚕")+'</div><div class="t">'+
+    '<div class="l1"><b>'+esc(f.chofer)+'</b> · '+esc(f.pasajero)+'</div>'+
+    '<div class="l2">'+esc(f.origen)+' → '+esc(f.destino)+'</div></div>'+
+    '<div class="meta"><div class="pr">Bs '+f.precio+'</div><div class="hs">'+haceTxt(f.haceSeg)+'</div></div></div>'
+  ).join("");
+
+  document.getElementById("ranking").innerHTML=c.choferes.map((ch,i)=>
+    '<div class="fila" onclick="abrir(\\''+ch.id+'\\')"><div class="rank">'+(i+1)+'</div>'+
+    '<div class="av">'+(ch.foto?'<img src="'+esc(ch.foto)+'">':(ch.tipo==="moto"?"🏍️":"🚗"))+'</div>'+
+    '<div class="f-info"><div class="f-nom">'+esc(ch.nombre)+(ch.esReal?'<span class="badge-real">REAL</span>':'')+'</div>'+
+    '<div class="f-sub">'+estrellas(ch.rating)+' · '+esc(ch.placa)+'</div></div>'+
+    '<div class="est '+ch.estado+'"></div>'+
+    '<div class="f-viajes"><div class="n">'+ch.viajes+'</div><div class="l">viajes</div></div></div>'
+  ).join("");
 }
 
 function abrir(id){
-  const ch = DATA.ciudades.flatMap(c=>c.choferes).find(x=>x.id===id);
-  if(!ch) return;
-  const estadoTxt = ch.estado==="en_viaje"?"🟡 En viaje":ch.estado==="libre"?"🟢 Libre":"⚫ Desconectado";
-  document.getElementById("m-card").innerHTML = \`
-    <div class="m-top">
-      <div class="m-av">\${ch.foto?\`<img src="\${esc(ch.foto)}" style="width:100%;height:100%;border-radius:50%;object-fit:cover">\`:(ch.tipo==="moto"?"🏍️":"🚗")}</div>
-      <div>
-        <div class="m-nom">\${esc(ch.nombre)} \${ch.esReal?'<span class="badge-real">REAL</span>':''}</div>
-        <div class="m-ciudad">\${esc(ch.ciudad)} · \${estadoTxt}</div>
-        <div class="m-rating">\${estrellas(ch.rating)} <span style="color:var(--gris);font-weight:400">(\${ch.ratingCant} calificaciones)</span></div>
-      </div>
-    </div>
-    <div class="m-grid">
-      <div class="m-item"><div class="l">Viajes hoy</div><div class="v">\${ch.viajes}</div></div>
-      <div class="m-item"><div class="l">Ingresos hoy</div><div class="v">Bs \${ch.ingresos.toLocaleString("es-BO")}</div></div>
-      <div class="m-item"><div class="l">Vehículo</div><div class="v blanco" style="font-size:14px">\${ch.tipo==="moto"?"🏍️ Moto":"🚗 Auto"}\${ch.color?" "+esc(ch.color):""}</div></div>
-      <div class="m-item"><div class="l">Placa</div><div class="v blanco" style="font-size:15px">\${esc(ch.placa)}</div></div>
-    </div>
-    <button class="m-cerrar" onclick="cerrarModal()">Cerrar</button>\`;
+  const ch=DATA.ciudades.flatMap(c=>c.choferes).find(x=>x.id===id); if(!ch) return;
+  const et=ch.estado==="en_viaje"?"🟡 En viaje":ch.estado==="libre"?"🟢 Libre":"⚫ Desconectado";
+  document.getElementById("m-card").innerHTML=
+    '<div class="m-top"><div class="m-av">'+(ch.foto?'<img src="'+esc(ch.foto)+'">':(ch.tipo==="moto"?"🏍️":"🚗"))+'</div>'+
+    '<div><div class="m-nom">'+esc(ch.nombre)+(ch.esReal?'<span class="badge-real">REAL</span>':'')+'</div>'+
+    '<div class="m-ciudad">'+esc(ch.ciudad)+' · '+et+'</div>'+
+    '<div class="m-rating">'+estrellas(ch.rating)+' <span style="color:var(--gris);font-weight:400">('+ch.ratingCant+' calificaciones)</span></div></div></div>'+
+    '<div class="m-grid">'+
+    '<div class="m-item"><div class="l">Viajes hoy</div><div class="v">'+ch.viajes+'</div></div>'+
+    '<div class="m-item"><div class="l">Ingresos hoy</div><div class="v">Bs '+ch.ingresos.toLocaleString("es-BO")+'</div></div>'+
+    '<div class="m-item"><div class="l">Vehículo</div><div class="v blanco" style="font-size:14px">'+(ch.tipo==="moto"?"🏍️ Moto":"🚗 Auto")+(ch.color?" "+esc(ch.color):"")+'</div></div>'+
+    '<div class="m-item"><div class="l">Placa</div><div class="v blanco" style="font-size:15px">'+esc(ch.placa)+'</div></div></div>'+
+    '<button class="m-cerrar" onclick="cerrarModal()">Cerrar</button>';
   document.getElementById("modal").classList.add("show");
 }
 function cerrarModal(){ document.getElementById("modal").classList.remove("show"); }
 
+initMap();
 cargar();
-setInterval(cargar, 5000);
+setInterval(cargar, 4000);
+setInterval(tickMapa, 120);
 </script>
 </body>
 </html>`;
