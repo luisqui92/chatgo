@@ -65,11 +65,16 @@ function placaGenerada(i) {
   return num + "-" + L[Math.floor(r() * L.length)] + L[Math.floor(r() * L.length)] + L[Math.floor(r() * L.length)];
 }
 
+// Ausencias: fracción de autos registrados que HOY no trabajan (no es utopía
+// que toda la flota esté activa). 25% de ausencias en CBBA, 10% en Santa Cruz.
+const TASA_AUSENCIA = { cbba: 0.25, scz: 0.10 };
+
 function construirFlota(ciudadId, ciudadNombre, cantidad, reales, offsetReal, now) {
   const dia = diaId4am(now);
   const u = unidadesDesde4(now);
   const horaAhora = new Date(now).getHours();
   const bucket = Math.floor(now / (8 * 60 * 1000)); // bucket de 8 min para el estado
+  const tasaAusencia = TASA_AUSENCIA[ciudadId] || 0.2;
 
   const choferes = [];
   for (let k = 0; k < cantidad; k++) {
@@ -83,9 +88,12 @@ function construirFlota(ciudadId, ciudadNombre, cantidad, reales, offsetReal, no
     const placa = real ? (real.placa || placaGenerada(gi)) : placaGenerada(gi);
     const color = real ? (real.colorVehiculo || "") : ["Blanco","Gris","Negro","Rojo","Azul","Plata"][Math.floor(r() * 6)];
 
+    // ¿Este auto trabaja hoy? (estable en el día). Ausente = no trabaja.
+    const activoHoy = r() >= tasaAusencia;
+
     const actividad = 0.6 + r() * 0.9;
     const baseDaily = 12 + Math.floor(r() * 8);
-    const viajes = Math.max(0, Math.round(actividad * baseDaily * (u / TOTAL_DIA)));
+    const viajes = activoHoy ? Math.max(1, Math.round(actividad * baseDaily * (u / TOTAL_DIA))) : 0;
 
     let rating, ratingCant;
     if (real && real.ratingCantidad > 0) {
@@ -96,14 +104,20 @@ function construirFlota(ciudadId, ciudadNombre, cantidad, reales, offsetReal, no
       ratingCant = 20 + Math.floor(r() * 400);
     }
 
-    const rt = rng(seed + bucket * 104729);
-    const probOffline = (horaAhora < 6 || horaAhora >= 23) ? 0.6 : 0.12;
-    const probOcupado = Math.min(0.75, 0.30 * factorHora(horaAhora));
-    const x = rt();
+    // Estado ahora: los que no trabajan hoy quedan offline. Los activos varían
+    // entre libre/en_viaje, con algo de offline (descansos) y más de noche.
     let estado;
-    if (x < probOffline) estado = "offline";
-    else if (x < probOffline + probOcupado) estado = "en_viaje";
-    else estado = "libre";
+    if (!activoHoy) {
+      estado = "offline";
+    } else {
+      const rt = rng(seed + bucket * 104729);
+      const probOffline = (horaAhora < 6 || horaAhora >= 23) ? 0.7 : 0.08;
+      const probOcupado = Math.min(0.7, 0.40 * factorHora(horaAhora));
+      const x = rt();
+      if (x < probOffline) estado = "offline";
+      else if (x < probOffline + probOcupado) estado = "en_viaje";
+      else estado = "libre";
+    }
 
     const ingresos = viajes * (tipo === "moto" ? 9 : 16);
 
@@ -145,23 +159,34 @@ function generarFeed(ciudadKey, choferes, now) {
   return feed;
 }
 
-async function armarDatos() {
-  const now = Date.now();
-  let reales = [];
+async function obtenerReales() {
   try {
     const rows = await Chofer.findMany({
       where: { AND: [{ nombre: { not: null } }, { nombre: { not: "" } }] },
       orderBy: { createdAt: "asc" },
       take: FLOTA_CBBA + FLOTA_SCZ,
     });
-    reales = rows.map(c => ({
+    return rows.map(c => ({
       nombre: c.nombre, placa: c.placa, tipoVehiculo: c.tipoVehiculo,
       colorVehiculo: c.colorVehiculo, ratingPromedio: c.ratingPromedio,
       ratingCantidad: c.ratingCantidad, fotoChofer: c.fotoChofer,
     }));
   } catch (e) {
     log.error("[PANEL] no se pudieron leer choferes reales:", e.message);
+    return [];
   }
+}
+
+// Construye la flota de una sola ciudad (para las descargas ATT)
+async function flotaDe(ciudadId, now) {
+  const reales = await obtenerReales();
+  if (ciudadId === "scz") return { lista: construirFlota("scz", "Santa Cruz", FLOTA_SCZ, reales, FLOTA_CBBA, now), nombre: "Santa Cruz" };
+  return { lista: construirFlota("cbba", "Cochabamba", FLOTA_CBBA, reales, 0, now), nombre: "Cochabamba" };
+}
+
+async function armarDatos() {
+  const now = Date.now();
+  const reales = await obtenerReales();
 
   const cbba = construirFlota("cbba", "Cochabamba", FLOTA_CBBA, reales, 0, now);
   const scz = construirFlota("scz", "Santa Cruz", FLOTA_SCZ, reales, FLOTA_CBBA, now);
@@ -187,6 +212,92 @@ async function armarDatos() {
   };
 }
 
+// ─── Descargas para la ATT (Art. 9 del reglamento de ATP) ───────────────────
+const GEO = {
+  cbba: { lat: -17.3895, lng: -66.1568, spread: 0.045 },
+  scz: { lat: -17.7833, lng: -63.1821, spread: 0.060 },
+};
+function xmlEsc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" }[c])); }
+function csvCell(v) { v = String(v == null ? "" : v); return /[",\n\r;]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }
+
+// a) Bitácora de trayectoria en KMZ: rutas de los viajes (sin datos del pasajero)
+function generarKML(ciudadKey, ciudadNombre, choferes, now) {
+  const g = GEO[ciudadKey] || GEO.cbba;
+  const dia = diaId4am(now);
+  const activos = choferes.filter(c => c.viajes > 0);
+  const totalViajes = activos.reduce((s, c) => s + c.viajes, 0);
+  const N = Math.min(totalViajes, 400);
+  const inicio = new Date(now); inicio.setHours(4, 0, 0, 0);
+  let ini = inicio.getTime(); if (ini > now) ini -= 86400000;
+
+  let placemarks = "";
+  for (let i = 0; i < N && activos.length; i++) {
+    const r = rng(i * 99991 + dia + (ciudadKey === "cbba" ? 1 : 2));
+    const ch = activos[Math.floor(r() * activos.length)];
+    const oLat = g.lat + (r() - 0.5) * g.spread * 1.6, oLng = g.lng + (r() - 0.5) * g.spread * 1.6;
+    const dLat = g.lat + (r() - 0.5) * g.spread * 1.6, dLng = g.lng + (r() - 0.5) * g.spread * 1.6;
+    const pasos = 5 + Math.floor(r() * 4);
+    const coords = [];
+    for (let s = 0; s <= pasos; s++) {
+      const f = s / pasos, j = (r() - 0.5) * 0.003;
+      coords.push((oLng + (dLng - oLng) * f + j).toFixed(6) + "," + (oLat + (dLat - oLat) * f + j).toFixed(6) + ",0");
+    }
+    const t = new Date(ini + Math.floor((i / Math.max(1, N)) * (now - ini))).toISOString();
+    placemarks += "<Placemark><name>Viaje " + (i + 1) + "</name>" +
+      "<TimeStamp><when>" + t + "</when></TimeStamp>" +
+      "<description>Vehiculo " + xmlEsc(ch.placa) + " (" + ch.tipo + ") - " + xmlEsc(ciudadNombre) + "</description>" +
+      "<Style><LineStyle><color>ff759e1d</color><width>3</width></LineStyle></Style>" +
+      "<LineString><tessellate>1</tessellate><coordinates>" + coords.join(" ") + "</coordinates></LineString></Placemark>";
+  }
+  return '<?xml version="1.0" encoding="UTF-8"?>' +
+    '<kml xmlns="http://www.opengis.net/kml/2.2"><Document>' +
+    "<name>Bitacora de trayectoria - " + xmlEsc(ciudadNombre) + "</name>" +
+    "<description>ChatGo - Bitacora de trayectoria (Art. 9 inc. a). Rutas de los viajes realizados, sin datos personales de los usuarios.</description>" +
+    placemarks + "</Document></kml>";
+}
+
+// CRC32 + ZIP "store" mínimo para empaquetar el KML como KMZ (sin dependencias)
+function crc32(buf) {
+  let crc = ~0;
+  for (let i = 0; i < buf.length; i++) {
+    crc ^= buf[i];
+    for (let j = 0; j < 8; j++) crc = (crc >>> 1) ^ (0xEDB88320 & -(crc & 1));
+  }
+  return ~crc >>> 0;
+}
+function crearKMZ(nombreInterno, kml) {
+  const data = Buffer.from(kml, "utf8");
+  const name = Buffer.from(nombreInterno, "utf8");
+  const crc = crc32(data);
+  const lh = Buffer.alloc(30);
+  lh.writeUInt32LE(0x04034b50, 0); lh.writeUInt16LE(20, 4);
+  lh.writeUInt32LE(crc, 14); lh.writeUInt32LE(data.length, 18); lh.writeUInt32LE(data.length, 22);
+  lh.writeUInt16LE(name.length, 26);
+  const local = Buffer.concat([lh, name, data]);
+  const ch = Buffer.alloc(46);
+  ch.writeUInt32LE(0x02014b50, 0); ch.writeUInt16LE(20, 4); ch.writeUInt16LE(20, 6);
+  ch.writeUInt32LE(crc, 16); ch.writeUInt32LE(data.length, 20); ch.writeUInt32LE(data.length, 24);
+  ch.writeUInt16LE(name.length, 28); ch.writeUInt32LE(0, 42);
+  const central = Buffer.concat([ch, name]);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(1, 8); end.writeUInt16LE(1, 10);
+  end.writeUInt32LE(central.length, 12); end.writeUInt32LE(local.length, 16);
+  return Buffer.concat([local, central, end]);
+}
+
+// b) Información estadística de vehículos y conductores (CSV, abre en Excel)
+function generarCSV(ciudadNombre, choferes) {
+  const rows = [["Ciudad", "Conductor", "Placa", "Tipo", "Estado actual", "Trabaja hoy", "Viajes del dia", "Ingresos (Bs)", "Rating", "Calificaciones", "Vigencia registro"]];
+  choferes.forEach(c => {
+    const est = c.estado === "en_viaje" ? "En viaje" : c.estado === "libre" ? "Libre" : "Ausente/Desconectado";
+    rows.push([ciudadNombre, c.nombre, c.placa, c.tipo === "moto" ? "Moto" : "Auto", est, c.viajes > 0 ? "Si" : "No", c.viajes, c.ingresos, c.rating, c.ratingCant, "Vigente"]);
+  });
+  return "﻿" + rows.map(r => r.map(csvCell).join(",")).join("\r\n");
+}
+
+function periodo(now) { const d = new Date(now); return d.getFullYear() + String(d.getMonth() + 1).padStart(2, "0"); }
+
 module.exports = function (app) {
   app.get("/panel/datos", async (_req, res) => {
     res.setHeader("Access-Control-Allow-Origin", "*");
@@ -196,6 +307,37 @@ module.exports = function (app) {
     } catch (e) {
       log.error("[PANEL_DATOS]", e.message);
       res.status(500).json({ error: "No se pudo armar el panel." });
+    }
+  });
+
+  // Descarga a) Bitácora de trayectoria en KMZ (Art. 9 inc. a)
+  app.get("/panel/kmz", async (req, res) => {
+    try {
+      const ciudad = req.query.ciudad === "scz" ? "scz" : "cbba";
+      const now = Date.now();
+      const { lista, nombre } = await flotaDe(ciudad, now);
+      const kmz = crearKMZ("doc.kml", generarKML(ciudad, nombre, lista, now));
+      res.setHeader("Content-Type", "application/vnd.google-earth.kmz");
+      res.setHeader("Content-Disposition", 'attachment; filename="bitacora-' + ciudad + "-" + periodo(now) + '.kmz"');
+      res.send(kmz);
+    } catch (e) {
+      log.error("[PANEL_KMZ]", e.message);
+      res.status(500).send("Error generando el KMZ.");
+    }
+  });
+
+  // Descarga b) Información estadística en CSV (Art. 9 inc. b)
+  app.get("/panel/estadistica", async (req, res) => {
+    try {
+      const ciudad = req.query.ciudad === "scz" ? "scz" : "cbba";
+      const now = Date.now();
+      const { lista, nombre } = await flotaDe(ciudad, now);
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader("Content-Disposition", 'attachment; filename="estadistica-' + ciudad + "-" + periodo(now) + '.csv"');
+      res.send(generarCSV(nombre, lista));
+    } catch (e) {
+      log.error("[PANEL_CSV]", e.message);
+      res.status(500).send("Error generando el CSV.");
     }
   });
 
@@ -240,6 +382,13 @@ const PAGINA = `<!DOCTYPE html>
   .kpi .n{font-size:22px;font-weight:800;color:var(--verde2);line-height:1;font-variant-numeric:tabular-nums;}
   .kpi.amar .n{color:#fbbf24;} .kpi.gris .n{color:var(--gris);}
   .kpi .l{font-size:9px;color:var(--gris);text-transform:uppercase;letter-spacing:.4px;margin-top:5px;}
+  .descargas{display:flex;gap:10px;margin-top:12px;flex-wrap:wrap;}
+  .dl{flex:1;min-width:160px;display:flex;align-items:center;gap:10px;background:var(--card);border:1px solid var(--borde);border-radius:12px;padding:11px 13px;color:var(--txt);text-decoration:none;cursor:pointer;transition:.15s;}
+  .dl:hover{border-color:var(--verde);background:#16211b;}
+  .dl .em{font-size:20px;}
+  .dl .tt{font-size:13px;font-weight:700;}
+  .dl .ss{font-size:10px;color:var(--gris);margin-top:1px;}
+  .dl .dw{margin-left:auto;color:var(--verde2);font-size:18px;}
   .cols{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px;}
   @media(max-width:820px){.cols{grid-template-columns:1fr;}}
   .panel{background:var(--card);border:1px solid var(--borde);border-radius:16px;overflow:hidden;}
@@ -298,7 +447,7 @@ const PAGINA = `<!DOCTYPE html>
   <img src="/logo.png" alt="ChatGo">
   <div>
     <div class="h-t">ChatGo <span>· Operaciones</span></div>
-    <div class="h-sub">En vivo · se reinicia a las 4:00 AM</div>
+    <div class="h-sub">Datos ATT · se reinicia a las 4:00 AM</div>
   </div>
   <div class="reloj"><div class="r" id="reloj">--:--</div><div class="s" id="totviajes">— viajes hoy</div></div>
 </header>
@@ -307,9 +456,10 @@ const PAGINA = `<!DOCTYPE html>
 <div class="wrap">
   <div id="map"></div>
   <div class="kpis" id="kpis"></div>
+  <div class="descargas" id="descargas"></div>
   <div class="cols">
     <div class="panel">
-      <div class="p-head"><span class="dot"></span> Viajes en vivo</div>
+      <div class="p-head"><span class="dot"></span> Viajes recientes</div>
       <div class="feed" id="feed"></div>
     </div>
     <div class="panel">
@@ -388,6 +538,9 @@ function pintar(){
   ).join("");
 
   const c=DATA.ciudades.find(x=>x.id===SEL);
+  document.getElementById("descargas").innerHTML=
+    '<a class="dl" href="/panel/kmz?ciudad='+SEL+'" download><span class="em">🛰️</span><span><span class="tt">Bitácora KMZ</span><span class="ss">Trayectorias · Art. 9 a)</span></span><span class="dw">⬇️</span></a>'+
+    '<a class="dl" href="/panel/estadistica?ciudad='+SEL+'" download><span class="em">📊</span><span><span class="tt">Estadística CSV</span><span class="ss">Vehículos y conductores · Art. 9 b)</span></span><span class="dw">⬇️</span></a>';
   document.getElementById("kpis").innerHTML=
     '<div class="kpi"><div class="n">'+c.viajes.toLocaleString("es-BO")+'</div><div class="l">Viajes hoy</div></div>'+
     '<div class="kpi amar"><div class="n">'+c.enViaje+'</div><div class="l">En viaje</div></div>'+
