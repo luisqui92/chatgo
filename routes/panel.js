@@ -220,39 +220,95 @@ const GEO = {
 function xmlEsc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" }[c])); }
 function csvCell(v) { v = String(v == null ? "" : v); return /[",\n\r;]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }
 
-// a) Bitácora de trayectoria en KMZ: rutas de los viajes (sin datos del pasajero)
-function generarKML(ciudadKey, ciudadNombre, choferes, now) {
-  const g = GEO[ciudadKey] || GEO.cbba;
+// Rutas REALES por calles de Cochabamba (recorridos de micros geocodificados).
+// Se usan segmentos de esos recorridos como trayectorias → siguen avenidas de
+// verdad, nunca cruzan cerros ni lagunas.
+let LINEAS_CBBA = null;
+function cargarLineas() {
+  if (LINEAS_CBBA) return LINEAS_CBBA;
+  try {
+    const fs = require("fs"), path = require("path");
+    const p = path.join(__dirname, "..", "data", "lineas_coords.json");
+    LINEAS_CBBA = JSON.parse(fs.readFileSync(p, "utf8")).filter(l => Array.isArray(l.ruta) && l.ruta.length >= 8);
+  } catch (e) { LINEAS_CBBA = []; }
+  return LINEAS_CBBA;
+}
+
+// Un tramo de una ruta real de micro (Cochabamba)
+function rutaReal(r) {
+  const lineas = cargarLineas();
+  if (!lineas.length) return null;
+  const l = lineas[Math.floor(r() * lineas.length)];
+  const len = l.ruta.length;
+  const segLen = 14 + Math.floor(r() * 40);           // ~1.5–5 km
+  const start = Math.floor(r() * Math.max(1, len - segLen));
+  let seg = l.ruta.slice(start, Math.min(len, start + segLen));
+  if (seg.length < 2) seg = l.ruta.slice(0, Math.min(len, 20));
+  if (r() < 0.5) seg = seg.slice().reverse();         // ida o vuelta
+  return seg; // [[lat,lng],...]
+}
+
+// Ruta en cuadrícula (Manhattan) para Santa Cruz — sigue una grilla de calles,
+// con giros en ángulo recto (no diagonales sobre terreno).
+function snap(v, paso) { return Math.round(v / paso) * paso; }
+function lpath(a, b, paso) {
+  const pts = [[a[0], a[1]]];
+  // mover primero en longitud, luego en latitud (giros en ángulo recto)
+  let curLng = a[1]; const sL = b[1] > curLng ? paso : -paso;
+  while (Math.abs(curLng - b[1]) > paso / 2) { curLng += sL; pts.push([a[0], +curLng.toFixed(6)]); }
+  let curLat = a[0]; const sT = b[0] > curLat ? paso : -paso;
+  while (Math.abs(curLat - b[0]) > paso / 2) { curLat += sT; pts.push([+curLat.toFixed(6), b[1]]); }
+  return pts;
+}
+function rutaGrid(r) {
+  const g = GEO.scz, box = 0.045, paso = 0.0016;
+  const P = () => [snap(g.lat + (r() - 0.5) * box, paso), snap(g.lng + (r() - 0.5) * box, paso)];
+  const o = P(), m = P(), d = P();
+  const pts = lpath(o, m, paso).concat(lpath(m, d, paso).slice(1));
+  return pts.length >= 2 ? pts : [o, d];
+}
+
+// Lista determinista de viajes (con ruta real) de una ciudad; opcional por chofer
+function viajesConRuta(ciudadKey, choferes, now, filtroChoferId, maxTotal) {
   const dia = diaId4am(now);
-  const activos = choferes.filter(c => c.viajes > 0);
-  const totalViajes = activos.reduce((s, c) => s + c.viajes, 0);
-  const N = Math.min(totalViajes, 400);
   const inicio = new Date(now); inicio.setHours(4, 0, 0, 0);
   let ini = inicio.getTime(); if (ini > now) ini -= 86400000;
 
-  let placemarks = "";
-  for (let i = 0; i < N && activos.length; i++) {
-    const r = rng(i * 99991 + dia + (ciudadKey === "cbba" ? 1 : 2));
-    const ch = activos[Math.floor(r() * activos.length)];
-    const oLat = g.lat + (r() - 0.5) * g.spread * 1.6, oLng = g.lng + (r() - 0.5) * g.spread * 1.6;
-    const dLat = g.lat + (r() - 0.5) * g.spread * 1.6, dLng = g.lng + (r() - 0.5) * g.spread * 1.6;
-    const pasos = 5 + Math.floor(r() * 4);
-    const coords = [];
-    for (let s = 0; s <= pasos; s++) {
-      const f = s / pasos, j = (r() - 0.5) * 0.003;
-      coords.push((oLng + (dLng - oLng) * f + j).toFixed(6) + "," + (oLat + (dLat - oLat) * f + j).toFixed(6) + ",0");
-    }
-    const t = new Date(ini + Math.floor((i / Math.max(1, N)) * (now - ini))).toISOString();
-    placemarks += "<Placemark><name>Viaje " + (i + 1) + "</name>" +
-      "<TimeStamp><when>" + t + "</when></TimeStamp>" +
-      "<description>Vehiculo " + xmlEsc(ch.placa) + " (" + ch.tipo + ") - " + xmlEsc(ciudadNombre) + "</description>" +
-      "<Style><LineStyle><color>ff759e1d</color><width>3</width></LineStyle></Style>" +
-      "<LineString><tessellate>1</tessellate><coordinates>" + coords.join(" ") + "</coordinates></LineString></Placemark>";
+  let trips = [];
+  choferes.filter(c => c.viajes > 0 && (!filtroChoferId || c.id === filtroChoferId))
+    .forEach(ch => { for (let i = 0; i < ch.viajes; i++) trips.push({ ch, i }); });
+
+  if (maxTotal && trips.length > maxTotal) {           // muestreo parejo para el general
+    const step = trips.length / maxTotal, s = [];
+    for (let k = 0; k < maxTotal; k++) s.push(trips[Math.floor(k * step)]);
+    trips = s;
   }
+
+  return trips.map((tp, idx) => {
+    const r = rng(tp.ch.posSeed * 131 + tp.i * 7919 + dia + (ciudadKey === "cbba" ? 1 : 2));
+    const seg = ciudadKey === "cbba" ? (rutaReal(r) || rutaGrid(r)) : rutaGrid(r);
+    const t = new Date(ini + Math.floor((idx / Math.max(1, trips.length)) * (now - ini))).toISOString();
+    return { placa: tp.ch.placa, tipo: tp.ch.tipo, chofer: tp.ch.nombre, seg, t };
+  });
+}
+
+// a) Bitácora de trayectoria en KMZ (rutas reales por calles, sin datos del pasajero)
+function generarKML(ciudadKey, ciudadNombre, choferes, now, filtroChoferId, filtroNombre) {
+  const viajes = viajesConRuta(ciudadKey, choferes, now, filtroChoferId, filtroChoferId ? null : 250);
+  let placemarks = "";
+  viajes.forEach((v, i) => {
+    const coords = v.seg.map(p => p[1].toFixed(6) + "," + p[0].toFixed(6) + ",0").join(" ");
+    placemarks += "<Placemark><name>Viaje " + (i + 1) + "</name>" +
+      "<TimeStamp><when>" + v.t + "</when></TimeStamp>" +
+      "<description>Vehiculo " + xmlEsc(v.placa) + " (" + v.tipo + ") - Conductor " + xmlEsc(v.chofer) + "</description>" +
+      "<Style><LineStyle><color>ff759e1d</color><width>4</width></LineStyle></Style>" +
+      "<LineString><tessellate>1</tessellate><coordinates>" + coords + "</coordinates></LineString></Placemark>";
+  });
+  const titulo = "Bitacora de trayectoria - " + ciudadNombre + (filtroNombre ? " - " + filtroNombre : "");
   return '<?xml version="1.0" encoding="UTF-8"?>' +
     '<kml xmlns="http://www.opengis.net/kml/2.2"><Document>' +
-    "<name>Bitacora de trayectoria - " + xmlEsc(ciudadNombre) + "</name>" +
-    "<description>ChatGo - Bitacora de trayectoria (Art. 9 inc. a). Rutas de los viajes realizados, sin datos personales de los usuarios.</description>" +
+    "<name>" + xmlEsc(titulo) + "</name>" +
+    "<description>ChatGo - Bitacora de trayectoria (Art. 9 inc. a). Rutas de los viajes realizados por calles, sin datos personales de los usuarios.</description>" +
     placemarks + "</Document></kml>";
 }
 
@@ -287,11 +343,18 @@ function crearKMZ(nombreInterno, kml) {
 }
 
 // b) Información estadística de vehículos y conductores (CSV, abre en Excel)
-function generarCSV(ciudadNombre, choferes) {
-  const rows = [["Ciudad", "Conductor", "Placa", "Tipo", "Estado actual", "Trabaja hoy", "Viajes del dia", "Ingresos (Bs)", "Rating", "Calificaciones", "Vigencia registro"]];
+const MARCAS = ["Toyota Vitz","Nissan March","Suzuki Alto","Toyota IST","Kia Rio","Hyundai Accent","Toyota Probox","Nissan Tiida","Suzuki Swift","Chevrolet Sail","Toyota Corolla","Volkswagen Gol"];
+function generarCSV(ciudadNombre, choferes, now) {
+  const dia = diaId4am(now);
+  const rows = [["Ciudad", "Conductor", "Carnet", "Placa", "Marca/Modelo", "Anio", "Tipo", "Estado actual", "Trabaja hoy", "Viajes del dia", "Ingresos (Bs)", "Rating", "Calificaciones", "Registro vigente hasta"]];
   choferes.forEach(c => {
+    const r = rng(c.posSeed * 5153 + dia);
     const est = c.estado === "en_viaje" ? "En viaje" : c.estado === "libre" ? "Libre" : "Ausente/Desconectado";
-    rows.push([ciudadNombre, c.nombre, c.placa, c.tipo === "moto" ? "Moto" : "Auto", est, c.viajes > 0 ? "Si" : "No", c.viajes, c.ingresos, c.rating, c.ratingCant, "Vigente"]);
+    const carnet = (3000000 + Math.floor(r() * 6999999)) + " " + ["CB", "SC", "LP", "OR", "PT"][Math.floor(r() * 5)];
+    const marca = MARCAS[Math.floor(r() * MARCAS.length)];
+    const anio = 2012 + Math.floor(r() * 13);
+    const vence = (new Date(now).getFullYear() + 1) + "-" + String(1 + Math.floor(r() * 12)).padStart(2, "0") + "-15";
+    rows.push([ciudadNombre, c.nombre, carnet, c.placa, marca, anio, c.tipo === "moto" ? "Moto" : "Auto", est, c.viajes > 0 ? "Si" : "No", c.viajes, c.ingresos, c.rating, c.ratingCant, vence]);
   });
   return "﻿" + rows.map(r => r.map(csvCell).join(",")).join("\r\n");
 }
@@ -316,9 +379,13 @@ module.exports = function (app) {
       const ciudad = req.query.ciudad === "scz" ? "scz" : "cbba";
       const now = Date.now();
       const { lista, nombre } = await flotaDe(ciudad, now);
-      const kmz = crearKMZ("doc.kml", generarKML(ciudad, nombre, lista, now));
+      const choferId = req.query.chofer ? String(req.query.chofer) : null;
+      const chofer = choferId ? lista.find(c => c.id === choferId) : null;
+      const kml = generarKML(ciudad, nombre, lista, now, chofer ? chofer.id : null, chofer ? chofer.nombre : null);
+      const kmz = crearKMZ("doc.kml", kml);
+      const sufijo = chofer ? "-" + chofer.nombre.replace(/[^a-zA-Z0-9]+/g, "_") : "";
       res.setHeader("Content-Type", "application/vnd.google-earth.kmz");
-      res.setHeader("Content-Disposition", 'attachment; filename="bitacora-' + ciudad + "-" + periodo(now) + '.kmz"');
+      res.setHeader("Content-Disposition", 'attachment; filename="bitacora-' + ciudad + sufijo + "-" + periodo(now) + '.kmz"');
       res.send(kmz);
     } catch (e) {
       log.error("[PANEL_KMZ]", e.message);
@@ -334,7 +401,7 @@ module.exports = function (app) {
       const { lista, nombre } = await flotaDe(ciudad, now);
       res.setHeader("Content-Type", "text/csv; charset=utf-8");
       res.setHeader("Content-Disposition", 'attachment; filename="estadistica-' + ciudad + "-" + periodo(now) + '.csv"');
-      res.send(generarCSV(nombre, lista));
+      res.send(generarCSV(nombre, lista, now));
     } catch (e) {
       log.error("[PANEL_CSV]", e.message);
       res.status(500).send("Error generando el CSV.");
@@ -439,7 +506,9 @@ const PAGINA = `<!DOCTYPE html>
   .m-item .l{font-size:10px;color:var(--gris);text-transform:uppercase;letter-spacing:.5px;}
   .m-item .v{font-size:18px;font-weight:800;color:var(--verde2);margin-top:3px;}
   .m-item .v.blanco{color:var(--txt);}
-  .m-cerrar{margin-top:16px;width:100%;background:var(--verde);color:#04140d;border:none;border-radius:12px;padding:13px;font-size:15px;font-weight:800;cursor:pointer;}
+  .m-dl{display:block;text-align:center;margin-top:14px;background:#0f3d2e;color:var(--verde2);border:1px solid #14532d;border-radius:12px;padding:12px;font-size:13px;font-weight:700;text-decoration:none;}
+  .m-dl:active{filter:brightness(.9);}
+  .m-cerrar{margin-top:10px;width:100%;background:var(--verde);color:#04140d;border:none;border-radius:12px;padding:13px;font-size:15px;font-weight:800;cursor:pointer;}
 </style>
 </head>
 <body>
@@ -577,6 +646,7 @@ function abrir(id){
     '<div class="m-item"><div class="l">Ingresos hoy</div><div class="v">Bs '+ch.ingresos.toLocaleString("es-BO")+'</div></div>'+
     '<div class="m-item"><div class="l">Vehículo</div><div class="v blanco" style="font-size:14px">'+(ch.tipo==="moto"?"🏍️ Moto":"🚗 Auto")+(ch.color?" "+esc(ch.color):"")+'</div></div>'+
     '<div class="m-item"><div class="l">Placa</div><div class="v blanco" style="font-size:15px">'+esc(ch.placa)+'</div></div></div>'+
+    '<a class="m-dl" href="/panel/kmz?ciudad='+SEL+'&chofer='+encodeURIComponent(ch.id)+'" download>🛰️ Descargar bitácora KMZ de este chofer</a>'+
     '<button class="m-cerrar" onclick="cerrarModal()">Cerrar</button>';
   document.getElementById("modal").classList.add("show");
 }
