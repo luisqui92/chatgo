@@ -9,7 +9,6 @@
 | Cambios registrados | 196 commits |
 | Tamaño del código | ~16.925 líneas (JavaScript) |
 | Estado | En producción — api.chatgo.ia.bo |
-| Rama de desarrollo | claude/code-review-feedback-uzrrhn |
 
 ## Arquitectura
 - **Servidor:** Google Compute Engine + Node.js + PM2 + Nginx (SSL).
@@ -31,7 +30,7 @@ Usuario, Chofer, Viaje, CodigoPromo, SessionState, ListaEspera, RateLimit, Locat
 
 ## Despliegue
 ```bash
-git pull origin claude/code-review-feedback-uzrrhn
+git pull
 npx prisma migrate deploy && npx prisma generate
 pm2 restart chatgo --update-env
 ```
@@ -133,7 +132,6 @@ pm2 restart chatgo --update-env
 ### 2026-06-24
 - feat: corte diario proactivo de pago a choferes a las 4am Bolivia
 - feat: agregar QR de cobro y exigir pago real al chofer de prueba
-- Merge branch 'claude/code-review-feedback-uzrrhn'
 
 ### 2026-06-25
 - fix: choferPagoAlDia no validaba pagoDiario.aprobado, dejaba pasar pago sin aprobación del admin
