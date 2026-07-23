@@ -68,8 +68,15 @@ function limpiarTextoParaVoz(texto) {
 // Vincula a un familiar con la cuenta del adulto mayor.
 // El familiar ejecuta esto desde su propio WhatsApp.
 async function vincularFamiliar(adultoPhone, familiarPhone, nombreFamiliar = "familiar") {
-  const usuario = await Usuario.findUnique({ where: { phone: adultoPhone } });
-  if (!usuario) return { ok: false, motivo: "no_existe" };
+  let usuario = await Usuario.findUnique({ where: { phone: adultoPhone } });
+  // El adulto mayor puede no tener cuenta aún (la familia se la está creando):
+  // en ese caso la creamos al vincular, en vez de fallar la vinculación.
+  if (!usuario) {
+    usuario = await Usuario.create({
+      data: { phone: adultoPhone, modoAdultoMayor: true, familiaresVinculados: [] },
+    }).catch(() => null);
+    if (!usuario) return { ok: false, motivo: "no_existe" };
+  }
 
   const yaVinculado = usuario.familiaresVinculados?.some(f => f.phone === familiarPhone);
   if (yaVinculado) return { ok: true, motivo: "ya_vinculado" };
