@@ -25,6 +25,7 @@ const favor = require("./favor");
 const ambulancia = require("./ambulancia");
 const delivery = require("./delivery"); // inteligente: catálogo + presupuesto + despacho
 const bus = require("./bus"); // qué línea me lleva + micro más próximo (demo)
+const auxilio = require("./auxilio"); // auxilio mecánico: mecánico más cercano
 const { crearModuloCaptura } = require("./captura");
 
 // Módulos de captura (operación manual detrás de escena mientras no exista
@@ -60,7 +61,7 @@ const rastreo = crearModuloCaptura({
   cierre: "🛰️ ¡Anotado! Te contactaremos para activar el rastreo por WhatsApp: ubicación al instante, alertas y geocercas.",
 });
 
-const MODULOS = { favor, ambulancia, delivery, bus, school, empresas, rastreo };
+const MODULOS = { favor, ambulancia, delivery, bus, auxilio, school, empresas, rastreo };
 
 // Palabras que abren cada módulo por TEXTO (solo con el usuario en reposo)
 const ENTRADAS = [
@@ -72,6 +73,7 @@ const ENTRADAS = [
   { modulo: "empresas", regex: /^(empresa|empresas|corporativo|logistica|logística)\b/i },
   { modulo: "rastreo", regex: /^(rastreo|rastrear|rastreoplus|gps)\b/i },
   { modulo: "bus", regex: /^(bus|micro|trufi|l[ií]nea)s?\b|\bqu[eé] l[ií]nea\b/i },
+  { modulo: "auxilio", regex: /^(auxilio(\s+mec[aá]nico)?|mec[aá]nico|gr[uú]a|cerrajer|bater[íi]a|llanta|pinchazo|se me pinch|no arranca|no prende|me qued[eé] (afuera|varad|sin llave))/i },
 ];
 
 // ─── Intención de COMIDA en lenguaje natural ─────────────────────────────────
@@ -99,6 +101,7 @@ const ENTRADAS_VOZ = [
   { modulo: "empresas", regex: /\bchatgo empresas\b|\blog[íi]stica empresarial\b/i },
   { modulo: "rastreo", regex: /\brastrear\b|\brastreo\b|\brastreoplus\b/i },
   { modulo: "bus", regex: /\bqu[eé] l[ií]nea\b|\btrufi\b|\bchatgo ?bus\b/i },
+  { modulo: "auxilio", regex: /\b(auxilio mec[aá]nico|cambio de llanta|se me pinch[oó]|necesito (una )?gr[uú]a|bater[íi]a descargada|no arranca|cerrajero)\b/i },
 ];
 
 function moduloActivo(id) {
@@ -119,6 +122,7 @@ async function mostrarMenuServicios(phone) {
   if (moduloActivo("empresas")) lineas.push("🏢 Escribe *empresa* — logística corporativa");
   if (moduloActivo("rastreo")) lineas.push("📡 Escribe *rastreo* — GPS RastreoPlus");
   if (moduloActivo("bus")) lineas.push("🚌 Escribe *bus* — qué línea te lleva (demo)");
+  if (moduloActivo("auxilio")) lineas.push("🔧 Escribe *auxilio* — mecánico a domicilio");
   await enviarMensaje(phone, lineas.join("\n"));
 }
 

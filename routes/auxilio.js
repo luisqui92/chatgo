@@ -201,7 +201,12 @@ const PANEL = `<!DOCTYPE html>
 <meta name="theme-color" content="#0c1310">
 <link rel="icon" href="/logo.png">
 <title>ChatGo — Auxilio Mecánico</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <style>
+  #mapa{height:300px;border-radius:12px;border:1px solid #1e2b24;overflow:hidden;margin-bottom:12px;background:#0a0f0c;}
+  .leaflet-tile{filter:brightness(.85) saturate(.85);}
+  .pin{width:26px;height:26px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);border:2px solid #04140d;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 5px rgba(0,0,0,.5);}
+  .pin b{transform:rotate(45deg);font-size:12px;}
   *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
   :root{--verde:#1D9E75;--verde2:#34d399;--fondo:#0c1310;--card:#131c18;--card2:#0f1713;--borde:#1e2b24;--txt:#e7efe9;--gris:#7f948b;--rojo:#e5484d;--azul:#3b82f6;--amar:#fbbf24;}
   body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--fondo);color:var(--txt);min-height:100vh;padding-bottom:40px;}
@@ -257,6 +262,7 @@ const PANEL = `<!DOCTYPE html>
     <button class="tab" id="tab-aux" onclick="verTab('aux')">🆘 Auxilios</button>
   </div>
   <div class="barra" id="barra-mec"><div style="font-weight:700">Mecánicos afiliados</div><button class="btn" onclick="abrirForm()">+ Agregar mecánico</button></div>
+  <div id="mapa"></div>
   <div id="lista-mec"></div>
   <div id="sec-aux" style="display:none"><div class="barra"><div style="font-weight:700">Auxilios solicitados</div></div><div id="lista-aux"></div></div>
 </div>
@@ -265,10 +271,32 @@ const PANEL = `<!DOCTYPE html>
   <div class="m-form" id="m-form"></div>
 </div>
 
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
 const TOKEN = new URLSearchParams(location.search).get("token") || "";
 const SERVICIOS = ["llanta","bateria","mecanica_general","grua","cerrajeria"];
-let MECS = [], editId = null;
+const COLOR = {llanta:"#3b82f6",bateria:"#fbbf24",mecanica_general:"#1D9E75",grua:"#a855f7",cerrajeria:"#f97316"};
+const EMO = {llanta:"🛞",bateria:"🔋",mecanica_general:"🔧",grua:"🚛",cerrajeria:"🔑"};
+let MECS = [], editId = null, map, capaPins;
+function initMapa(){
+  map = L.map("mapa",{zoomControl:true,attributionControl:false}).setView([-17.3895,-66.1568],12);
+  L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",{maxZoom:19}).addTo(map);
+  capaPins = L.layerGroup().addTo(map);
+}
+function pintarMapa(){
+  if(!map) return;
+  capaPins.clearLayers();
+  const pts=[];
+  MECS.forEach(m=>{
+    const ub=m.ubicacionBase; if(!ub||typeof ub.lat!=="number") return;
+    const tipo=(m.tiposServicio||[])[0]||"mecanica_general";
+    const col=m.activo?(COLOR[tipo]||"#1D9E75"):"#4b5563";
+    const icon=L.divIcon({className:"",html:'<div class="pin" style="background:'+col+'"><b>'+(EMO[tipo]||"🔧")+'</b></div>',iconSize:[26,26],iconAnchor:[13,26]});
+    const mk=L.marker([ub.lat,ub.lng],{icon}).bindPopup('<b>'+esc(m.nombre)+'</b><br>'+esc((m.tiposServicio||[]).join(", "))+'<br>📞 '+esc(m.telefono)+(m.zona?'<br>📍 '+esc(m.zona):''));
+    capaPins.addLayer(mk); pts.push([ub.lat,ub.lng]);
+  });
+  if(pts.length) map.fitBounds(pts,{padding:[30,30],maxZoom:14});
+}
 function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));}
 async function api(ruta, opts={}){
   const sep = ruta.includes("?") ? "&" : "?";
@@ -283,7 +311,7 @@ async function cargar(){
     document.getElementById("kpis").innerHTML =
       kpi(res.activos,"Activos")+kpi(res.mesGratis,"Mes gratis")+kpi(res.vencidos,"Vencidos")+kpi(res.auxiliosMes,"Auxilios del mes");
     const m = await api("/admin/auxilio/mecanicos"); MECS = m.mecanicos||[];
-    pintarMec();
+    pintarMec(); pintarMapa();
   }catch(e){ document.getElementById("kpis").innerHTML='<div class="kpi" style="grid-column:1/-1"><div class="n" style="color:var(--rojo);font-size:15px">'+esc(e.message)+'</div><div class="l">Revisá el token en la URL</div></div>'; }
 }
 function kpi(n,l){return '<div class="kpi"><div class="n">'+n+'</div><div class="l">'+l+'</div></div>';}
@@ -309,7 +337,9 @@ function verTab(t){
   document.getElementById("tab-aux").classList.toggle("act",t==="aux");
   document.getElementById("barra-mec").style.display=t==="mec"?"flex":"none";
   document.getElementById("lista-mec").style.display=t==="mec"?"block":"none";
+  document.getElementById("mapa").style.display=t==="mec"?"block":"none";
   document.getElementById("sec-aux").style.display=t==="aux"?"block":"none";
+  if(t==="mec"&&map) setTimeout(()=>{map.invalidateSize();pintarMapa();},50);
   if(t==="aux") cargarAux();
 }
 async function cargarAux(){
@@ -362,6 +392,7 @@ async function guardar(){
 }
 async function suspender(id){ if(!confirm("¿Suspender este mecánico?"))return; await api("/admin/auxilio/mecanicos/"+id+"/suspender",{method:"POST"}); cargar(); }
 async function activar(id){ await api("/admin/auxilio/mecanicos/"+id+"/activar",{method:"POST"}); cargar(); }
+initMapa();
 cargar();
 </script>
 </body>
