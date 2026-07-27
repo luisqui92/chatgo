@@ -431,3 +431,42 @@ model Plato {
   @@index([restauranteId, activo])
   @@map("platos")
 }
+
+// ─── ChatGo Auxilio Mecánico (Etapa 1) ──────────────────────────────────────
+model Mecanico {
+  id                   String    @id @default(uuid())
+  nombre               String
+  telefono             String    @unique          // WhatsApp con código de país (591...)
+  zona                 String?                     // zona de Santa Cruz donde opera
+  ubicacionBase        Json?                       // { lat, lng }
+  tiposServicio        Json?                       // ["llanta","bateria","mecanica_general","grua","cerrajeria"]
+  atiende24h           Boolean   @default(false)
+  documentos           Json?                       // { facturaLuz, carnet, nit, verificacionFisica, notasVerificacion }
+  suscripcion          Json?                       // { estado, fechaInicio, fechaVencimiento }
+  calificacionPromedio Float?
+  totalAuxilios        Int       @default(0)
+  activo               Boolean   @default(true)
+  auxilios             Auxilio[]
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@index([zona])
+  @@map("mecanicos")
+}
+
+model Auxilio {
+  id                    String    @id @default(uuid())
+  telefonoVarado        String
+  ubicacion             Json?                       // { lat, lng, descripcion }
+  tipoProblema          String?                     // "llanta","bateria","no_arranca","grua","otro"
+  estado                String    @default("pendiente") // pendiente|asignado|en_camino|completado|cancelado
+  mecanicoId            String?
+  mecanico              Mecanico? @relation(fields: [mecanicoId], references: [id])
+  calificacion          Int?                        // 1-5
+  comentarioCalificacion String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([estado])
+  @@map("auxilios")
+}

@@ -123,6 +123,7 @@ require("./routes/flota")(app); // Mapa de flota en vivo — GET /flota
 require("./routes/trufis")(app); // ChatGo Bus — simulación de trufis — GET /trufis
 require("./routes/panel")(app); // Panel de operaciones por ciudad — GET /panel
 require("./routes/links")(app); // Índice de enlaces — GET /links
+require("./routes/auxilio")(app); // Auxilio Mecánico (Etapa 1) — GET /admin/auxilio
 
 // ─── INTERVALS ────────────────────────────────────────────────────────────────
 const { iniciarIntervals } = require("./intervals");

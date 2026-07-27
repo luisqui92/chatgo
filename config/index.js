@@ -58,6 +58,7 @@ const CONFIG = {
   // Secreto compartido para validar notificaciones de pago bancario (MacroDroid → webhook).
   // Si no está configurado, el endpoint rechaza todas las llamadas.
   PAGO_WEBHOOK_SECRET: process.env.PAGO_WEBHOOK_SECRET || null,
+  AUXILIO_ADMIN_TOKEN: process.env.AUXILIO_ADMIN_TOKEN || null, // panel de auxilio mecánico
 
   // ─── PLATAFORMA MODULAR ────────────────────────────────────────────────
   // Módulos activos además del taxi, separados por coma.

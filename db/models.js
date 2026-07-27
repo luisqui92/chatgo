@@ -27,4 +27,6 @@ module.exports = {
   Solicitud: prisma.solicitud,
   Restaurante: prisma.restaurante,
   Plato: prisma.plato,
+  Mecanico: prisma.mecanico,
+  Auxilio: prisma.auxilio,
 };
