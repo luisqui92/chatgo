@@ -19,7 +19,7 @@ const CATALOGO = [
   { key: "dispensador", nombre: "Dispensador eléctrico (frío/caliente)", precio: 150, kw: /dispensador|surtidor|dispenser/i },
   { key: "pack",        nombre: "Pack 12 botellas 600 ml",              precio: 18,  kw: /pack|botellas?|600/i },
   { key: "bidon_nuevo", nombre: "Bidón 20L con envase nuevo",           precio: 45,  kw: /envase nuevo|bid[oó]n nuevo|con envase/i },
-  { key: "bidon",       nombre: "Bidón 20L (recarga)",                  precio: 15,  kw: /bid[oó]n|bidones|recarga|20\s*(l|lt|litros)/i },
+  { key: "bidon",       nombre: "Bidón 20L (recarga)",                  precio: 15,  kw: /bid[oó]n|bidones|botell[oó]n|botellones|recarga|20\s*(l|lt|litros)/i },
 ];
 const PAGOS = { efectivo: "💵 Efectivo", qr: "📲 QR", transferencia: "🏦 Transferencia" };
 

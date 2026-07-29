@@ -75,7 +75,7 @@ const ENTRADAS = [
   { modulo: "rastreo", regex: /^(rastreo|rastrear|rastreoplus|gps)\b/i },
   { modulo: "bus", regex: /^(bus|micro|trufi|l[ií]nea)s?\b|\bqu[eé] l[ií]nea\b/i },
   { modulo: "auxilio", regex: /^(auxilio(\s+mec[aá]nico)?|mec[aá]nico|gr[uú]a|cerrajer|bater[íi]a|llanta|pinchazo|se me pinch|no arranca|no prende|me qued[eé] (afuera|varad|sin llave))/i },
-  { modulo: "agua", regex: /^(agua|bid[oó]n|bidones|dispensador|surtidor|lo de siempre)\b/i },
+  { modulo: "agua", regex: /\b(bid[oó]n|bidones|botell[oó]n|botellones|agua de mesa)\b|^(agua|dispensador|surtidor|lo de siempre)\b/i },
 ];
 
 // ─── Intención de COMIDA en lenguaje natural ─────────────────────────────────
@@ -88,6 +88,13 @@ const ES_FRASE_VIAJE = /\b(ll[eé]vame|llevame|ir (a|al|hasta)|voy (a|al)|vamos 
 
 function esIntencionComida(texto) {
   return PIDE_COMIDA.test(texto) && !ES_FRASE_VIAJE.test(texto);
+}
+
+// Intención de AGUA de mesa: "bidón/botellón" son inequívocos (nadie los usa
+// para un taxi). "agua de mesa" también. Sirve para interceptar incluso en
+// pasos suaves del taxi (tras el saludo con historial).
+function esIntencionAgua(texto) {
+  return /\b(bid[oó]n|bidones|botell[oó]n|botellones)\b|\bagua de mesa\b/i.test(texto || "");
 }
 
 // Frases que abren cada módulo por VOZ (transcripción de nota de voz).
@@ -104,7 +111,7 @@ const ENTRADAS_VOZ = [
   { modulo: "rastreo", regex: /\brastrear\b|\brastreo\b|\brastreoplus\b/i },
   { modulo: "bus", regex: /\bqu[eé] l[ií]nea\b|\btrufi\b|\bchatgo ?bus\b/i },
   { modulo: "auxilio", regex: /\b(auxilio mec[aá]nico|cambio de llanta|se me pinch[oó]|necesito (una )?gr[uú]a|bater[íi]a descargada|no arranca|cerrajero)\b/i },
-  { modulo: "agua", regex: /\b(agua de mesa|un bid[oó]n|dos bidones|bid[oó]n de agua|dispensador de agua|lo de siempre)\b/i },
+  { modulo: "agua", regex: /\b(bid[oó]n|bidones|botell[oó]n|botellones|agua de mesa|dispensador de agua)\b/i },
 ];
 
 function moduloActivo(id) {
@@ -152,6 +159,7 @@ function intencionInequivoca(texto) {
   if (/\bqu[eé] l[ií]nea\b/i.test(texto) && moduloActivo("bus")) return "bus";
   if (/^(delivery|servicios?)$/i.test(texto)) return texto.toLowerCase().startsWith("s") ? "menu" : "delivery";
   if (moduloActivo("delivery") && esIntencionComida(texto)) return "delivery";
+  if (moduloActivo("agua") && esIntencionAgua(texto)) return "agua";
   return null;
 }
 
