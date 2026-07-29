@@ -38,6 +38,7 @@ model Usuario {
   ultimoViajeAt       DateTime?
   promoReactivacionEnviada Boolean @default(false)
   pushWeb             Json?     // suscripción Web Push del navegador (pedidos web)
+  ultimoPedidoAgua    Json?     // último pedido de ChatGo Agua (para "lo de siempre")
   createdAt           DateTime  @default(now())
   updatedAt           DateTime  @updatedAt
 

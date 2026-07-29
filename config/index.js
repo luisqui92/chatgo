@@ -59,6 +59,8 @@ const CONFIG = {
   // Si no está configurado, el endpoint rechaza todas las llamadas.
   PAGO_WEBHOOK_SECRET: process.env.PAGO_WEBHOOK_SECRET || null,
   AUXILIO_ADMIN_TOKEN: process.env.AUXILIO_ADMIN_TOKEN || null, // panel de auxilio mecánico
+  AGUA_REPARTIDOR_PHONE: process.env.AGUA_REPARTIDOR_PHONE || null, // repartidor de la fábrica de agua
+  AGUA_FABRICA_NOMBRE: process.env.AGUA_FABRICA_NOMBRE || "Agua de Mesa", // nombre de la fábrica (demo)
 
   // ─── PLATAFORMA MODULAR ────────────────────────────────────────────────
   // Módulos activos además del taxi, separados por coma.
