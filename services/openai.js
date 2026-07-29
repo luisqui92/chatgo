@@ -7,6 +7,15 @@ const os = require("os");
 const FormData = require("form-data");
 const { CONFIG, log } = require("../config");
 
+// Descarta transcripciones alucinadas: si el texto trae caracteres de alfabetos
+// que jamás aparecen en un pedido en español (hebreo, árabe, cirílico, CJK,
+// etc.), es un error del modelo — mejor tratarlo como "no entendí" que hablar
+// galimatías por voz.
+function transcripcionSospechosa(t) {
+  if (!t || !t.trim()) return true;
+  return /[֐-׿؀-ۿЀ-ӿ一-鿿぀-ヿ가-힯Ͱ-Ͽ]/.test(t);
+}
+
 async function transcribirAudioConModelo(audioBuffer, modelo, filename = "audio.ogg", contentType = "audio/ogg") {
   const formData = new FormData();
   formData.append("file", Buffer.from(audioBuffer), { filename, contentType });
@@ -24,7 +33,12 @@ async function transcribirAudioConModelo(audioBuffer, modelo, filename = "audio.
       timeout: CONFIG.TIMEOUT_OPENAI,
     }
   );
-  return res.data.text;
+  const texto = res.data.text || "";
+  if (transcripcionSospechosa(texto)) {
+    log.warn(`[TRANSCRIBIR] Descartada por caracteres no-español (alucinación): "${texto.slice(0, 60)}"`);
+    return "";
+  }
+  return texto;
 }
 
 async function transcribirAudio(audioUrl) {
