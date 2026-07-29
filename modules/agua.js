@@ -12,7 +12,7 @@ const { updateSession, deleteSession } = require("../services/session");
 const { enviarMensaje, enviarBotones, enviarImagen } = require("../services/whatsapp");
 const { obtenerDireccion } = require("../services/google");
 const { textoDeMensaje } = require("./util");
-const { Usuario } = require("../db/models");
+const { Usuario, PedidoAgua } = require("../db/models");
 
 // ── Catálogo (EDITÁ acá los productos y precios reales de la fábrica) ─────────
 const CATALOGO = [
@@ -46,6 +46,16 @@ function porKey(key) { return CATALOGO.find(p => p.key === key); }
 async function despachar(phone, pedido, punto, metodo) {
   const total = pedido.precio * pedido.cantidad;
   const link = `https://www.google.com/maps?q=${punto.lat},${punto.lng}`;
+
+  // Guardar el pedido (para el panel de despacho, rutas y agenda)
+  await PedidoAgua.create({
+    data: {
+      telefono: phone, producto: pedido.key, productoNombre: pedido.nombre,
+      cantidad: pedido.cantidad, total,
+      lat: punto.lat, lng: punto.lng, direccion: punto.nombre || null,
+      metodoPago: metodo, estado: "nuevo", repartidor: repartidor(),
+    },
+  }).catch((e) => log.error("[MOD:agua] guardar pedido:", e.message));
 
   // Aviso al REPARTIDOR de la fábrica
   await enviarMensaje(repartidor(),

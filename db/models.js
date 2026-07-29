@@ -29,4 +29,5 @@ module.exports = {
   Plato: prisma.plato,
   Mecanico: prisma.mecanico,
   Auxilio: prisma.auxilio,
+  PedidoAgua: prisma.pedidoAgua,
 };

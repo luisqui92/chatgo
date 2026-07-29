@@ -59,8 +59,11 @@ const CONFIG = {
   // Si no está configurado, el endpoint rechaza todas las llamadas.
   PAGO_WEBHOOK_SECRET: process.env.PAGO_WEBHOOK_SECRET || null,
   AUXILIO_ADMIN_TOKEN: process.env.AUXILIO_ADMIN_TOKEN || null, // panel de auxilio mecánico
-  AGUA_REPARTIDOR_PHONE: process.env.AGUA_REPARTIDOR_PHONE || null, // repartidor de la fábrica de agua
+  AGUA_REPARTIDOR_PHONE: process.env.AGUA_REPARTIDOR_PHONE || "59164637067", // admin/repartidor: Luis (chofer) por defecto
   AGUA_FABRICA_NOMBRE: process.env.AGUA_FABRICA_NOMBRE || "Agua de Mesa", // nombre de la fábrica (demo)
+  AGUA_ADMIN_TOKEN: process.env.AGUA_ADMIN_TOKEN || process.env.AUXILIO_ADMIN_TOKEN || null, // panel de despacho
+  AGUA_FABRICA_LAT: Number(process.env.AGUA_FABRICA_LAT || -17.3895), // base de la fábrica (para las rutas)
+  AGUA_FABRICA_LNG: Number(process.env.AGUA_FABRICA_LNG || -66.1568),
 
   // ─── PLATAFORMA MODULAR ────────────────────────────────────────────────
   // Módulos activos además del taxi, separados por coma.

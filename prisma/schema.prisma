@@ -471,3 +471,26 @@ model Auxilio {
   @@index([estado])
   @@map("auxilios")
 }
+
+// ─── ChatGo Agua (pedidos para despacho y control de rutas) ──────────────────
+model PedidoAgua {
+  id              String    @id @default(uuid())
+  telefono        String                        // cliente
+  producto        String                        // key del catálogo
+  productoNombre  String
+  cantidad        Int       @default(1)
+  total           Float     @default(0)
+  lat             Float?
+  lng             Float?
+  direccion       String?
+  metodoPago      String?
+  estado          String    @default("nuevo")   // nuevo|en_ruta|entregado|cancelado
+  repartidor      String?                        // teléfono del repartidor asignado
+  programadoPara  DateTime?                      // agenda (Google Calendar)
+  calendarEventId String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([estado])
+  @@map("pedidos_agua")
+}
