@@ -19,10 +19,60 @@ const RUBRO = require("../config/rubro_ventas");
 const { evaluarConversacion } = require("../services/ventas_scoring");
 const { extraerTextoDeArchivo } = require("../services/ventas_extraer");
 const { enviarInforme } = require("../services/ventas_mail");
+const conv = require("../services/ventas_conv");
 
 const subir = multer({ storage: multer.memoryStorage(), limits: { fileSize: 30 * 1024 * 1024 } });
 
 const MAP = { tiempo_respuesta: "tiempoRespuesta", descubrimiento: "descubrimiento", objeciones: "objeciones", seguimiento: "seguimiento", cierre: "cierre", cumplimiento: "cumplimiento" };
+
+// Evalúa un chat detectando repetidos y continuaciones:
+//   - Si el chat ya se subió idéntico -> lanza error REPETIDO ("necesito otro").
+//   - Si es el mismo chat sin mensajes nuevos -> lanza error SIN_NUEVOS.
+//   - Si es el mismo chat con mensajes extra -> evalúa SOLO lo nuevo.
+//   - Si es un chat distinto -> evalúa todo.
+async function evaluarChat(vendedor, textoNuevo, nombreArchivo, fechaConversacion) {
+  const convId = conv.convId(nombreArchivo || "", textoNuevo);
+  const convHash = conv.sha(conv.normaliza(textoNuevo));
+
+  const previas = await EvaluacionVenta.findMany({
+    where: { vendedorId: vendedor.id, convId },
+    orderBy: { createdAt: "desc" }, take: 20,
+  });
+
+  if (previas.some(p => p.convHash && p.convHash === convHash)) {
+    const err = new Error("Oye, este chat ya lo anexé antes (es idéntico). Necesito otro chat, o el mismo pero con mensajes nuevos.");
+    err.code = "REPETIDO";
+    throw err;
+  }
+
+  const prev = previas[0];
+  let aEvaluar = textoNuevo, tipo = "nuevo";
+  if (prev && prev.conversacion) {
+    const r = conv.continuacion(prev.conversacion, textoNuevo);
+    tipo = r.tipo;
+    if (tipo === "igual") {
+      const err = new Error("Este chat ya lo revisé y no tiene mensajes nuevos desde la última vez. Subí uno con conversación nueva.");
+      err.code = "SIN_NUEVOS";
+      throw err;
+    }
+    if (tipo === "continuacion") aEvaluar = r.texto; // solo la parte nueva
+  }
+
+  const ev = await evaluarConversacion(aEvaluar, vendedor.id);
+  const data = {
+    vendedorId: vendedor.id,
+    fechaConversacion: fechaConversacion || new Date(),
+    promedio: ev.promedio,
+    fortalezas: ev.fortalezas, debilidades: ev.debilidades,
+    mejoraConcreta: ev.mejora_concreta,
+    conversacion: textoNuevo.slice(0, 60000), // chat completo, para comparar la próxima vez
+    analisis: ev.analisis || null,
+    convId, convHash,
+  };
+  for (const k of Object.keys(MAP)) data[MAP[k]] = ev.scores[k];
+  const guardada = await EvaluacionVenta.create({ data });
+  return { evaluacion: guardada, tipo };
+}
 
 module.exports = function (app) {
   function auth(req, res) {
@@ -93,21 +143,12 @@ module.exports = function (app) {
       const vendedor = await Vendedor.findUnique({ where: { id: String(b.vendedorId || "") } });
       if (!vendedor) return res.status(400).json({ error: "Elegí un vendedor válido." });
       const conversacion = String(b.conversacion || "");
+      const fecha = b.fechaConversacion ? new Date(b.fechaConversacion) : new Date();
 
-      const ev = await evaluarConversacion(conversacion, vendedor.id); // valida cita o lanza error
-
-      const data = {
-        vendedorId: vendedor.id,
-        fechaConversacion: b.fechaConversacion ? new Date(b.fechaConversacion) : new Date(),
-        promedio: ev.promedio,
-        fortalezas: ev.fortalezas, debilidades: ev.debilidades,
-        mejoraConcreta: ev.mejora_concreta, conversacion: conversacion.slice(0, 20000),
-        analisis: ev.analisis || null,
-      };
-      for (const k of Object.keys(MAP)) data[MAP[k]] = ev.scores[k];
-      const guardada = await EvaluacionVenta.create({ data });
-      res.json({ ok: true, evaluacion: guardada });
+      const { evaluacion, tipo } = await evaluarChat(vendedor, conversacion, b.nombreArchivo || "", fecha);
+      res.json({ ok: true, evaluacion, tipo });
     } catch (e) {
+      if (e.code === "REPETIDO" || e.code === "SIN_NUEVOS") return res.status(409).json({ error: e.message, code: e.code });
       log.error("[VENTAS_EVALUAR]", e.message);
       res.status(422).json({ error: e.message });
     }
@@ -129,17 +170,10 @@ module.exports = function (app) {
         return res.status(422).json({ error: "No pude leer una conversación válida del archivo. Revisá que sea el chat exportado (o un audio claro)." });
       }
 
-      const ev = await evaluarConversacion(conversacion, vendedor.id);
-      const data = {
-        vendedorId: vendedor.id, fechaConversacion: new Date(), promedio: ev.promedio,
-        fortalezas: ev.fortalezas, debilidades: ev.debilidades,
-        mejoraConcreta: ev.mejora_concreta, conversacion: conversacion.slice(0, 20000),
-        analisis: ev.analisis || null,
-      };
-      for (const k of Object.keys(MAP)) data[MAP[k]] = ev.scores[k];
-      const guardada = await EvaluacionVenta.create({ data });
-      res.json({ ok: true, evaluacion: guardada });
+      const { evaluacion, tipo } = await evaluarChat(vendedor, conversacion, req.file.originalname, new Date());
+      res.json({ ok: true, evaluacion, tipo });
     } catch (e) {
+      if (e.code === "REPETIDO" || e.code === "SIN_NUEVOS") return res.status(409).json({ error: e.message, code: e.code });
       log.error("[VENTAS_EVAL_ARCHIVO]", e.message);
       res.status(422).json({ error: e.message });
     }
@@ -245,7 +279,7 @@ const PANEL = `<!DOCTYPE html>
   .cita{font-size:12.5px;color:var(--gr);font-style:italic;border-left:2px solid var(--acc);padding-left:9px;margin-top:3px;}
   .pill{font-size:11px;padding:2px 9px;border-radius:6px;font-weight:700;}
   .pill.f{background:#2a2915;color:#c9d18a;} .pill.d{background:#2f1c15;color:#e5a690;}
-  .msg{font-size:13px;margin-top:10px;} .msg.err{color:var(--rojo);} .msg.ok{color:var(--verde);}
+  .msg{font-size:13px;margin-top:10px;} .msg.err{color:var(--rojo);} .msg.ok{color:var(--verde);} .msg.warn{color:#b45309;background:#fff6e8;border:1px solid #f0d8ad;padding:8px 10px;border-radius:8px;}
   .mejora{background:#2a2015;border:1px solid var(--bd);border-radius:10px;padding:11px 13px;margin-top:11px;font-size:13.5px;}
   .mejora b{color:var(--acc2);}
   .spark{display:flex;align-items:flex-end;gap:3px;height:46px;margin-top:10px;} .spark>div{flex:1;border-radius:3px 3px 0 0;min-height:3px;}
@@ -424,9 +458,10 @@ async function evaluar(){
     const fd=new FormData(); fd.append("vendedorId",vid); fd.append("archivo",file);
     const r=await fetch("/ventas/evaluar-archivo?token="+encodeURIComponent(TOKEN),{method:"POST",body:fd});
     let d={}; try{ d=await r.json(); }catch(_){}
+    if(r.status===409){ msg.className="msg warn"; msg.textContent="🔁 "+(d.error||"Este chat ya lo revisé."); return; }
     if(!r.ok){ if(r.status===413) throw new Error("El archivo es muy grande para el servidor. Hay que subir el límite de nginx (client_max_body_size)."); throw new Error(d.error||("Error "+r.status)); }
-    msg.className="msg ok"; msg.textContent="Evaluación lista y guardada.";
-    document.getElementById("e-resultado").innerHTML=reporteHTML(d.evaluacion);
+    msg.className="msg ok"; msg.textContent=(d.tipo==="continuacion")?"Chat continuado: evalué solo los mensajes nuevos. ✅":"Evaluación lista y guardada.";
+    document.getElementById("e-resultado").innerHTML=(d.tipo==="continuacion"?'<div class="msg warn" style="margin-bottom:10px">Detecté que es la continuación de un chat ya evaluado. Solo califiqué la parte nueva.</div>':"")+reporteHTML(d.evaluacion);
   }catch(e){ msg.className="msg err"; msg.textContent=e.message; }
 }
 cargar();

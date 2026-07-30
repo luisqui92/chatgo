@@ -531,8 +531,11 @@ model EvaluacionVenta {
   mejoraConcreta    String?  @db.Text
   conversacion      String?  @db.Text
   analisis          Json?    // { probabilidadCierre, factores, emocionCliente, emocionEvolucion, respuestaIdeal, dineroPerdido, resumenEjecutivo, alertasRiesgo }
+  convId            String?  // identidad de la conversación (para continuar donde quedó)
+  convHash          String?  // hash del chat completo (para detectar repetidos idénticos)
   createdAt         DateTime @default(now())
 
   @@index([vendedorId])
+  @@index([convId])
   @@map("evaluaciones_venta")
 }
