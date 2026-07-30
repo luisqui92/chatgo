@@ -32,4 +32,6 @@ module.exports = {
   PedidoAgua: prisma.pedidoAgua,
   Vendedor: prisma.vendedor,
   EvaluacionVenta: prisma.evaluacionVenta,
+  LineaVentas: prisma.lineaVentas,
+  ChatVentas: prisma.chatVentas,
 };

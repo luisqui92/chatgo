@@ -14,65 +14,14 @@
 const crypto = require("crypto");
 const multer = require("multer");
 const { CONFIG, log } = require("../config");
-const { Vendedor, EvaluacionVenta } = require("../db/models");
+const { Vendedor, EvaluacionVenta, LineaVentas, ChatVentas } = require("../db/models");
 const RUBRO = require("../config/rubro_ventas");
-const { evaluarConversacion } = require("../services/ventas_scoring");
 const { extraerTextoDeArchivo } = require("../services/ventas_extraer");
 const { enviarInforme } = require("../services/ventas_mail");
-const conv = require("../services/ventas_conv");
+const { evaluarChat, MAP } = require("../services/ventas_evaluar");
+const wa = require("../services/ventas_wa");
 
 const subir = multer({ storage: multer.memoryStorage(), limits: { fileSize: 30 * 1024 * 1024 } });
-
-const MAP = { tiempo_respuesta: "tiempoRespuesta", descubrimiento: "descubrimiento", objeciones: "objeciones", seguimiento: "seguimiento", cierre: "cierre", cumplimiento: "cumplimiento" };
-
-// Evalúa un chat detectando repetidos y continuaciones:
-//   - Si el chat ya se subió idéntico -> lanza error REPETIDO ("necesito otro").
-//   - Si es el mismo chat sin mensajes nuevos -> lanza error SIN_NUEVOS.
-//   - Si es el mismo chat con mensajes extra -> evalúa SOLO lo nuevo.
-//   - Si es un chat distinto -> evalúa todo.
-async function evaluarChat(vendedor, textoNuevo, nombreArchivo, fechaConversacion) {
-  const convId = conv.convId(nombreArchivo || "", textoNuevo);
-  const convHash = conv.sha(conv.normaliza(textoNuevo));
-
-  const previas = await EvaluacionVenta.findMany({
-    where: { vendedorId: vendedor.id, convId },
-    orderBy: { createdAt: "desc" }, take: 20,
-  });
-
-  if (previas.some(p => p.convHash && p.convHash === convHash)) {
-    const err = new Error("Oye, este chat ya lo anexé antes (es idéntico). Necesito otro chat, o el mismo pero con mensajes nuevos.");
-    err.code = "REPETIDO";
-    throw err;
-  }
-
-  const prev = previas[0];
-  let aEvaluar = textoNuevo, tipo = "nuevo";
-  if (prev && prev.conversacion) {
-    const r = conv.continuacion(prev.conversacion, textoNuevo);
-    tipo = r.tipo;
-    if (tipo === "igual") {
-      const err = new Error("Este chat ya lo revisé y no tiene mensajes nuevos desde la última vez. Subí uno con conversación nueva.");
-      err.code = "SIN_NUEVOS";
-      throw err;
-    }
-    if (tipo === "continuacion") aEvaluar = r.texto; // solo la parte nueva
-  }
-
-  const ev = await evaluarConversacion(aEvaluar, vendedor.id);
-  const data = {
-    vendedorId: vendedor.id,
-    fechaConversacion: fechaConversacion || new Date(),
-    promedio: ev.promedio,
-    fortalezas: ev.fortalezas, debilidades: ev.debilidades,
-    mejoraConcreta: ev.mejora_concreta,
-    conversacion: textoNuevo.slice(0, 60000), // chat completo, para comparar la próxima vez
-    analisis: ev.analisis || null,
-    convId, convHash,
-  };
-  for (const k of Object.keys(MAP)) data[MAP[k]] = ev.scores[k];
-  const guardada = await EvaluacionVenta.create({ data });
-  return { evaluacion: guardada, tipo };
-}
 
 module.exports = function (app) {
   function auth(req, res) {
@@ -197,6 +146,60 @@ module.exports = function (app) {
     }
   });
 
+  // ─── Enlace de líneas de WhatsApp por Baileys (dispositivo vinculado) ──────
+  // Listar líneas con su estado actual (conectado / esperando QR / desconectado)
+  app.get("/ventas/lineas", async (req, res) => {
+    if (!auth(req, res)) return;
+    try {
+      const lineas = await LineaVentas.findMany({ where: { activa: true }, orderBy: { createdAt: "asc" } });
+      const vends = await Vendedor.findMany({ select: { id: true, nombre: true } });
+      const nombre = Object.fromEntries(vends.map(v => [v.id, v.nombre]));
+      const out = await Promise.all(lineas.map(async l => {
+        const est = wa.estadoPublico(l.id);
+        const chats = await ChatVentas.count({ where: { lineaId: l.id } });
+        return { id: l.id, vendedorId: l.vendedorId, vendedor: nombre[l.vendedorId] || "—", numero: est.numero || l.numero, estado: est.estado, qr: est.qr, chats };
+      }));
+      res.json({ disponible: wa.disponible(), lineas: out });
+    } catch (e) { res.status(500).json({ error: "Error al listar líneas." }); }
+  });
+
+  // Crear una línea para un vendedor e iniciar el enlace (genera el QR)
+  app.post("/ventas/lineas", async (req, res) => {
+    if (!auth(req, res)) return;
+    try {
+      const vendedorId = String((req.body && req.body.vendedorId) || "");
+      const vendedor = await Vendedor.findUnique({ where: { id: vendedorId } });
+      if (!vendedor) return res.status(400).json({ error: "Elegí un vendedor válido." });
+      if (!wa.disponible()) return res.status(503).json({ error: "El enlace por WhatsApp no está instalado en el servidor todavía." });
+      const linea = await LineaVentas.create({ data: { vendedorId, estado: "qr" } });
+      await wa.iniciarLinea(linea.id);
+      res.json({ ok: true, id: linea.id });
+    } catch (e) { log.error("[VENTAS_LINEA]", e.message); res.status(422).json({ error: e.message }); }
+  });
+
+  // Estado + QR de una línea (para hacer polling desde el navegador)
+  app.get("/ventas/lineas/:id/estado", async (req, res) => {
+    if (!auth(req, res)) return;
+    res.json(wa.estadoPublico(String(req.params.id)));
+  });
+
+  // Volver a generar el QR / reintentar el enlace
+  app.post("/ventas/lineas/:id/reintentar", async (req, res) => {
+    if (!auth(req, res)) return;
+    try { await wa.iniciarLinea(String(req.params.id)); res.json(wa.estadoPublico(String(req.params.id))); }
+    catch (e) { res.status(422).json({ error: e.message }); }
+  });
+
+  // Desconectar (logout) y desactivar la línea
+  app.post("/ventas/lineas/:id/desconectar", async (req, res) => {
+    if (!auth(req, res)) return;
+    try {
+      await wa.desconectarLinea(String(req.params.id));
+      await LineaVentas.update({ where: { id: String(req.params.id) }, data: { activa: false } }).catch(() => {});
+      res.json({ ok: true });
+    } catch (e) { res.status(422).json({ error: e.message }); }
+  });
+
   // Promedio móvil de las últimas N evaluaciones (tendencia)
   app.get("/ventas/tendencia", async (req, res) => {
     if (!auth(req, res)) return;
@@ -291,6 +294,7 @@ const PANEL = `<!DOCTYPE html>
   <div class="tabs">
     <button class="tab act" id="t-eval" onclick="verTab('eval')">Evaluación</button>
     <button class="tab" id="t-vend" onclick="verTab('vend')">Vendedores</button>
+    <button class="tab" id="t-enlace" onclick="verTab('enlace')">WhatsApp</button>
   </div>
 
   <div id="sec-eval">
@@ -336,6 +340,18 @@ const PANEL = `<!DOCTYPE html>
     <div id="lista-vend"></div>
     <div id="detalle-vend"></div>
   </div>
+
+  <div id="sec-enlace" style="display:none">
+    <div class="card">
+      <h3>Enlazar WhatsApp de un vendedor</h3>
+      <p style="color:var(--gr);font-size:13px;margin:2px 0 12px">Conectá la línea de WhatsApp (dispositivo vinculado, como WhatsApp Web). Los chats entran solos y se evalúan sin exportar nada. Usá un <b>número dedicado</b> de la empresa.</p>
+      <label>Vendedor</label><select id="l-vend"></select>
+      <div style="margin-top:12px"><button class="btn" onclick="crearLinea()">Generar QR para enlazar</button></div>
+      <div class="msg" id="l-msg"></div>
+      <div id="l-qr" style="text-align:center;margin-top:10px"></div>
+    </div>
+    <div id="lista-lineas"></div>
+  </div>
 </div>
 <footer><img src="/logo.png" alt=""> Powered by ChatGo</footer>
 <div class="modal" id="informe-modal"><div class="inner"><div class="mclose"><button onclick="cerrarInforme()">Cerrar ✕</button></div><div id="informe-body"></div></div></div>
@@ -349,11 +365,12 @@ function barColor(s){return s>=7?"#7fa662":s>=5?"#d9a441":"#d9705a";}
 const DIMS=[["tiempoRespuesta","Tiempo de respuesta"],["descubrimiento","Descubrimiento de necesidad"],["objeciones","Manejo de objeciones"],["seguimiento","Seguimiento"],["cierre","Cierre"],["cumplimiento","Cumplimiento de promesas"]];
 
 function verTab(t){
-  document.getElementById("t-eval").classList.toggle("act",t==="eval");
-  document.getElementById("t-vend").classList.toggle("act",t==="vend");
-  document.getElementById("sec-eval").style.display=t==="eval"?"block":"none";
-  document.getElementById("sec-vend").style.display=t==="vend"?"block":"none";
+  ["eval","vend","enlace"].forEach(function(x){
+    document.getElementById("t-"+x).classList.toggle("act",t===x);
+    document.getElementById("sec-"+x).style.display=t===x?"block":"none";
+  });
   if(t==="vend") cargarVends();
+  if(t==="enlace"){ llenarSelectLineas(); cargarLineas(); }
 }
 async function cargar(){ try{ const d=await api("/ventas/vendedores"); VENDS=d.vendedores||[]; llenarSelect(); }catch(e){ const m=document.getElementById("e-msg"); m.className="msg err"; m.textContent=e.message+" (revisá el token)"; } }
 function llenarSelect(){ document.getElementById("e-vend").innerHTML=VENDS.length?VENDS.map(v=>'<option value="'+v.id+'">'+esc(v.nombre)+'</option>').join(""):'<option value="">— agregá un vendedor primero —</option>'; }
@@ -464,5 +481,41 @@ async function evaluar(){
     document.getElementById("e-resultado").innerHTML=(d.tipo==="continuacion"?'<div class="msg warn" style="margin-bottom:10px">Detecté que es la continuación de un chat ya evaluado. Solo califiqué la parte nueva.</div>':"")+reporteHTML(d.evaluacion);
   }catch(e){ msg.className="msg err"; msg.textContent=e.message; }
 }
+
+// ── Enlace de líneas de WhatsApp ──────────────────────────────────────────
+let POLL_QR=null;
+function llenarSelectLineas(){ document.getElementById("l-vend").innerHTML=VENDS.length?VENDS.map(v=>'<option value="'+v.id+'">'+esc(v.nombre)+'</option>').join(""):'<option value="">— agregá un vendedor primero —</option>'; }
+function estadoPill(e){ if(e==="conectado") return '<span class="pill f">● Conectado</span>'; if(e==="qr") return '<span class="pill" style="background:#fff6e8;color:#b45309">Esperando QR</span>'; if(e==="conectando") return '<span class="pill" style="background:#eef;color:#556">Conectando…</span>'; return '<span class="pill d">Desconectado</span>'; }
+async function cargarLineas(){
+  try{
+    const d=await api("/ventas/lineas");
+    if(!d.disponible){ document.getElementById("lista-lineas").innerHTML='<div class="msg warn">El enlace por WhatsApp aún no está instalado en el servidor. Hay que correr <b>npm install</b> y prender VENTAS_WA_ENABLED=1.</div>'; return; }
+    const ls=d.lineas||[];
+    document.getElementById("lista-lineas").innerHTML=ls.length?('<div class="card"><h3>Líneas enlazadas</h3>'+ls.map(l=>'<div class="vrow" style="cursor:default"><div class="vn"><b>'+esc(l.vendedor)+'</b><div>'+(l.numero?('+'+esc(l.numero)+' · '):'')+l.chats+' chats · '+estadoPill(l.estado)+'</div></div>'+(l.estado==="conectado"?'':'<button class="vt" style="flex:none;padding:6px 10px" onclick="reintentar(\\''+l.id+'\\')">Reintentar</button>')+'<button class="vt" style="flex:none;padding:6px 10px;color:var(--rojo)" onclick="desconectar(\\''+l.id+'\\')">Quitar</button></div>').join("")+'</div>'):'';
+  }catch(e){}
+}
+async function crearLinea(){
+  const vid=document.getElementById("l-vend").value; const msg=document.getElementById("l-msg");
+  if(!vid){ msg.className="msg err"; msg.textContent="Elegí un vendedor."; return; }
+  msg.className="msg"; msg.textContent="Generando QR…"; document.getElementById("l-qr").innerHTML="";
+  try{
+    const d=await api("/ventas/lineas",{body:{vendedorId:vid}});
+    msg.textContent="Escaneá el QR con el WhatsApp del vendedor (Ajustes → Dispositivos vinculados).";
+    seguirQR(d.id);
+    cargarLineas();
+  }catch(e){ msg.className="msg err"; msg.textContent=e.message; }
+}
+function seguirQR(id){
+  if(POLL_QR) clearInterval(POLL_QR);
+  POLL_QR=setInterval(async function(){
+    try{
+      const s=await api("/ventas/lineas/"+id+"/estado");
+      if(s.estado==="qr"&&s.qr){ document.getElementById("l-qr").innerHTML='<img src="'+s.qr+'" style="width:260px;max-width:80%;border-radius:12px;border:1px solid var(--bd)"><div style="color:var(--gr);font-size:12px;margin-top:6px">Esperando escaneo…</div>'; }
+      else if(s.estado==="conectado"){ clearInterval(POLL_QR); document.getElementById("l-qr").innerHTML='<div class="msg ok" style="font-size:15px">✅ Línea conectada'+(s.numero?(' (+'+s.numero+')'):'')+'. Los chats se evaluarán solos.</div>'; document.getElementById("l-msg").textContent=""; cargarLineas(); }
+    }catch(e){}
+  },2500);
+}
+async function reintentar(id){ try{ await api("/ventas/lineas/"+id+"/reintentar",{method:"POST"}); seguirQR(id); document.getElementById("l-msg").className="msg"; document.getElementById("l-msg").textContent="Escaneá el QR nuevamente."; }catch(e){ alert(e.message); } }
+async function desconectar(id){ if(!confirm("¿Quitar esta línea? Se cerrará la sesión y dejará de capturar chats.")) return; try{ await api("/ventas/lineas/"+id+"/desconectar",{method:"POST"}); if(POLL_QR)clearInterval(POLL_QR); document.getElementById("l-qr").innerHTML=""; cargarLineas(); }catch(e){ alert(e.message); } }
 cargar();
 </script></body></html>`;

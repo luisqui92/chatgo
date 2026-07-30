@@ -126,6 +126,7 @@ require("./routes/links")(app); // Índice de enlaces — GET /links
 require("./routes/auxilio")(app); // Auxilio Mecánico (Etapa 1) — GET /admin/auxilio
 require("./routes/agua")(app); // ChatGo Agua — despacho y rutas — GET /admin/agua
 require("./routes/ventas")(app); // Evaluación de Ventas (separado) — GET /ventas
+require("./services/ventas_wa").init().catch(e => console.error("[VENTAS_WA] init:", e.message)); // enlace de líneas por Baileys (opt-in)
 
 // ─── INTERVALS ────────────────────────────────────────────────────────────────
 const { iniciarIntervals } = require("./intervals");

@@ -5,3 +5,6 @@ node_modules
 
 # Prisma local dev env (credenciales de MySQL local, no producción)
 .env.prisma.local
+
+# Sesiones de WhatsApp de Ventas (credenciales de dispositivo vinculado) — nunca commitear
+data/wa-ventas/

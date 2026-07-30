@@ -539,3 +539,39 @@ model EvaluacionVenta {
   @@index([convId])
   @@map("evaluaciones_venta")
 }
+
+// Línea de WhatsApp enlazada por Baileys a un vendedor (dispositivo vinculado).
+// Aislada de ChatGo: cada línea es su propia sesión, con su carpeta de credenciales.
+model LineaVentas {
+  id         String       @id @default(uuid())
+  vendedorId String
+  numero     String?      // número detectado al conectar (jid)
+  estado     String       @default("desconectado") // desconectado | qr | conectado
+  activa     Boolean      @default(true)
+  chats      ChatVentas[]
+  createdAt  DateTime     @default(now())
+  updatedAt  DateTime     @updatedAt
+
+  @@index([vendedorId])
+  @@map("lineas_ventas")
+}
+
+// Transcripción acumulada de una conversación (vendedor ↔ cliente) capturada en vivo.
+// Se persiste para no perder mensajes ante un reinicio; la evaluación incremental
+// se apoya en EvaluacionVenta (convId) para calificar solo lo nuevo.
+model ChatVentas {
+  id           String      @id @default(uuid())
+  lineaId      String
+  linea        LineaVentas @relation(fields: [lineaId], references: [id])
+  clienteJid   String      // remoteJid del cliente
+  clienteNombre String?
+  texto        String?     @db.Text // transcripción acumulada
+  ultimoMsgAt  DateTime?
+  pendiente    Boolean     @default(false) // hay mensajes nuevos sin evaluar
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  @@unique([lineaId, clienteJid])
+  @@index([lineaId])
+  @@map("chats_ventas")
+}
