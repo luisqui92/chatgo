@@ -147,9 +147,19 @@ module.exports = function (app) {
   });
 
   // ─── Enlace de líneas de WhatsApp por Baileys (dispositivo vinculado) ──────
+  // Si el cliente de Prisma no fue regenerado en el server, LineaVentas es undefined.
+  function lineasListas(res) {
+    if (!LineaVentas || !ChatVentas) {
+      res.status(503).json({ error: "En el servidor falta regenerar Prisma (npx prisma generate) y reiniciar. Las tablas de líneas todavía no están disponibles." });
+      return false;
+    }
+    return true;
+  }
+
   // Listar líneas con su estado actual (conectado / esperando QR / desconectado)
   app.get("/ventas/lineas", async (req, res) => {
     if (!auth(req, res)) return;
+    if (!lineasListas(res)) return;
     try {
       const lineas = await LineaVentas.findMany({ where: { activa: true }, orderBy: { createdAt: "asc" } });
       const vends = await Vendedor.findMany({ select: { id: true, nombre: true } });
@@ -166,6 +176,7 @@ module.exports = function (app) {
   // Crear una línea para un vendedor e iniciar el enlace (genera el QR)
   app.post("/ventas/lineas", async (req, res) => {
     if (!auth(req, res)) return;
+    if (!lineasListas(res)) return;
     try {
       const vendedorId = String((req.body && req.body.vendedorId) || "");
       const vendedor = await Vendedor.findUnique({ where: { id: vendedorId } });
