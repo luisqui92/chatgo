@@ -125,6 +125,7 @@ require("./routes/panel")(app); // Panel de operaciones por ciudad — GET /pane
 require("./routes/links")(app); // Índice de enlaces — GET /links
 require("./routes/auxilio")(app); // Auxilio Mecánico (Etapa 1) — GET /admin/auxilio
 require("./routes/agua")(app); // ChatGo Agua — despacho y rutas — GET /admin/agua
+require("./routes/ventas")(app); // Evaluación de Ventas (separado) — GET /ventas
 
 // ─── INTERVALS ────────────────────────────────────────────────────────────────
 const { iniciarIntervals } = require("./intervals");

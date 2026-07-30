@@ -30,4 +30,6 @@ module.exports = {
   Mecanico: prisma.mecanico,
   Auxilio: prisma.auxilio,
   PedidoAgua: prisma.pedidoAgua,
+  Vendedor: prisma.vendedor,
+  EvaluacionVenta: prisma.evaluacionVenta,
 };

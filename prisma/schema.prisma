@@ -494,3 +494,39 @@ model PedidoAgua {
   @@index([estado])
   @@map("pedidos_agua")
 }
+
+// ─── Evaluación de Ventas (sistema SEPARADO de ChatGo, solo reusa el servidor) ─
+model Vendedor {
+  id           String            @id @default(uuid())
+  nombre       String
+  email        String            @unique
+  whatsapp     String?
+  activo       Boolean           @default(true)
+  evaluaciones EvaluacionVenta[]
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+
+  @@map("vendedores")
+}
+
+model EvaluacionVenta {
+  id                String   @id @default(uuid())
+  vendedorId        String
+  vendedor          Vendedor @relation(fields: [vendedorId], references: [id])
+  fechaConversacion DateTime?
+  tiempoRespuesta   Int      @default(0)
+  descubrimiento    Int      @default(0)
+  objeciones        Int      @default(0)
+  seguimiento       Int      @default(0)
+  cierre            Int      @default(0)
+  cumplimiento      Int      @default(0)
+  promedio          Float    @default(0)
+  fortalezas        Json?    // [{ texto, cita }]
+  debilidades       Json?    // [{ texto, cita }]
+  mejoraConcreta    String?  @db.Text
+  conversacion      String?  @db.Text
+  createdAt         DateTime @default(now())
+
+  @@index([vendedorId])
+  @@map("evaluaciones_venta")
+}

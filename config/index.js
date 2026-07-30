@@ -64,6 +64,10 @@ const CONFIG = {
   AGUA_ADMIN_TOKEN: process.env.AGUA_ADMIN_TOKEN || process.env.AUXILIO_ADMIN_TOKEN || null, // panel de despacho
   AGUA_FABRICA_LAT: Number(process.env.AGUA_FABRICA_LAT || -17.3895), // base de la fábrica (para las rutas)
   AGUA_FABRICA_LNG: Number(process.env.AGUA_FABRICA_LNG || -66.1568),
+  // ─── Evaluación de Ventas (sistema separado) ───
+  VENTAS_ADMIN_TOKEN: process.env.VENTAS_ADMIN_TOKEN || null,
+  VENTAS_CLAUDE_KEY: process.env.VENTAS_CLAUDE_KEY || null, // Anthropic API key (para el scoring)
+  VENTAS_CLAUDE_MODEL: process.env.VENTAS_CLAUDE_MODEL || "claude-sonnet-5",
 
   // ─── PLATAFORMA MODULAR ────────────────────────────────────────────────
   // Módulos activos además del taxi, separados por coma.
