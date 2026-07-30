@@ -177,7 +177,10 @@ async function iniciarLinea(lineaId) {
       try {
         const jid = msg.key.remoteJid || "";
         const texto = textoDeMensaje(msg.message);
-        if (!jid.endsWith("@s.whatsapp.net")) { log.info(`[VENTAS_WA] salto jid=${jid} (no es chat 1-a-1)`); continue; }
+        // Solo ignoramos grupos, estados, difusiones y canales. Todo lo demás
+        // (@s.whatsapp.net o @lid) es un chat 1-a-1 y sí se captura.
+        const esNo11 = jid.endsWith("@g.us") || jid.endsWith("@broadcast") || jid.endsWith("@newsletter") || jid.includes("status@");
+        if (!jid || esNo11) { log.info(`[VENTAS_WA] salto jid=${jid} (no es chat 1-a-1)`); continue; }
         if (!texto) { log.info(`[VENTAS_WA] salto jid=${jid} (sin texto)`); continue; }
         const quien = msg.key.fromMe ? "vendedor" : "cliente";
         const clienteNombre = msg.key.fromMe ? null : (msg.pushName || null);
