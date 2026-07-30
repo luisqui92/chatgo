@@ -46,7 +46,17 @@ async function evaluarConversacion(conversacion, vendedorId) {
     '{ "scores": { ' + DIMS.map(k => `"${k}": <1-10>`).join(", ") + " }, " +
     '"fortalezas": [{ "texto": "...", "cita": "cita textual de la conversación" }], ' +
     '"debilidades": [{ "texto": "...", "cita": "cita textual de la conversación" }], ' +
-    '"mejora_concreta": "una acción específica y accionable, no genérica" }';
+    '"mejora_concreta": "una acción específica y accionable, no genérica", ' +
+    '"analisis": { ' +
+      '"probabilidad_cierre": <0-100, probabilidad de que la venta se cierre>, ' +
+      '"factores": [{ "tipo": "positivo"|"riesgo", "texto": "factor breve, ej: Cliente preguntó por precio / Falta hablar de garantía" }], ' +
+      '"emocion_cliente": "entusiasmado"|"indeciso"|"molesto"|"perdido"|"neutral", ' +
+      '"emocion_evolucion": ["emocion al inicio", "...", "emocion al final"], ' +
+      '"respuesta_ideal": { "situacion": "qué preguntó/dijo el cliente", "respuesta_actual": "lo que el vendedor respondió (cita)", "respuesta_ideal": "cómo debió responder para vender más" }, ' +
+      '"dinero_perdido_bs": <número en bolivianos estimado que se pudo perder por errores, o 0>, ' +
+      '"resumen_ejecutivo": "2-3 frases para un gerente, tono profesional", ' +
+      '"alertas_riesgo": ["promesas o descuentos riesgosos / fuera de política que hizo el vendedor, si los hay"] ' +
+    "} }";
 
   const userMsg = "RUBRO (6 dimensiones):\n" + dimsTxt + "\n\nCONVERSACIÓN A EVALUAR:\n\"\"\"\n" + conversacion.slice(0, 20000) + "\n\"\"\"";
 
@@ -73,6 +83,19 @@ async function evaluarConversacion(conversacion, vendedorId) {
   const err = validar(ev);
   if (err) throw new Error("La evaluación no cumple el rubro: " + err);
 
+  // Análisis extendido (best-effort: si algún campo no vino, no rompe)
+  const a = ev.analisis || {};
+  const analisis = {
+    probabilidadCierre: typeof a.probabilidad_cierre === "number" ? Math.max(0, Math.min(100, Math.round(a.probabilidad_cierre))) : null,
+    factores: Array.isArray(a.factores) ? a.factores : [],
+    emocionCliente: a.emocion_cliente || null,
+    emocionEvolucion: Array.isArray(a.emocion_evolucion) ? a.emocion_evolucion : [],
+    respuestaIdeal: a.respuesta_ideal || null,
+    dineroPerdido: typeof a.dinero_perdido_bs === "number" ? Math.round(a.dinero_perdido_bs) : null,
+    resumenEjecutivo: a.resumen_ejecutivo || null,
+    alertasRiesgo: Array.isArray(a.alertas_riesgo) ? a.alertas_riesgo.filter(Boolean) : [],
+  };
+
   return {
     vendedorId,
     scores: ev.scores,
@@ -80,6 +103,7 @@ async function evaluarConversacion(conversacion, vendedorId) {
     fortalezas: ev.fortalezas,
     debilidades: ev.debilidades,
     mejora_concreta: ev.mejora_concreta,
+    analisis,
   };
 }
 

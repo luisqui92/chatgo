@@ -501,6 +501,11 @@ model Vendedor {
   nombre       String
   email        String            @unique
   whatsapp     String?
+  telefono     String?
+  cargo        String?
+  zona         String?
+  foto         String?           @db.Text // avatar en base64 (data URL)
+  fechaIngreso DateTime?
   activo       Boolean           @default(true)
   evaluaciones EvaluacionVenta[]
   createdAt    DateTime          @default(now())
@@ -525,6 +530,7 @@ model EvaluacionVenta {
   debilidades       Json?    // [{ texto, cita }]
   mejoraConcreta    String?  @db.Text
   conversacion      String?  @db.Text
+  analisis          Json?    // { probabilidadCierre, factores, emocionCliente, emocionEvolucion, respuestaIdeal, dineroPerdido, resumenEjecutivo, alertasRiesgo }
   createdAt         DateTime @default(now())
 
   @@index([vendedorId])
