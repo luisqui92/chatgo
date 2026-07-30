@@ -375,13 +375,15 @@ function colScore(s){return s>=7?"sc-hi":s>=5?"sc-mid":"sc-lo";}
 function barColor(s){return s>=7?"#7fa662":s>=5?"#d9a441":"#d9705a";}
 const DIMS=[["tiempoRespuesta","Tiempo de respuesta"],["descubrimiento","Descubrimiento de necesidad"],["objeciones","Manejo de objeciones"],["seguimiento","Seguimiento"],["cierre","Cierre"],["cumplimiento","Cumplimiento de promesas"]];
 
+let POLL_LINEAS=null;
 function verTab(t){
   ["eval","vend","enlace"].forEach(function(x){
     document.getElementById("t-"+x).classList.toggle("act",t===x);
     document.getElementById("sec-"+x).style.display=t===x?"block":"none";
   });
   if(t==="vend") cargarVends();
-  if(t==="enlace"){ llenarSelectLineas(); cargarLineas(); }
+  if(POLL_LINEAS){ clearInterval(POLL_LINEAS); POLL_LINEAS=null; }
+  if(t==="enlace"){ llenarSelectLineas(); cargarLineas(); POLL_LINEAS=setInterval(cargarLineas,5000); }
 }
 async function cargar(){ try{ const d=await api("/ventas/vendedores"); VENDS=d.vendedores||[]; llenarSelect(); }catch(e){ const m=document.getElementById("e-msg"); m.className="msg err"; m.textContent=e.message+" (revisá el token)"; } }
 function llenarSelect(){ document.getElementById("e-vend").innerHTML=VENDS.length?VENDS.map(v=>'<option value="'+v.id+'">'+esc(v.nombre)+'</option>').join(""):'<option value="">— agregá un vendedor primero —</option>'; }

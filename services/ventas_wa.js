@@ -170,15 +170,18 @@ async function iniciarLinea(lineaId) {
   });
 
   sock.ev.on("messages.upsert", async (ev) => {
-    if (ev.type !== "notify") return;
+    log.info(`[VENTAS_WA] upsert type=${ev.type} n=${ev.messages.length} linea=${lineaId}`);
+    // "notify" = mensajes nuevos en vivo. "append" = agregados (incluye algunos propios).
+    if (ev.type !== "notify" && ev.type !== "append") return;
     for (const msg of ev.messages) {
       try {
         const jid = msg.key.remoteJid || "";
-        if (!jid.endsWith("@s.whatsapp.net")) continue; // solo chats 1-a-1 (no grupos/estados)
         const texto = textoDeMensaje(msg.message);
-        if (!texto) continue;
+        if (!jid.endsWith("@s.whatsapp.net")) { log.info(`[VENTAS_WA] salto jid=${jid} (no es chat 1-a-1)`); continue; }
+        if (!texto) { log.info(`[VENTAS_WA] salto jid=${jid} (sin texto)`); continue; }
         const quien = msg.key.fromMe ? "vendedor" : "cliente";
         const clienteNombre = msg.key.fromMe ? null : (msg.pushName || null);
+        log.info(`[VENTAS_WA] captado jid=${jid} de=${quien}`);
         await registrarMensaje(lineaId, vendedorNombre, jid, clienteNombre, quien, texto, msg.messageTimestamp);
       } catch (e) { log.error("[VENTAS_WA] msg:", e.message); }
     }
