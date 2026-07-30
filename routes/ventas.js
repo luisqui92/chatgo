@@ -368,8 +368,8 @@ async function evaluar(){
   try{
     const fd=new FormData(); fd.append("vendedorId",vid); fd.append("archivo",file);
     const r=await fetch("/ventas/evaluar-archivo?token="+encodeURIComponent(TOKEN),{method:"POST",body:fd});
-    const d=await r.json().catch(()=>({}));
-    if(!r.ok) throw new Error(d.error||"Error");
+    let d={}; try{ d=await r.json(); }catch(_){}
+    if(!r.ok){ if(r.status===413) throw new Error("El archivo es muy grande para el servidor. Hay que subir el límite de nginx (client_max_body_size)."); throw new Error(d.error||("Error "+r.status)); }
     msg.className="msg ok"; msg.textContent="Evaluación lista y guardada.";
     document.getElementById("e-resultado").innerHTML=evalCard(d.evaluacion);
   }catch(e){ msg.className="msg err"; msg.textContent=e.message; }
