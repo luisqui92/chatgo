@@ -18,6 +18,7 @@ const { Vendedor, EvaluacionVenta } = require("../db/models");
 const RUBRO = require("../config/rubro_ventas");
 const { evaluarConversacion } = require("../services/ventas_scoring");
 const { extraerTextoDeArchivo } = require("../services/ventas_extraer");
+const { enviarInforme } = require("../services/ventas_mail");
 
 const subir = multer({ storage: multer.memoryStorage(), limits: { fileSize: 30 * 1024 * 1024 } });
 
@@ -144,6 +145,24 @@ module.exports = function (app) {
     }
   });
 
+  // Enviar el informe de una evaluación por correo (desde el correo padre)
+  app.post("/ventas/enviar-correo", async (req, res) => {
+    if (!auth(req, res)) return;
+    try {
+      const b = req.body || {};
+      const destino = String(b.destino || "").trim().toLowerCase();
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(destino)) return res.status(400).json({ error: "Email de destino inválido." });
+      const ev = await EvaluacionVenta.findUnique({ where: { id: String(b.evaluacionId || "") } });
+      if (!ev) return res.status(404).json({ error: "Evaluación no encontrada." });
+      const vendedor = await Vendedor.findUnique({ where: { id: ev.vendedorId } });
+      await enviarInforme(destino, ev, vendedor || { nombre: "Vendedor" });
+      res.json({ ok: true });
+    } catch (e) {
+      log.error("[VENTAS_MAIL]", e.message);
+      res.status(422).json({ error: e.message });
+    }
+  });
+
   // Promedio móvil de las últimas N evaluaciones (tendencia)
   app.get("/ventas/tendencia", async (req, res) => {
     if (!auth(req, res)) return;
@@ -207,6 +226,15 @@ const PANEL = `<!DOCTYPE html>
   .alerta{background:#331a12;border:1px solid #6b3a24;color:#f0b090;border-radius:9px;padding:8px 11px;margin-top:7px;font-size:12.5px;}
   .dinero{color:var(--rojo);font-weight:800;}
   .comp{display:flex;align-items:center;gap:8px;margin:5px 0;font-size:12.5px;} .comp .n{width:90px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;} .comp .b{flex:1;height:9px;background:#241a11;border-radius:5px;overflow:hidden;} .comp .b>div{height:100%;} .comp .v{width:34px;text-align:right;font-weight:700;}
+  .vtabs{display:flex;gap:6px;margin-bottom:12px;} .vt{flex:1;background:var(--card2);border:1px solid var(--bd);color:var(--gr);border-radius:8px;padding:9px;font-weight:700;font-size:12.5px;cursor:pointer;} .vt.act{background:var(--acc);color:#fff;border-color:transparent;}
+  .rr{display:flex;align-items:center;gap:10px;padding:11px 0;border-bottom:1px solid #241a11;cursor:pointer;} .rr .f{flex:1;font-size:13.5px;} .rr .f small{color:var(--gr);display:block;margin-top:2px;font-size:11.5px;}
+  .cal{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;} .cal .h{text-align:center;font-size:10px;color:var(--gr);padding:3px 0;}
+  .cald{aspect-ratio:1;border-radius:8px;background:var(--card2);border:1px solid var(--bd);display:flex;flex-direction:column;align-items:center;justify-content:center;font-size:11px;color:var(--gr);}
+  .cald.has{cursor:pointer;color:var(--tx);} .cald .sc{font-size:13px;font-weight:800;}
+  .calnav{display:flex;justify-content:space-between;align-items:center;margin-bottom:9px;} .calnav button{background:var(--card2);border:1px solid var(--bd);color:var(--tx);border-radius:8px;padding:5px 13px;cursor:pointer;font-size:16px;}
+  .modal{display:none;position:fixed;inset:0;background:rgba(10,6,3,.88);z-index:100;overflow:auto;padding:16px;} .modal.show{display:block;} .modal .inner{max-width:640px;margin:0 auto;}
+  .mclose{display:flex;justify-content:flex-end;margin-bottom:6px;} .mclose button{background:var(--card);border:1px solid var(--bd);color:var(--tx);border-radius:9px;padding:8px 15px;cursor:pointer;}
+  .mailbtn{display:block;width:100%;background:#2e6b4f;color:#fff;border:none;border-radius:10px;padding:12px;font-weight:700;font-size:14px;cursor:pointer;margin-bottom:14px;}
   .vrow{display:flex;align-items:center;gap:12px;padding:11px 0;border-bottom:1px solid #241a11;cursor:pointer;}
   .vrow:hover{opacity:.9;}
   .vava{width:36px;height:36px;border-radius:50%;background:#2e2116;display:flex;align-items:center;justify-content:center;font-weight:700;color:var(--acc2);flex-shrink:0;}
@@ -276,9 +304,10 @@ const PANEL = `<!DOCTYPE html>
   </div>
 </div>
 <footer><img src="/logo.png" alt=""> Powered by ChatGo</footer>
+<div class="modal" id="informe-modal"><div class="inner"><div class="mclose"><button onclick="cerrarInforme()">Cerrar ✕</button></div><div id="informe-body"></div></div></div>
 <script>
 const TOKEN=new URLSearchParams(location.search).get("token")||"";
-let VENDS=[], FOTO_B64=null;
+let VENDS=[], FOTO_B64=null, EV_ACT=[], V_ACT=null, CAL_MES=null;
 function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));}
 async function api(ruta,opts={}){const sep=ruta.includes("?")?"&":"?";const r=await fetch(ruta+sep+"token="+encodeURIComponent(TOKEN),{method:opts.method||(opts.body?"POST":"GET"),headers:{"Content-Type":"application/json"},body:opts.body?JSON.stringify(opts.body):undefined});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||"Error");return d;}
 function colScore(s){return s>=7?"sc-hi":s>=5?"sc-mid":"sc-lo";}
@@ -340,10 +369,36 @@ async function verDetalle(id){
       comp='<div class="card"><h3>Comparación con el equipo</h3><div style="font-size:12.5px;color:var(--gr);margin-bottom:8px">Promedio empresa: <b style="color:var(--tx)">'+avgEmp+'</b></div>'+barras+gap+'</div>';
     }
     let spark=""; if(t.movil&&t.movil.length>1){ spark='<div class="card"><h3>Evolución (promedio móvil)</h3><div class="spark">'+t.movil.map(m=>'<div style="height:'+(m/10*100)+'%;background:'+barColor(m)+'"></div>').join("")+'</div></div>'; }
-    document.getElementById("detalle-vend").innerHTML=header+comp+spark+evals.map(e=>evalCard(e)).join("");
+    EV_ACT=evals; V_ACT=v; CAL_MES=null;
+    document.getElementById("detalle-vend").innerHTML=header+comp+spark+'<div class="card"><div class="vtabs"><button class="vt act" id="vt-res" onclick="verVista(\\'res\\')">Resumen</button><button class="vt" id="vt-cal" onclick="verVista(\\'cal\\')">Calendario</button></div><div id="vista-cont"></div></div>';
+    verVista("res");
     document.getElementById("detalle-vend").scrollIntoView({behavior:"smooth"});
   }catch(e){ document.getElementById("detalle-vend").innerHTML='<div class="card" style="color:var(--rojo)">'+esc(e.message)+'</div>'; }
 }
+function verVista(m){ document.getElementById("vt-res").classList.toggle("act",m==="res"); document.getElementById("vt-cal").classList.toggle("act",m==="cal"); if(m==="res") pintarResumen(); else pintarCalendario(); }
+function pintarResumen(){
+  document.getElementById("vista-cont").innerHTML = EV_ACT.length? EV_ACT.map(function(e,i){
+    var a=e.analisis||{}; var prob=a.probabilidadCierre!=null?(" · "+a.probabilidadCierre+"% cierre"):"";
+    return '<div class="rr" onclick="abrirInforme('+i+')"><div class="f"><b>'+new Date(e.createdAt).toLocaleDateString("es-BO")+'</b><small>Calificación '+e.promedio+'/10'+prob+' — tocá para ver el informe completo</small></div><div class="score-big '+colScore(e.promedio)+'">'+e.promedio+'</div></div>';
+  }).join(""):'<div style="color:var(--gr)">Sin evaluaciones aún.</div>';
+}
+function pintarCalendario(){
+  if(!CAL_MES) CAL_MES = EV_ACT.length? new Date(EV_ACT[0].createdAt) : new Date();
+  var y=CAL_MES.getFullYear(), m=CAL_MES.getMonth();
+  var byDay={}; EV_ACT.forEach(function(e){ var d=new Date(e.createdAt); if(d.getFullYear()===y&&d.getMonth()===m){ (byDay[d.getDate()]=byDay[d.getDate()]||[]).push(e); } });
+  var first=new Date(y,m,1).getDay(), days=new Date(y,m+1,0).getDate();
+  var nombreMes=CAL_MES.toLocaleDateString("es-BO",{month:"long",year:"numeric"});
+  var cells=""; ["D","L","M","M","J","V","S"].forEach(function(h){cells+='<div class="h">'+h+'</div>';});
+  for(var i=0;i<first;i++) cells+='<div class="cald"></div>';
+  for(var d=1;d<=days;d++){ var ev=byDay[d]; if(ev){ var prom=Math.round(ev.reduce(function(s,x){return s+x.promedio;},0)/ev.length*10)/10; cells+='<div class="cald has" onclick="abrirDia('+y+','+m+','+d+')"><div>'+d+'</div><div class="sc" style="color:'+barColor(prom)+'">'+prom+'</div></div>'; } else cells+='<div class="cald">'+d+'</div>'; }
+  document.getElementById("vista-cont").innerHTML='<div class="calnav"><button onclick="calMes(-1)">‹</button><b style="text-transform:capitalize">'+nombreMes+'</b><button onclick="calMes(1)">›</button></div><div class="cal">'+cells+'</div>';
+}
+function calMes(delta){ CAL_MES=new Date(CAL_MES.getFullYear(),CAL_MES.getMonth()+delta,1); pintarCalendario(); }
+function reporteHTML(e){ return evalCard(e)+'<button class="mailbtn" onclick="pedirCorreo(\\''+e.id+'\\')">✉️ Enviar por correo</button>'; }
+function abrirInforme(i){ document.getElementById("informe-body").innerHTML=reporteHTML(EV_ACT[i]); document.getElementById("informe-modal").classList.add("show"); window.scrollTo(0,0); }
+function abrirDia(y,m,d){ var evs=EV_ACT.filter(function(e){var x=new Date(e.createdAt);return x.getFullYear()===y&&x.getMonth()===m&&x.getDate()===d;}); document.getElementById("informe-body").innerHTML=evs.map(reporteHTML).join(""); document.getElementById("informe-modal").classList.add("show"); window.scrollTo(0,0); }
+function cerrarInforme(){ document.getElementById("informe-modal").classList.remove("show"); }
+async function pedirCorreo(id){ var dest=prompt("¿A qué correo envío el informe?"); if(!dest) return; try{ await api("/ventas/enviar-correo",{body:{evaluacionId:id,destino:dest}}); alert("Informe enviado a "+dest+" ✅"); }catch(e){ alert("No se pudo enviar: "+e.message); } }
 function evalCard(e){
   const dims=DIMS.map(function(p){var k=p[0],n=p[1];var s=e[k]||0;return '<div class="dim"><div class="top"><span class="n">'+n+'</span><span class="'+colScore(s)+'">'+s+'/10</span></div><div class="bar"><div style="width:'+(s*10)+'%;background:'+barColor(s)+'"></div></div></div>';}).join("");
   const forts=(e.fortalezas||[]).map(f=>'<div style="margin:7px 0"><span class="pill f">Fortaleza</span> '+esc(f.texto)+'<div class="cita">"'+esc(f.cita)+'"</div></div>').join("");
@@ -371,7 +426,7 @@ async function evaluar(){
     let d={}; try{ d=await r.json(); }catch(_){}
     if(!r.ok){ if(r.status===413) throw new Error("El archivo es muy grande para el servidor. Hay que subir el límite de nginx (client_max_body_size)."); throw new Error(d.error||("Error "+r.status)); }
     msg.className="msg ok"; msg.textContent="Evaluación lista y guardada.";
-    document.getElementById("e-resultado").innerHTML=evalCard(d.evaluacion);
+    document.getElementById("e-resultado").innerHTML=reporteHTML(d.evaluacion);
   }catch(e){ msg.className="msg err"; msg.textContent=e.message; }
 }
 cargar();

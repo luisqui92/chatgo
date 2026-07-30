@@ -67,6 +67,8 @@ const CONFIG = {
   // ─── Evaluación de Ventas (sistema separado) ───
   VENTAS_ADMIN_TOKEN: process.env.VENTAS_ADMIN_TOKEN || null,
   VENTAS_MODEL: process.env.VENTAS_MODEL || "gpt-4o", // scoring con OpenAI (reusa OPENAI_KEY)
+  VENTAS_MAIL_USER: process.env.VENTAS_MAIL_USER || "rastreoplus@gmail.com", // correo padre (remitente)
+  VENTAS_MAIL_PASS: process.env.VENTAS_MAIL_PASS || null, // contraseña de aplicación de Gmail
 
   // ─── PLATAFORMA MODULAR ────────────────────────────────────────────────
   // Módulos activos además del taxi, separados por coma.
