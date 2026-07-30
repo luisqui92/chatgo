@@ -33,7 +33,7 @@ function promedio(scores) {
 }
 
 async function evaluarConversacion(conversacion, vendedorId) {
-  if (!CONFIG.VENTAS_CLAUDE_KEY) throw new Error("Falta VENTAS_CLAUDE_KEY (Claude API key) en el .env.");
+  if (!CONFIG.OPENAI_KEY) throw new Error("Falta OPENAI_KEY en el .env.");
   if (!conversacion || conversacion.trim().length < 20) throw new Error("La conversación es muy corta o está vacía. No se evalúa sin contexto real.");
 
   const dimsTxt = RUBRO.dimensiones.map((d, i) => `${i + 1}. ${d.nombre} (${d.key}): ${d.desc}`).join("\n");
@@ -42,7 +42,7 @@ async function evaluarConversacion(conversacion, vendedorId) {
     "no despido ni ranking punitivo, así que el tono debe ser constructivo. Evaluás EXCLUSIVAMENTE con el rubro " +
     "dado, con escala " + RUBRO.escala + ". " + RUBRO.regla + " " +
     "NUNCA inventes evidencia: si algo no está en la conversación, no lo afirmes. " +
-    "Respondé ÚNICAMENTE con un JSON válido, sin texto adicional, con exactamente esta forma:\n" +
+    "Respondé ÚNICAMENTE con un objeto JSON válido, sin texto adicional, con exactamente esta forma:\n" +
     '{ "scores": { ' + DIMS.map(k => `"${k}": <1-10>`).join(", ") + " }, " +
     '"fortalezas": [{ "texto": "...", "cita": "cita textual de la conversación" }], ' +
     '"debilidades": [{ "texto": "...", "cita": "cita textual de la conversación" }], ' +
@@ -52,23 +52,23 @@ async function evaluarConversacion(conversacion, vendedorId) {
 
   let data;
   try {
-    const res = await axios.post("https://api.anthropic.com/v1/messages", {
-      model: CONFIG.VENTAS_CLAUDE_MODEL,
-      max_tokens: 1500,
-      system,
-      messages: [{ role: "user", content: userMsg }],
+    const res = await axios.post("https://api.openai.com/v1/chat/completions", {
+      model: CONFIG.VENTAS_MODEL,
+      temperature: 0.2,
+      response_format: { type: "json_object" },
+      messages: [{ role: "system", content: system }, { role: "user", content: userMsg }],
     }, {
-      headers: { "x-api-key": CONFIG.VENTAS_CLAUDE_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+      headers: { Authorization: `Bearer ${CONFIG.OPENAI_KEY}`, "Content-Type": "application/json" },
       timeout: 90000,
     });
     data = res.data;
   } catch (e) {
     const det = e.response?.data?.error?.message || e.message;
     log.error("[VENTAS_SCORING]", det);
-    throw new Error("Claude API: " + det);
+    throw new Error("OpenAI: " + det);
   }
 
-  const txt = (data.content && data.content[0] && data.content[0].text) || "";
+  const txt = (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || "";
   const ev = extraerJSON(txt);
   const err = validar(ev);
   if (err) throw new Error("La evaluación no cumple el rubro: " + err);

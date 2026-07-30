@@ -66,8 +66,7 @@ const CONFIG = {
   AGUA_FABRICA_LNG: Number(process.env.AGUA_FABRICA_LNG || -66.1568),
   // ─── Evaluación de Ventas (sistema separado) ───
   VENTAS_ADMIN_TOKEN: process.env.VENTAS_ADMIN_TOKEN || null,
-  VENTAS_CLAUDE_KEY: process.env.VENTAS_CLAUDE_KEY || null, // Anthropic API key (para el scoring)
-  VENTAS_CLAUDE_MODEL: process.env.VENTAS_CLAUDE_MODEL || "claude-sonnet-5",
+  VENTAS_MODEL: process.env.VENTAS_MODEL || "gpt-4o", // scoring con OpenAI (reusa OPENAI_KEY)
 
   // ─── PLATAFORMA MODULAR ────────────────────────────────────────────────
   // Módulos activos además del taxi, separados por coma.
