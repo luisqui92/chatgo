@@ -72,6 +72,7 @@ const CONFIG = {
   VENTAS_WA_ENABLED: process.env.VENTAS_WA_ENABLED === "1", // enlace de líneas por Baileys (separado de ChatGo)
   VENTAS_WA_DIR: process.env.VENTAS_WA_DIR || "data/wa-ventas", // credenciales de sesión Baileys
   VENTAS_WA_DEBOUNCE_MS: Number(process.env.VENTAS_WA_DEBOUNCE_MS || 180000), // espera de inactividad antes de auto-evaluar (3 min)
+  CARP_ADMIN_TOKEN: process.env.CARP_ADMIN_TOKEN || null, // panel de corte de aluminio (separado)
 
   // ─── PLATAFORMA MODULAR ────────────────────────────────────────────────
   // Módulos activos además del taxi, separados por coma.

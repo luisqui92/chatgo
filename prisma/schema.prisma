@@ -575,3 +575,76 @@ model ChatVentas {
   @@index([lineaId])
   @@map("chats_ventas")
 }
+
+// ─── Corte de Aluminio (panel de despiece/optimización, separado — reusa el servidor) ─
+// Catálogo de perfiles de aluminio. La barra estándar es de 6 m (6000 mm).
+model PerfilAluminio {
+  id          String   @id @default(uuid())
+  codigo      String?  // código del proveedor
+  nombre      String   // ej: "Riel superior 3 vías", "Jamba 2 vías"
+  linea       String?  // serie/sistema, ej: "Serie 25", "Vitri"
+  color       String?  @default("natural")
+  largoBarraMm Int     @default(6000)
+  precioBarra Float    @default(0) // Bs por barra completa
+  activo      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("carp_perfiles")
+}
+
+model VidrioCarp {
+  id        String   @id @default(uuid())
+  nombre    String   // ej: "Vidrio 4mm incoloro", "Templado 6mm"
+  precioM2  Float    @default(0) // Bs por m²
+  activo    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("carp_vidrios")
+}
+
+model AccesorioCarp {
+  id        String   @id @default(uuid())
+  nombre    String   // ej: "Rueda corrediza", "Felpa (m)", "Cerradura"
+  unidad    String   @default("u") // u, m, jgo, par
+  precio    Float    @default(0)
+  activo    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("carp_accesorios")
+}
+
+// Receta de un tipo de producto (ventana/puerta). Guarda las piezas de perfil
+// con su fórmula de corte (en función de A=ancho y H=alto en mm), los vidrios y
+// los accesorios. Se edita desde el panel.
+model ProductoCarp {
+  id          String   @id @default(uuid())
+  nombre      String   // ej: "Ventana corrediza 2 hojas"
+  descripcion String?
+  piezas      Json     @default("[]") // [{ perfilId, cantidad, formula, nota }]
+  vidrios     Json     @default("[]") // [{ vidrioId, cantidad, formulaAncho, formulaAlto }]
+  accesorios  Json     @default("[]") // [{ accesorioId, cantidad, formula }]
+  activo      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("carp_productos")
+}
+
+// Cotización guardada: cliente + ítems + resultado calculado (despiece, barras, costo).
+model CotizacionCarp {
+  id          String   @id @default(uuid())
+  cliente     String?
+  telefono    String?
+  items       Json     @default("[]") // [{ productoId, nombre, ancho, alto, cantidad }]
+  resultado   Json?    // { perfiles:[{...barras, desperdicio}], vidrioM2, accesorios, costos }
+  descuento   Float    @default(0) // % de descuento comercial
+  manoObra    Float    @default(0) // Bs de mano de obra
+  total       Float    @default(0)
+  createdAt   DateTime @default(now())
+
+  @@index([createdAt])
+  @@map("carp_cotizaciones")
+}

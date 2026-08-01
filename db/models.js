@@ -34,4 +34,9 @@ module.exports = {
   EvaluacionVenta: prisma.evaluacionVenta,
   LineaVentas: prisma.lineaVentas,
   ChatVentas: prisma.chatVentas,
+  PerfilAluminio: prisma.perfilAluminio,
+  VidrioCarp: prisma.vidrioCarp,
+  AccesorioCarp: prisma.accesorioCarp,
+  ProductoCarp: prisma.productoCarp,
+  CotizacionCarp: prisma.cotizacionCarp,
 };
