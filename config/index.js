@@ -55,6 +55,13 @@ const CONFIG = {
     .filter(Boolean),
   // Cuota diaria que debe pagar cada chofer (en Bs)
   CUOTA_DIARIA_BS: Number(process.env.CUOTA_DIARIA_BS || 10),
+  // ─── RECARGO POR SUBIDA (La Paz es una olla entre cerros) ─────────────────
+  // Cobra un extra cuando el viaje SUBE (destino más alto que el origen), medido
+  // con la API de Elevación de Google. En bajada o plano no se cobra extra.
+  RECARGO_SUBIDA_ENABLED: process.env.RECARGO_SUBIDA_ENABLED === "1",
+  RECARGO_SUBIDA_BS_POR_100M: Number(process.env.RECARGO_SUBIDA_BS_POR_100M || 2), // Bs por cada 100 m de subida neta
+  RECARGO_SUBIDA_UMBRAL_M: Number(process.env.RECARGO_SUBIDA_UMBRAL_M || 60),       // no cobrar si sube menos que esto (viaje casi plano)
+  RECARGO_SUBIDA_MAX_BS: Number(process.env.RECARGO_SUBIDA_MAX_BS || 15),           // tope del recargo
   // Secreto compartido para validar notificaciones de pago bancario (MacroDroid → webhook).
   // Si no está configurado, el endpoint rechaza todas las llamadas.
   PAGO_WEBHOOK_SECRET: process.env.PAGO_WEBHOOK_SECRET || null,

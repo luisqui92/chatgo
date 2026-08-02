@@ -6,7 +6,7 @@ const { CONFIG, log, CIUDADES, detectarCiudadPorCoords, detectarCiudadPorTexto }
 const { Usuario, Chofer, Viaje, ListaEspera, CodigoPromo, LocationReference } = require("../db/models");
 const { getSession, setSession, updateSession, deleteSession, ensureSession, removeListaEspera } = require("../services/session");
 const { enviarMensaje: enviarMensajeRaw, enviarBotones: enviarBotonesRaw, relayMensajeChat, obtenerUrlMedia } = require("../services/whatsapp");
-const { evaluarPrecisionReferencia, detectarYExtrarCoordsMaps, normalizarReferencia, guardarReferenciaVoz, geocodificarConMemoria, calcularDistancia, calcularDistanciaConParadas, obtenerDireccion, buscarReferenciaEnMemoria } = require("../services/google");
+const { evaluarPrecisionReferencia, detectarYExtrarCoordsMaps, normalizarReferencia, guardarReferenciaVoz, geocodificarConMemoria, calcularDistancia, calcularDistanciaConParadas, obtenerDireccion, buscarReferenciaEnMemoria, obtenerRecargoSubida } = require("../services/google");
 const { transcribirAudio, extraerUbicaciones } = require("../services/openai");
 const { promoCodigosActiva, crearCodigoPromo, validarCodigoPromo, enviarCodigoDescuento, esIntentoCancelar, esPedidoAyuda, detectarIncompatibilidadMoto, construirBotonesHistorial, sugerenciaPorHora, buscarEsquinaMapeada, guardarEsquina, obtenerLugarPersonal, guardarLugarPersonal, obtenerLugarOtros, evaluarReferencia, mensajePidiendoReferencia, calcularPrecio } = require("../services/utils");
 const { esMensajeFamiliar, manejarFlujoFamiliar } = require("../flows/familiar");
@@ -142,13 +142,14 @@ async function flujoRapidoVoz(phone, session) {
 
     // Distancia (Google), surge (BD) y chofer cercano (snapshot Traccar) son
     // independientes → en paralelo para responder por voz más rápido.
-    const [distRes, surgeRes, choferRes] = await Promise.all([
+    const [distRes, surgeRes, choferRes, subidaRes] = await Promise.all([
       calcularDistancia(session.origen, session.destino),
       calcularMultiplierSurge(session.origen?.lat, session.origen?.lng),
       buscarChoferDisponibleTraccar(session.origen, [], "auto").catch(() => null),
+      obtenerRecargoSubida(session.origen, session.destino),
     ]);
     const { km, duracion } = distRes;
-    const auto = calcularPrecio(km, "auto");
+    const auto = calcularPrecio(km, "auto", subidaRes?.recargoBs || 0);
     const { multiplier } = surgeRes;
     const precioAuto = aplicarSurge(auto.total, multiplier);
 
@@ -237,18 +238,20 @@ async function procesarCalculoViaje(phone, session) {
 
   try {
     const paradas = session.paradas || [];
-    // Distancia (Google) y surge (BD) son independientes → en paralelo (ahorra ~1 s/pedido)
-    const [distRes, surgeRes] = await Promise.all([
+    // Distancia (Google), surge (BD) y desnivel/subida (Google) son independientes → en paralelo
+    const [distRes, surgeRes, subidaRes] = await Promise.all([
       paradas.length > 0
         ? calcularDistanciaConParadas(session.origen, paradas, session.destino)
         : calcularDistancia(session.origen, session.destino),
       calcularMultiplierSurge(session.origen?.lat, session.origen?.lng),
+      obtenerRecargoSubida(session.origen, session.destino),
     ]);
     const { km, duracion, esAproximado } = distRes;
+    const recargoSubida = subidaRes?.recargoBs || 0;
 
-    const auto = calcularPrecio(km, "auto");
-    const moto = calcularPrecio(km, "moto");
-    const van = calcularPrecio(km, "van");
+    const auto = calcularPrecio(km, "auto", recargoSubida);
+    const moto = calcularPrecio(km, "moto", recargoSubida);
+    const van = calcularPrecio(km, "van", recargoSubida);
 
     // IA PRICING: surge según demanda y hora (ya calculado en paralelo arriba)
     const { multiplier, motivos } = surgeRes;
@@ -276,6 +279,7 @@ async function procesarCalculoViaje(phone, session) {
     if (paradas.length > 0) extras += `🚏 ${paradas.length} parada(s)\n`;
     if (session.observaciones) extras += `📝 _${session.observaciones}_\n`;
     const avisoSurge = textoSurgeMsg ? `\n${textoSurgeMsg}\n` : "";
+    const avisoSubida = recargoSubida > 0 ? `⛰️ Subida: +Bs ${recargoSubida}\n` : "";
 
     await enviarBotones(
       phone,
@@ -285,6 +289,7 @@ async function procesarCalculoViaje(phone, session) {
         (extras ? `\n${extras}` : "") +
         `\n📏 Distancia: ${km} km${avisoAprox}\n` +
         `⏱️ Tiempo: ${duracion}\n` +
+        avisoSubida +
         avisoSurge +
         `\n*Elige tu tipo de viaje:*\n\n` +
         `🚗 *Auto* — Bs ${precioAutoFinal}\n` +

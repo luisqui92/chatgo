@@ -647,7 +647,7 @@ function mensajePidiendoReferencia(detalle, evaluacion, esOrigen = true) {
 // AUTO:  <4km→Bs3.5/km | 4-10km→Bs2.5/km | >10km→Bs2.0/km | mínimo Bs6
 // MOTO:  <4km→Bs2.5/km | 4-10km→Bs2.0/km | >10km→Bs1.5/km | mínimo Bs5
 // NOCTURNO: 23:00-06:00 → +15%
-function calcularPrecio(km, tipoVehiculo) {
+function calcularPrecio(km, tipoVehiculo, recargoSubida = 0) {
   // Tarifa escalonada según distancia
   const tarifas = {
     auto: [
@@ -679,11 +679,15 @@ function calcularPrecio(km, tipoVehiculo) {
   const horaBolivia = new Date(Date.now() + CONFIG.OFFSET_HORAS * 60 * 60 * 1000).getUTCHours();
   const esNocturno = horaBolivia >= 23 || horaBolivia < 6;
   if (esNocturno) calculado = calculado * 1.15;
-  const total = Math.max(Math.round(calculado), minimo);
+  const base = Math.max(Math.round(calculado), minimo);
+  // Recargo por subida (topografía): se suma al final, no se le aplica nocturno.
+  const recargo = Math.max(0, Math.round(recargoSubida || 0));
+  const total = base + recargo;
   return {
     total,
     precioPorKm,
     esNocturno,
+    recargoSubida: recargo,
   };
 }
 

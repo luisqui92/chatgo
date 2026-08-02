@@ -466,6 +466,33 @@ async function calcularDistancia(origen, destino) {
   }
 }
 
+// ─── RECARGO POR SUBIDA (topografía de La Paz) ──────────────────────────────
+// Mide el desnivel del viaje con la API de Elevación de Google y devuelve el
+// recargo en Bs si el destino está MÁS ALTO que el origen (subida). En bajada o
+// plano devuelve 0. Nunca lanza: ante cualquier fallo devuelve recargo 0.
+async function obtenerRecargoSubida(origen, destino) {
+  const cero = { recargoBs: 0, desnivelM: 0 };
+  try {
+    if (!CONFIG.RECARGO_SUBIDA_ENABLED) return cero;
+    if (!origen?.lat || !destino?.lat || !CONFIG.GOOGLE_MAPS_KEY) return cero;
+    const res = await axios.get("https://maps.googleapis.com/maps/api/elevation/json", {
+      params: { locations: `${origen.lat},${origen.lng}|${destino.lat},${destino.lng}`, key: CONFIG.GOOGLE_MAPS_KEY },
+      timeout: 4000,
+    });
+    const r = res.data?.results;
+    if (!Array.isArray(r) || r.length < 2) return cero;
+    const desnivelM = Math.round(r[1].elevation - r[0].elevation); // + = subida
+    if (desnivelM <= CONFIG.RECARGO_SUBIDA_UMBRAL_M) return { recargoBs: 0, desnivelM };
+    const bruto = (desnivelM / 100) * CONFIG.RECARGO_SUBIDA_BS_POR_100M;
+    const recargoBs = Math.min(Math.round(bruto), CONFIG.RECARGO_SUBIDA_MAX_BS);
+    log.info(`[SUBIDA] Desnivel ${desnivelM} m → recargo Bs ${recargoBs}`);
+    return { recargoBs, desnivelM };
+  } catch (e) {
+    log.warn(`[SUBIDA] No se pudo medir elevación: ${e.message}`);
+    return cero;
+  }
+}
+
 // Calcula tiempo en ruta con tráfico en tiempo real
 // ─── COPILOTO IA: ruta completa con polilínea (Directions API) ──────────────
 // Decodifica el formato polyline de Google a array de {lat,lng}
@@ -767,4 +794,4 @@ async function calcularRutasConTrafico(origen, destino, paradas = []) {
   }));
 }
 
-module.exports = { calcularRutasConTrafico, distanciaEntrePuntos, calcularTiempoConTrafico, obtenerRutaCompleta, distanciaARuta, decodificarPolyline, evaluarPrecisionReferencia, extraerCoordsDeUrlGmaps, resolverUrlCorta, extraerNombreLugarDeUrl, detectarYExtrarCoordsMaps, normalizarReferencia, generarTrigramas, similitudTexto, buscarReferenciaEnMemoria, guardarReferenciaVoz, dentroDeCocha, geocodificarConMemoria, calcularDistancia, calcularDistanciaConParadas, generarLinkRutaConParadas, generarLinkMapaPropio, geocodificarDireccion, obtenerDireccion, verificarTraficoEnRuta };
+module.exports = { calcularRutasConTrafico, distanciaEntrePuntos, calcularTiempoConTrafico, obtenerRutaCompleta, distanciaARuta, decodificarPolyline, evaluarPrecisionReferencia, extraerCoordsDeUrlGmaps, resolverUrlCorta, extraerNombreLugarDeUrl, detectarYExtrarCoordsMaps, normalizarReferencia, generarTrigramas, similitudTexto, buscarReferenciaEnMemoria, guardarReferenciaVoz, dentroDeCocha, geocodificarConMemoria, calcularDistancia, calcularDistanciaConParadas, generarLinkRutaConParadas, generarLinkMapaPropio, geocodificarDireccion, obtenerDireccion, verificarTraficoEnRuta, obtenerRecargoSubida };
