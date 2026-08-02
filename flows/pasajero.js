@@ -140,22 +140,24 @@ async function flujoRapidoVoz(phone, session) {
   try {
     if (!session.origen?.lat || !session.destino?.lat) return false;
 
-    const { km, duracion } = await calcularDistancia(session.origen, session.destino);
+    // Distancia (Google), surge (BD) y chofer cercano (snapshot Traccar) son
+    // independientes → en paralelo para responder por voz más rápido.
+    const [distRes, surgeRes, choferRes] = await Promise.all([
+      calcularDistancia(session.origen, session.destino),
+      calcularMultiplierSurge(session.origen?.lat, session.origen?.lng),
+      buscarChoferDisponibleTraccar(session.origen, [], "auto").catch(() => null),
+    ]);
+    const { km, duracion } = distRes;
     const auto = calcularPrecio(km, "auto");
-    const { multiplier } = await calcularMultiplierSurge(session.origen?.lat, session.origen?.lng);
+    const { multiplier } = surgeRes;
     const precioAuto = aplicarSurge(auto.total, multiplier);
 
     // Ver si hay un chofer cerca
     let infoChofer;
-    try {
-      const chofer = await buscarChoferDisponibleTraccar(session.origen, [], "auto");
-      if (chofer?.ubicacion?.minutos != null) {
-        const min = Math.max(chofer.ubicacion.minutos, 2);
-        infoChofer = `Tengo un móvil cerca, a unos ${min} minutos. `;
-      } else {
-        infoChofer = "Voy a buscar un móvil para usted. ";
-      }
-    } catch {
+    if (choferRes?.ubicacion?.minutos != null) {
+      const min = Math.max(choferRes.ubicacion.minutos, 2);
+      infoChofer = `Tengo un móvil cerca, a unos ${min} minutos. `;
+    } else {
       infoChofer = "Voy a buscar un móvil para usted. ";
     }
 
@@ -235,16 +237,21 @@ async function procesarCalculoViaje(phone, session) {
 
   try {
     const paradas = session.paradas || [];
-    const { km, duracion, esAproximado } = paradas.length > 0
-      ? await calcularDistanciaConParadas(session.origen, paradas, session.destino)
-      : await calcularDistancia(session.origen, session.destino);
+    // Distancia (Google) y surge (BD) son independientes → en paralelo (ahorra ~1 s/pedido)
+    const [distRes, surgeRes] = await Promise.all([
+      paradas.length > 0
+        ? calcularDistanciaConParadas(session.origen, paradas, session.destino)
+        : calcularDistancia(session.origen, session.destino),
+      calcularMultiplierSurge(session.origen?.lat, session.origen?.lng),
+    ]);
+    const { km, duracion, esAproximado } = distRes;
 
     const auto = calcularPrecio(km, "auto");
     const moto = calcularPrecio(km, "moto");
     const van = calcularPrecio(km, "van");
 
-    // IA PRICING: calcular surge según demanda y hora
-    const { multiplier, motivos } = await calcularMultiplierSurge(session.origen?.lat, session.origen?.lng);
+    // IA PRICING: surge según demanda y hora (ya calculado en paralelo arriba)
+    const { multiplier, motivos } = surgeRes;
     const precioAutoFinal = aplicarSurge(auto.total, multiplier);
     const precioMotoFinal = aplicarSurge(moto.total, multiplier);
     const precioVanFinal = aplicarSurge(van.total, multiplier);

@@ -114,12 +114,16 @@ async function resolverUrlCorta(url) {
   // axios con maxRedirects:0 + validateStatus:true NO lanza error en 3xx,
   // simplemente devuelve la respuesta con el status 3xx y el header Location.
   let currentUrl = url;
+  // Presupuesto total de tiempo para no colgar la respuesta del bot: en la
+  // práctica un maps.app.goo.gl resuelve en 1-2 saltos. Antes: 8×6s=48s peor caso.
+  const deadline = Date.now() + 8000;
   try {
-    for (let i = 0; i < 8; i++) {
+    for (let i = 0; i < 5; i++) {
+      if (Date.now() > deadline) { log.warn("[GMAPS_REDIRECT] Presupuesto de tiempo agotado"); return currentUrl; }
       const res = await axios.get(currentUrl, {
         maxRedirects: 0,
         validateStatus: () => true,
-        timeout: 6000,
+        timeout: 3500,
         headers: { "User-Agent": "Mozilla/5.0" },
       });
       if (res.status >= 300 && res.status < 400 && res.headers?.location) {

@@ -24,8 +24,10 @@ async function registrarEventoChofer(phone, tipo, datos = {}) {
 }
 async function calcularMultiplierSurge(lat, lng) {
   try {
-    const libres = await Chofer.count({ where: { estado: "libre" } });
-    const espera = await ListaEspera.count();
+    const [libres, espera] = await Promise.all([
+      Chofer.count({ where: { estado: "libre" } }),
+      ListaEspera.count(),
+    ]);
     const ahora = new Date(Date.now() + CONFIG.OFFSET_HORAS * 60 * 60 * 1000);
     const hora = ahora.getHours(); const dia = ahora.getDay();
     let m = 1.0; let motivos = [];
