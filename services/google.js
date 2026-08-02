@@ -630,8 +630,8 @@ async function geocodificarDireccion(direccion, reintentoInterseccion = true, ci
         .replace(/\s+esquina\s+/i, " & ")
         .replace(/\s+esq\.\s+/i, " & ")
         .replace(/,\s*con\s+/i, " & ");
-      log.info(`[GEOCOD] Reintentando intersección: "${reformateado}"`);
-      const reintento = await geocodificarDireccion(reformateado, false);
+      log.info(`[GEOCOD] Reintentando intersección: "${reformateado}" (ciudad: ${ciudadUsuario})`);
+      const reintento = await geocodificarDireccion(reformateado, false, ciudadUsuario);
       if (reintento) {
         const tiposR = reintento._tipos || [];
         // Preferir resultado de intersección sobre ruta

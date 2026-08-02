@@ -319,7 +319,7 @@ model ViajeDemo {
 
 model EsquinaMapeada {
   id            String   @id @default(uuid())
-  llave         String   @unique
+  llave         String
   calle1        String?
   calle2        String?
   zona          String?
@@ -332,6 +332,10 @@ model EsquinaMapeada {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
+  // La identidad de una esquina es (llave, ciudad): una misma combinación de
+  // calles puede existir en varias ciudades sin cruzarse.
+  @@unique([llave, ciudad])
+  @@index([ciudad])
   @@map("esquinamapeadas")
 }
 

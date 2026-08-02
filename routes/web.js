@@ -302,7 +302,7 @@ module.exports = function (app) {
 
       // 3b. Esquina crowdsourced (con match difuso anti errores de dicción)
       if (!punto && detalle?.tipo === "esquina" && detalle.calle1 && detalle.calle2) {
-        const r = await buscarEsquinaMapeada(detalle.calle1, detalle.calle2, detalle.zona || null).catch(() => null);
+        const r = await buscarEsquinaMapeada(detalle.calle1, detalle.calle2, detalle.zona || null, "Cochabamba").catch(() => null);
         if (r?.esquina?.lat) punto = { lat: r.esquina.lat, lng: r.esquina.lng, nombre: `${detalle.calle1} y ${detalle.calle2}` };
       }
 

@@ -415,21 +415,24 @@ function _similitudCalle(a, b) {
 
 // Buscar una esquina ya mapeada en la BD
 // Retorna: { esquina, requiereConfirmacion } o null si no existe
-async function buscarEsquinaMapeada(calle1, calle2, zona = null) {
+// IMPORTANTE: se filtra por CIUDAD para no cruzar calles con el mismo nombre
+// entre Cochabamba, La Paz y Santa Cruz (ej: "Ballivián y Calle 1").
+async function buscarEsquinaMapeada(calle1, calle2, zona = null, ciudad = null) {
   try {
     const { EsquinaMapeada } = require("../db/models");
+    const filtroCiudad = ciudad ? { ciudad } : {}; // sin ciudad = comportamiento legacy
     let esquina = null;
-    
-    // Si el usuario especificó zona, buscar exacta primero
+
+    // Si el usuario especificó zona, buscar exacta primero (en su ciudad)
     if (zona) {
-      esquina = await EsquinaMapeada.findUnique({ where: { llave: llaveEsquina(calle1, calle2, zona) } });
+      esquina = await EsquinaMapeada.findFirst({ where: { llave: llaveEsquina(calle1, calle2, zona), ...filtroCiudad } });
       if (esquina) return { esquina, requiereConfirmacion: false };
     }
 
-    // Buscar sin zona (todas las que tengan esa combinación)
+    // Buscar sin zona (todas las que tengan esa combinación en la ciudad)
     const llaveBase = llaveEsquina(calle1, calle2, null);
     const candidatasRaw = await EsquinaMapeada.findMany({
-      where: { llave: { startsWith: llaveBase } },
+      where: { llave: { startsWith: llaveBase }, ...filtroCiudad },
       orderBy: { usos: "desc" },
       take: 20,
     });
@@ -446,7 +449,7 @@ async function buscarEsquinaMapeada(calle1, calle2, zona = null) {
       const c1 = normalizarNombreCalle(calle1);
       const c2 = normalizarNombreCalle(calle2);
       if (c1 && c2) {
-        const todas = await EsquinaMapeada.findMany({ orderBy: { usos: "desc" }, take: 300 });
+        const todas = await EsquinaMapeada.findMany({ where: { ...filtroCiudad }, orderBy: { usos: "desc" }, take: 300 });
         const puntuadas = [];
         for (const cand of todas) {
           const e1 = normalizarNombreCalle(cand.calle1);
@@ -488,11 +491,12 @@ async function buscarEsquinaMapeada(calle1, calle2, zona = null) {
 
 // Validación silenciosa: comparar coords guardadas contra Google
 // Devuelve true si la esquina parece confiable, false si hay discrepancia
-async function validarEsquinaConGoogle(esquina, calle1, calle2) {
+async function validarEsquinaConGoogle(esquina, calle1, calle2, ciudad = null) {
   try {
     const { geocodificarConMemoria } = require("./google");
-    const consulta = `${calle1} y ${calle2}, Cochabamba, Bolivia`;
-    const resGoogle = await geocodificarConMemoria(consulta);
+    // La ciudad la agrega geocodificarConMemoria vía contextoGeocode; no hardcodear.
+    const consulta = `${calle1} y ${calle2}`;
+    const resGoogle = await geocodificarConMemoria(consulta, ciudad || esquina.ciudad || null);
     if (!resGoogle || !resGoogle.lat) return true; // si Google falla, confiar en lo guardado
     
     // Calcular distancia entre coords guardadas y Google
@@ -513,12 +517,15 @@ async function guardarEsquina(calle1, calle2, lat, lng, opciones = {}) {
     const { EsquinaMapeada } = require("../db/models");
     const llave = llaveEsquina(calle1, calle2, opciones.zona);
     if (!llave) return null;
-    
-    const existente = await EsquinaMapeada.findUnique({ where: { llave } });
+    // La MISMA llave puede existir en varias ciudades (calles con igual nombre):
+    // la identidad real es (llave, ciudad).
+    const ciudad = opciones.ciudad || "Cochabamba";
+
+    const existente = await EsquinaMapeada.findFirst({ where: { llave, ciudad } });
     if (existente) {
-      // Ya existe — solo aumentar contador
+      // Ya existe en esta ciudad — solo aumentar contador
       return await EsquinaMapeada.update({
-        where: { llave },
+        where: { id: existente.id },
         data: { usos: (existente.usos || 0) + 1, ultimoUso: new Date() },
       });
     }
@@ -529,7 +536,7 @@ async function guardarEsquina(calle1, calle2, lat, lng, opciones = {}) {
         calle1: calle1.trim(),
         calle2: calle2.trim(),
         zona: opciones.zona || null,
-        ciudad: opciones.ciudad || "Cochabamba",
+        ciudad,
         lat, lng,
         usos: 1,
         primerUsuario: opciones.phone || null,

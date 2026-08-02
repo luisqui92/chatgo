@@ -1251,7 +1251,7 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
       // Si la IA extrajo esquina con calle1+calle2, buscar en EsquinaMapeada antes de Google
       async function resolverEsquinaCompartida(det) {
         if (!det || det.tipo !== "esquina" || !det.calle1 || !det.calle2) return null;
-        const resultado = await buscarEsquinaMapeada(det.calle1, det.calle2, det.zona);
+        const resultado = await buscarEsquinaMapeada(det.calle1, det.calle2, det.zona, ciudadParaAudio);
         if (!resultado || !resultado.esquina) return null;
         const esquina = resultado.esquina;
         
@@ -1700,7 +1700,7 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
           log.info(`[APRENDIZAJE] Origen guardado: "${session.referenciaVozOrigen}" → (${origen.lat}, ${origen.lng})`);
           // Si era una esquina (calle1+calle2 del detalle GPT), también guardarla en memoria compartida
           if (session._detOrigenCalle1 && session._detOrigenCalle2) {
-            await guardarEsquina(session._detOrigenCalle1, session._detOrigenCalle2, origen.lat, origen.lng, { phone, zona: session._detOrigenZona });
+            await guardarEsquina(session._detOrigenCalle1, session._detOrigenCalle2, origen.lat, origen.lng, { phone, zona: session._detOrigenZona, ciudad: session.ciudadUsuario || "Cochabamba" });
             log.info(`[CROWDSOURCE] Esquina compartida guardada: ${session._detOrigenCalle1} y ${session._detOrigenCalle2}`);
           }
         }
@@ -1766,7 +1766,7 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
           await guardarReferenciaVoz(session.referenciaVozDestino, destino.lat, destino.lng, destino.nombre || session.referenciaVozDestino, session.ciudadUsuario || "Cochabamba");
           log.info(`[APRENDIZAJE] Destino guardado: "${session.referenciaVozDestino}" → (${destino.lat}, ${destino.lng})`);
           if (session._detDestinoCalle1 && session._detDestinoCalle2) {
-            await guardarEsquina(session._detDestinoCalle1, session._detDestinoCalle2, destino.lat, destino.lng, { phone, zona: session._detDestinoZona });
+            await guardarEsquina(session._detDestinoCalle1, session._detDestinoCalle2, destino.lat, destino.lng, { phone, zona: session._detDestinoZona, ciudad: session.ciudadUsuario || "Cochabamba" });
             log.info(`[CROWDSOURCE] Esquina compartida guardada: ${session._detDestinoCalle1} y ${session._detDestinoCalle2}`);
           }
         }
