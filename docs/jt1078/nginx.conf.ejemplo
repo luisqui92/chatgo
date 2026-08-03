@@ -1,0 +1,29 @@
+# Reverse proxy para el visor JT1078 (HTTP-FLV) detrás de tu nginx + SSL.
+# Publica el gateway (puerto interno 3333) bajo https://api.chatgo.ia.bo/jt1078/
+# Así podés CERRAR el 3333 en el firewall y servir el video solo por HTTPS.
+#
+# Pegá este bloque dentro del server { } que ya tenés con SSL (Certbot).
+# NOTA: el puerto de VIDEO del dashcam (10780) NO pasa por nginx — ese es TCP
+# crudo JT1078 y el equipo se conecta directo a IP:10780.
+
+location /jt1078/ {
+    proxy_pass http://127.0.0.1:3333/;
+    proxy_http_version 1.1;
+
+    # HTTP-FLV es un stream HTTP largo: sin buffering para baja latencia.
+    proxy_buffering off;
+    proxy_request_buffering off;
+    chunked_transfer_encoding on;
+
+    # WebSocket-FLV (ws-flv), si el visor lo usa:
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+
+    proxy_read_timeout 3600s;   # streams largos
+    proxy_send_timeout 3600s;
+}

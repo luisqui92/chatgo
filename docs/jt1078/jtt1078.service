@@ -1,0 +1,24 @@
+[Unit]
+Description=JT1078 Video Server (dashcam WY02) - gateway a HTTP-FLV
+Documentation=https://github.com/glaciall/jtt1078-video-server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=jtt1078
+WorkingDirectory=/opt/jtt1078
+# Ajustá el nombre del jar si tu build genera otra versión.
+ExecStart=/usr/bin/java -jar /opt/jtt1078/jtt1078-video-server-1.0-SNAPSHOT.jar
+Restart=on-failure
+RestartSec=5
+# Logs a archivo (además de journalctl -u jtt1078)
+StandardOutput=append:/var/log/jtt1078/server.log
+StandardError=append:/var/log/jtt1078/server.log
+# Endurecimiento básico (no afecta a Traccar ni al resto del stack)
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
