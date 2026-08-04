@@ -259,12 +259,13 @@ if (isConfigured()) {
 }
 
 function getAppUrl() {
-  return process.env.APP_URL || "https://chatgo-production.up.railway.app";
+  return process.env.APP_URL || "https://api.chatgo.ia.bo";
 }
 
 function generarLinkRastreoPropio(viajeId) {
-  const apiUrl = encodeURIComponent(`${getAppUrl()}/track/${viajeId}/pos`);
-  return `https://chatgo.ia.bo/rastreo.html?id=${viajeId}&api=${apiUrl}`;
+  // Página de rastreo servida por el propio servidor (antes apuntaba a
+  // chatgo.ia.bo/rastreo.html en Netlify, que ya no existe → "Site not found").
+  return `${getAppUrl()}/track/${viajeId}`;
 }
 
 // FLOTA EN VIVO: todos los choferes con GPS, su posición real y su estado.
