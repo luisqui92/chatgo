@@ -14,6 +14,7 @@ const crypto = require("crypto");
 const { CONFIG, log } = require("../config");
 const { PerfilAluminio, VidrioCarp, AccesorioCarp, ProductoCarp, CotizacionCarp } = require("../db/models");
 const { calcularCotizacion } = require("../services/carp_calc");
+const { cotizarVidrio } = require("../services/vidrio_calc");
 
 module.exports = function (app) {
   function auth(req, res) {
@@ -62,7 +63,7 @@ module.exports = function (app) {
     if (!auth(req, res)) return;
     try {
       const b = req.body || {};
-      const data = { nombre: String(b.nombre || "").trim(), precioM2: num(b.precioM2), activo: true };
+      const data = { nombre: String(b.nombre || "").trim(), precioM2: num(b.precioM2), precioPie: num(b.precioPie), activo: true };
       if (!data.nombre) return res.status(400).json({ error: "El vidrio necesita un nombre." });
       const r = b.id ? await VidrioCarp.update({ where: { id: String(b.id) }, data }) : await VidrioCarp.create({ data });
       res.json({ ok: true, item: r });
@@ -150,6 +151,24 @@ module.exports = function (app) {
     catch (e) { res.status(500).json({ error: "Error al listar." }); }
   });
 
+  // Cotización de vidrio por pie² (venta directa): +7cm/lado, precio cabal y redondeado a 5
+  app.post("/aluminio/vidrio-cotizar", async (req, res) => {
+    if (!auth(req, res)) return;
+    try {
+      const b = req.body || {};
+      const vidrio = await VidrioCarp.findUnique({ where: { id: String(b.vidrioId || "") } });
+      if (!vidrio) return res.status(400).json({ error: "Elegí un tipo de vidrio." });
+      if (!(Number(b.ancho) > 0) || !(Number(b.alto) > 0)) return res.status(400).json({ error: "Poné ancho y alto en cm." });
+      const r = cotizarVidrio({
+        ancho: b.ancho, alto: b.alto, cantidad: b.cantidad,
+        precioPie: vidrio.precioPie,
+        desperdicioCm: b.desperdicioCm != null ? b.desperdicioCm : 7,
+        pieCm: b.pieCm != null ? b.pieCm : undefined,
+      });
+      res.json({ ok: true, vidrio: { id: vidrio.id, nombre: vidrio.nombre, precioPie: vidrio.precioPie }, resultado: r });
+    } catch (e) { res.status(422).json({ error: e.message }); }
+  });
+
   app.get("/aluminio", (req, res) => { res.setHeader("Cache-Control", "no-cache"); res.type("html").send(PANEL); });
 };
 
@@ -187,7 +206,8 @@ const PANEL = `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta 
   <h1>Corte de <b>Aluminio</b></h1>
   <div class="sub">Despiece y optimización de barras de 6 m · cotización automática</div>
   <div class="tabs noprint">
-    <button class="tab act" id="t-cot" onclick="tab('cot')">Cotizar</button>
+    <button class="tab act" id="t-cot" onclick="tab('cot')">Ventana/Puerta</button>
+    <button class="tab" id="t-vidrio" onclick="tab('vidrio')">Vidrio</button>
     <button class="tab" id="t-prod" onclick="tab('prod')">Productos</button>
     <button class="tab" id="t-mat" onclick="tab('mat')">Materiales</button>
     <button class="tab" id="t-hist" onclick="tab('hist')">Historial</button>
@@ -211,6 +231,25 @@ const PANEL = `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta 
   </div>
 
   <div id="sec-prod" style="display:none"></div>
+  <div id="sec-vidrio" style="display:none">
+    <div class="card">
+      <h3>Cotización de vidrio</h3>
+      <div class="sub">Se le suma <b>7 cm por lado</b> de desperdicio, se pasa a <b>pie²</b> y sale el precio cabal y el redondeado a múltiplo de 5.</div>
+      <label>Tipo de vidrio</label><select id="g-tipo"></select>
+      <div class="row">
+        <div><label>Ancho (cm)</label><input id="g-ancho" type="number" value="100"></div>
+        <div><label>Alto (cm)</label><input id="g-alto" type="number" value="100"></div>
+        <div><label>Cantidad</label><input id="g-cant" type="number" value="1"></div>
+      </div>
+      <div class="row" style="margin-top:6px">
+        <div><label>Desperdicio por lado (cm)</label><input id="g-desp" type="number" value="7"></div>
+        <div><label>1 pie = (cm)</label><input id="g-pie" type="number" value="30.48" step="0.01"></div>
+      </div>
+      <div style="margin-top:12px"><button class="btn" onclick="cotizarVidrio()">Calcular</button></div>
+      <div class="msg" id="g-msg"></div>
+    </div>
+    <div id="g-res"></div>
+  </div>
   <div id="sec-mat" style="display:none"></div>
   <div id="sec-hist" style="display:none"></div>
 
@@ -222,7 +261,29 @@ let CAT={perfiles:[],vidrios:[],accesorios:[],productos:[]}, ITEMS=[], RES=null;
 function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));}
 function bs(n){return "Bs "+(Math.round(Number(n||0)*100)/100).toLocaleString("es-BO");}
 async function api(ruta,opts={}){const sep=ruta.includes("?")?"&":"?";const r=await fetch(ruta+sep+"token="+encodeURIComponent(TOKEN),{method:opts.method||(opts.body?"POST":"GET"),headers:{"Content-Type":"application/json"},body:opts.body?JSON.stringify(opts.body):undefined});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||"Error");return d;}
-function tab(t){["cot","prod","mat","hist"].forEach(function(x){document.getElementById("t-"+x).classList.toggle("act",t===x);document.getElementById("sec-"+x).style.display=t===x?"block":"none";});if(t==="prod")pintarProductos();if(t==="mat")pintarMateriales();if(t==="hist")pintarHistorial();}
+function tab(t){["cot","vidrio","prod","mat","hist"].forEach(function(x){document.getElementById("t-"+x).classList.toggle("act",t===x);document.getElementById("sec-"+x).style.display=t===x?"block":"none";});if(t==="vidrio")llenarVidrios();if(t==="prod")pintarProductos();if(t==="mat")pintarMateriales();if(t==="hist")pintarHistorial();}
+function llenarVidrios(){ var s=document.getElementById("g-tipo"); s.innerHTML=CAT.vidrios.length?CAT.vidrios.map(function(v){return '<option value="'+v.id+'">'+esc(v.nombre)+' (Bs '+(v.precioPie||0)+'/pie²)</option>';}).join(""):'<option value="">— cargá vidrios en Materiales —</option>'; }
+async function cotizarVidrio(){
+  var m=document.getElementById("g-msg"); var vid=document.getElementById("g-tipo").value;
+  if(!vid){ m.className="msg err"; m.textContent="Elegí un tipo de vidrio (cargalos en Materiales)."; return; }
+  m.className="msg"; m.textContent="Calculando…";
+  try{
+    var d=await api("/aluminio/vidrio-cotizar",{body:{vidrioId:vid,ancho:Number(document.getElementById("g-ancho").value),alto:Number(document.getElementById("g-alto").value),cantidad:Number(document.getElementById("g-cant").value),desperdicioCm:Number(document.getElementById("g-desp").value),pieCm:Number(document.getElementById("g-pie").value)}});
+    m.textContent=""; var r=d.resultado;
+    document.getElementById("g-res").innerHTML='<div class="card">'+
+      '<h3>'+esc(d.vidrio.nombre)+'</h3>'+
+      '<table>'+
+        '<tr><td>Medida con desperdicio</td><td class="rt">'+r.anchoDesp+' × '+r.altoDesp+' cm</td></tr>'+
+        '<tr><td>Superficie</td><td class="rt">'+r.pie2Total+' pie²</td></tr>'+
+        '<tr><td>Precio por pie²</td><td class="rt">'+bs(d.vidrio.precioPie)+'</td></tr>'+
+      '</table>'+
+      '<div class="row" style="margin-top:10px;text-align:center">'+
+        '<div><div class="hint">Cabal</div><div class="tot">'+bs(r.precioCabal)+'</div></div>'+
+        '<div><div class="hint">Redondeado a 5</div><div class="big">'+bs(r.precioRedondeado)+'</div></div>'+
+      '</div>'+
+      '<button class="btn sec mini noprint" style="margin-top:10px" onclick="window.print()">🖨 Imprimir</button></div>';
+  }catch(e){ m.className="msg err"; m.textContent=e.message; }
+}
 
 // ── Cotizar ──
 function addItem(){ ITEMS.push({productoId:CAT.productos[0]?CAT.productos[0].id:"",ancho:1000,alto:1000,cantidad:1}); pintarItems(); }
@@ -312,15 +373,15 @@ async function guardarProd(){ var m=document.getElementById("pe-msg"); PE.nombre
 function pintarMateriales(){
   function tabla(tit,tipo,rows,form){ return '<div class="card"><h3>'+tit+'</h3>'+rows+form+'</div>'; }
   var perf=CAT.perfiles.map(function(p){return '<tr><td>'+esc(p.nombre)+(p.linea?' <span class="pill">'+esc(p.linea)+'</span>':'')+'</td><td class="rt">'+bs(p.precioBarra)+'/barra</td><td class="rt"><span class="x" onclick=\\'borrar("perfiles","'+p.id+'")\\'>✕</span></td></tr>';}).join("");
-  var vid=CAT.vidrios.map(function(p){return '<tr><td>'+esc(p.nombre)+'</td><td class="rt">'+bs(p.precioM2)+'/m²</td><td class="rt"><span class="x" onclick=\\'borrar("vidrios","'+p.id+'")\\'>✕</span></td></tr>';}).join("");
+  var vid=CAT.vidrios.map(function(p){return '<tr><td>'+esc(p.nombre)+'</td><td class="rt">'+bs(p.precioPie)+'/pie²'+(p.precioM2?' · '+bs(p.precioM2)+'/m²':'')+'</td><td class="rt"><span class="x" onclick=\\'borrar("vidrios","'+p.id+'")\\'>✕</span></td></tr>';}).join("");
   var acc=CAT.accesorios.map(function(p){return '<tr><td>'+esc(p.nombre)+'</td><td class="rt">'+bs(p.precio)+'/'+esc(p.unidad)+'</td><td class="rt"><span class="x" onclick=\\'borrar("accesorios","'+p.id+'")\\'>✕</span></td></tr>';}).join("");
   document.getElementById("sec-mat").innerHTML=
     tabla("Perfiles de aluminio (barra 6 m)","perfiles",'<table>'+(perf||'')+'</table>','<div class="row" style="margin-top:8px"><input id="np-nom" placeholder="Nombre del perfil"><input id="np-lin" placeholder="Serie (opc)" style="max-width:120px"><input id="np-pre" type="number" placeholder="Bs/barra" style="max-width:110px"><button class="btn mini" onclick="addPerfil()">＋</button></div>')+
-    tabla("Vidrios","vidrios",'<table>'+(vid||'')+'</table>','<div class="row" style="margin-top:8px"><input id="nv-nom" placeholder="Nombre del vidrio"><input id="nv-pre" type="number" placeholder="Bs/m²" style="max-width:110px"><button class="btn mini" onclick="addVidrio()">＋</button></div>')+
+    tabla("Vidrios","vidrios",'<table>'+(vid||'')+'</table>','<div class="row" style="margin-top:8px"><input id="nv-nom" placeholder="Nombre del vidrio"><input id="nv-pie" type="number" placeholder="Bs/pie²" style="max-width:100px"><input id="nv-pre" type="number" placeholder="Bs/m² (opc)" style="max-width:110px"><button class="btn mini" onclick="addVidrio()">＋</button></div>')+
     tabla("Accesorios","accesorios",'<table>'+(acc||'')+'</table>','<div class="row" style="margin-top:8px"><input id="na-nom" placeholder="Nombre"><select id="na-uni" style="max-width:90px"><option value="u">u</option><option value="m">m</option><option value="par">par</option><option value="jgo">jgo</option></select><input id="na-pre" type="number" placeholder="Bs" style="max-width:100px"><button class="btn mini" onclick="addAcc()">＋</button></div>');
 }
 async function addPerfil(){ try{ await api("/aluminio/perfiles",{body:{nombre:document.getElementById("np-nom").value,linea:document.getElementById("np-lin").value,precioBarra:Number(document.getElementById("np-pre").value)||0}}); await cargar(); pintarMateriales(); }catch(e){ alert(e.message); } }
-async function addVidrio(){ try{ await api("/aluminio/vidrios",{body:{nombre:document.getElementById("nv-nom").value,precioM2:Number(document.getElementById("nv-pre").value)||0}}); await cargar(); pintarMateriales(); }catch(e){ alert(e.message); } }
+async function addVidrio(){ try{ await api("/aluminio/vidrios",{body:{nombre:document.getElementById("nv-nom").value,precioPie:Number(document.getElementById("nv-pie").value)||0,precioM2:Number(document.getElementById("nv-pre").value)||0}}); await cargar(); pintarMateriales(); }catch(e){ alert(e.message); } }
 async function addAcc(){ try{ await api("/aluminio/accesorios",{body:{nombre:document.getElementById("na-nom").value,unidad:document.getElementById("na-uni").value,precio:Number(document.getElementById("na-pre").value)||0}}); await cargar(); pintarMateriales(); }catch(e){ alert(e.message); } }
 async function borrar(tipo,id){ if(!confirm("¿Quitar este elemento?"))return; try{ await api("/aluminio/"+tipo+"/"+id+"/borrar",{method:"POST"}); await cargar(); if(tipo==="productos")pintarProductos();else pintarMateriales(); }catch(e){ alert(e.message); } }
 

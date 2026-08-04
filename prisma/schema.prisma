@@ -600,7 +600,8 @@ model PerfilAluminio {
 model VidrioCarp {
   id        String   @id @default(uuid())
   nombre    String   // ej: "Vidrio 4mm incoloro", "Templado 6mm"
-  precioM2  Float    @default(0) // Bs por m²
+  precioM2  Float    @default(0) // Bs por m² (para despiece de ventanas de aluminio)
+  precioPie Float    @default(0) // Bs por pie² (para venta de vidrio)
   activo    Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
