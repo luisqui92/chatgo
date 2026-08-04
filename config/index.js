@@ -82,6 +82,7 @@ const CONFIG = {
   // Token del panel de aluminio: si no se define uno propio, usa el de VENTAS
   // con una letra extra al final ("a") — así es distinto pero fácil de recordar.
   CARP_ADMIN_TOKEN: process.env.CARP_ADMIN_TOKEN || (process.env.VENTAS_ADMIN_TOKEN ? process.env.VENTAS_ADMIN_TOKEN + "a" : null), // panel de corte de aluminio (separado)
+  CARP_VISION_MODEL: process.env.CARP_VISION_MODEL || "gpt-4o", // lectura de medidas por foto (reusa OPENAI_KEY)
 
   // ─── PLATAFORMA MODULAR ────────────────────────────────────────────────
   // Módulos activos además del taxi, separados por coma.

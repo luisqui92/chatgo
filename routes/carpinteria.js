@@ -15,6 +15,7 @@ const { CONFIG, log } = require("../config");
 const { PerfilAluminio, VidrioCarp, AccesorioCarp, ProductoCarp, CotizacionCarp } = require("../db/models");
 const { calcularCotizacion } = require("../services/carp_calc");
 const { cotizarVidrio } = require("../services/vidrio_calc");
+const { extraerMedidasDeFoto } = require("../services/vidrio_vision");
 
 module.exports = function (app) {
   function auth(req, res) {
@@ -169,6 +170,35 @@ module.exports = function (app) {
     } catch (e) { res.status(422).json({ error: e.message }); }
   });
 
+  // Leer medidas desde una FOTO (IA de visión) — el operario luego corrobora
+  app.post("/aluminio/vidrio-foto", async (req, res) => {
+    if (!auth(req, res)) return;
+    try {
+      const imagen = (req.body && req.body.imagen) || "";
+      const r = await extraerMedidasDeFoto(imagen);
+      res.json({ ok: true, ...r });
+    } catch (e) { log.error("[VIDRIO_FOTO]", e.message); res.status(422).json({ error: e.message }); }
+  });
+
+  // Cotizar VARIAS piezas de vidrio de una (tras corroborar las medidas de la foto)
+  app.post("/aluminio/vidrio-cotizar-lote", async (req, res) => {
+    if (!auth(req, res)) return;
+    try {
+      const b = req.body || {};
+      const vidrio = await VidrioCarp.findUnique({ where: { id: String(b.vidrioId || "") } });
+      if (!vidrio) return res.status(400).json({ error: "Elegí un tipo de vidrio." });
+      const items = Array.isArray(b.items) ? b.items : [];
+      if (!items.length) return res.status(400).json({ error: "No hay piezas para cotizar." });
+      let totalCabal = 0, totalRedondeado = 0;
+      const filas = items.map(it => {
+        const r = cotizarVidrio({ ancho: it.ancho, alto: it.alto, cantidad: it.cantidad, precioPie: vidrio.precioPie, desperdicioCm: b.desperdicioCm != null ? b.desperdicioCm : 7, pieCm: b.pieCm != null ? b.pieCm : undefined });
+        totalCabal += r.precioCabal; totalRedondeado += r.precioRedondeado;
+        return { ancho: Number(it.ancho) || 0, alto: Number(it.alto) || 0, cantidad: Math.max(1, parseInt(it.cantidad) || 1), ...r };
+      });
+      res.json({ ok: true, vidrio: { nombre: vidrio.nombre, precioPie: vidrio.precioPie }, filas, totalCabal: Math.round(totalCabal * 100) / 100, totalRedondeado });
+    } catch (e) { res.status(422).json({ error: e.message }); }
+  });
+
   app.get("/aluminio", (req, res) => { res.setHeader("Cache-Control", "no-cache"); res.type("html").send(PANEL); });
 };
 
@@ -199,6 +229,10 @@ const PANEL = `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta 
   .barra{height:14px;background:#0b0e12;border-radius:7px;overflow:hidden;border:1px solid var(--bd);display:flex}
   .barra i{display:block;height:100%} .g{background:var(--ok)} .w{background:#39424d}
   .hint{font-size:11.5px;color:var(--gr);margin-top:3px}
+  .file{display:block;border:1.5px dashed var(--bd);border-radius:12px;padding:16px;text-align:center;cursor:pointer;background:var(--card2)}
+  .file .ic{font-size:26px} .file .t{font-weight:700;margin-top:4px} .file .s{font-size:11.5px;color:var(--gr)}
+  .file input{display:none}
+  .conf{font-size:11px;padding:1px 7px;border-radius:20px} .conf.ok{background:#123a26;color:#7fd6a3} .conf.baja{background:#3a2a12;color:#e0b774}
   footer{text-align:center;color:var(--gr);font-size:12px;margin:20px 0;opacity:.8}
   .x{color:var(--rojo);cursor:pointer;font-weight:800}
   @media print{.tabs,.noprint{display:none!important}}
@@ -233,6 +267,16 @@ const PANEL = `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta 
   <div id="sec-prod" style="display:none"></div>
   <div id="sec-vidrio" style="display:none">
     <div class="card">
+      <h3>📷 Medidas por foto (IA)</h3>
+      <div class="sub">El operario saca foto a las medidas anotadas, la IA las lee y las cargás corroborando antes de calcular.</div>
+      <label class="file" for="g-foto" id="g-fotobox">
+        <div class="ic">📷</div><div class="t">Tomar/subir foto de las medidas</div><div class="s">JPG · PNG</div>
+        <input type="file" id="g-foto" accept="image/*" capture="environment" onchange="leerFoto()">
+      </label>
+      <div class="msg" id="g-foto-msg"></div>
+      <div id="g-foto-rows"></div>
+    </div>
+    <div class="card">
       <h3>Cotización de vidrio</h3>
       <div class="sub">Se le suma <b>7 cm por lado</b> de desperdicio, se pasa a <b>pie²</b> y sale el precio cabal y el redondeado a múltiplo de 5.</div>
       <label>Tipo de vidrio</label><select id="g-tipo"></select>
@@ -263,6 +307,56 @@ function bs(n){return "Bs "+(Math.round(Number(n||0)*100)/100).toLocaleString("e
 async function api(ruta,opts={}){const sep=ruta.includes("?")?"&":"?";const r=await fetch(ruta+sep+"token="+encodeURIComponent(TOKEN),{method:opts.method||(opts.body?"POST":"GET"),headers:{"Content-Type":"application/json"},body:opts.body?JSON.stringify(opts.body):undefined});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||"Error");return d;}
 function tab(t){["cot","vidrio","prod","mat","hist"].forEach(function(x){document.getElementById("t-"+x).classList.toggle("act",t===x);document.getElementById("sec-"+x).style.display=t===x?"block":"none";});if(t==="vidrio")llenarVidrios();if(t==="prod")pintarProductos();if(t==="mat")pintarMateriales();if(t==="hist")pintarHistorial();}
 function llenarVidrios(){ var s=document.getElementById("g-tipo"); s.innerHTML=CAT.vidrios.length?CAT.vidrios.map(function(v){return '<option value="'+v.id+'">'+esc(v.nombre)+' (Bs '+(v.precioPie||0)+'/pie²)</option>';}).join(""):'<option value="">— cargá vidrios en Materiales —</option>'; }
+// ── Foto de medidas (IA) ──
+var FOTO_PIEZAS=[];
+function achicarImagen(file, cb){
+  var img=new Image(); var rd=new FileReader();
+  rd.onload=function(){ img.onload=function(){
+    var max=1600, w=img.width, h=img.height;
+    if(w>max||h>max){ if(w>h){ h=Math.round(h*max/w); w=max; } else { w=Math.round(w*max/h); h=max; } }
+    var c=document.createElement("canvas"); c.width=w; c.height=h;
+    c.getContext("2d").drawImage(img,0,0,w,h);
+    cb(c.toDataURL("image/jpeg",0.8));
+  }; img.src=rd.result; };
+  rd.readAsDataURL(file);
+}
+async function leerFoto(){
+  var f=document.getElementById("g-foto").files[0]; if(!f) return;
+  var m=document.getElementById("g-foto-msg"); m.className="msg"; m.textContent="Leyendo la foto con IA…"; document.getElementById("g-foto-rows").innerHTML="";
+  achicarImagen(f, async function(dataUrl){
+    try{
+      var d=await api("/aluminio/vidrio-foto",{body:{imagen:dataUrl}});
+      FOTO_PIEZAS=d.piezas||[];
+      m.className="msg ok"; m.textContent="Leí "+FOTO_PIEZAS.length+" pieza(s)."+(d.nota?" ("+d.nota+")":"")+" Revisá y corregí antes de calcular.";
+      pintarFotoRows();
+    }catch(e){ m.className="msg err"; m.textContent=e.message; }
+  });
+}
+function pintarFotoRows(){
+  if(!FOTO_PIEZAS.length){ document.getElementById("g-foto-rows").innerHTML=""; return; }
+  var rows=FOTO_PIEZAS.map(function(p,i){
+    var conf=(p.confianza!=null&&p.confianza<0.7)?'<span class="conf baja">revisar</span>':'<span class="conf ok">ok</span>';
+    return '<div class="item"><div class="row"><div><label>Ancho cm</label><input type="number" value="'+p.ancho+'" onchange="setFoto('+i+',\\'ancho\\',this.value)"></div>'+
+      '<div><label>Alto cm</label><input type="number" value="'+p.alto+'" onchange="setFoto('+i+',\\'alto\\',this.value)"></div>'+
+      '<div><label>Cant.</label><input type="number" value="'+p.cantidad+'" onchange="setFoto('+i+',\\'cantidad\\',this.value)"></div>'+
+      '<div style="flex:none;display:flex;align-items:flex-end;gap:6px">'+conf+'<span class="x" onclick="delFoto('+i+')">✕</span></div></div>'+
+      (p.original?'<div class="hint">Papel: "'+esc(p.original)+'"'+(p.tipo?' · tipo: '+esc(p.tipo):'')+'</div>':'')+'</div>';
+  }).join("");
+  document.getElementById("g-foto-rows").innerHTML=rows+'<div style="margin-top:10px"><button class="btn" onclick="calcularLote()">Calcular todo con el vidrio elegido ↑</button></div><div id="g-lote-res"></div>';
+}
+function setFoto(i,k,v){ FOTO_PIEZAS[i][k]=Number(v); }
+function delFoto(i){ FOTO_PIEZAS.splice(i,1); pintarFotoRows(); }
+async function calcularLote(){
+  var vid=document.getElementById("g-tipo").value; var cont=document.getElementById("g-lote-res");
+  if(!vid){ cont.innerHTML='<div class="msg err">Elegí el tipo de vidrio arriba.</div>'; return; }
+  try{
+    var d=await api("/aluminio/vidrio-cotizar-lote",{body:{vidrioId:vid,items:FOTO_PIEZAS,desperdicioCm:Number(document.getElementById("g-desp").value),pieCm:Number(document.getElementById("g-pie").value)}});
+    var filas=d.filas.map(function(r){return '<tr><td>'+r.ancho+'×'+r.alto+' cm ×'+r.cantidad+'<div class="hint">'+r.anchoDesp+'×'+r.altoDesp+' · '+r.pie2Total+' pie²</div></td><td class="rt">'+bs(r.precioCabal)+'</td><td class="rt"><b>'+bs(r.precioRedondeado)+'</b></td></tr>';}).join("");
+    cont.innerHTML='<div class="card"><h3>'+esc(d.vidrio.nombre)+' — total ('+d.filas.length+' piezas)</h3><table><tr><th>Pieza</th><th class="rt">Cabal</th><th class="rt">Red. 5</th></tr>'+filas+
+      '<tr><td class="tot">TOTAL</td><td class="rt tot">'+bs(d.totalCabal)+'</td><td class="rt tot" style="color:var(--acc2)">'+bs(d.totalRedondeado)+'</td></tr></table>'+
+      '<button class="btn sec mini noprint" style="margin-top:10px" onclick="window.print()">🖨 Imprimir</button></div>';
+  }catch(e){ cont.innerHTML='<div class="msg err">'+esc(e.message)+'</div>'; }
+}
 async function cotizarVidrio(){
   var m=document.getElementById("g-msg"); var vid=document.getElementById("g-tipo").value;
   if(!vid){ m.className="msg err"; m.textContent="Elegí un tipo de vidrio (cargalos en Materiales)."; return; }
