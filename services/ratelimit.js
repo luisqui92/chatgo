@@ -5,6 +5,7 @@ const stores = {
   login: new Map(),    // IP → { count, resetAt }
   webhook: new Map(),
   admin: new Map(),
+  medico: new Map(),
 };
 
 // Limpieza periódica para no acumular IPs
@@ -55,5 +56,6 @@ function rateLimit(storeName, max, windowMs, message) {
 const limitLogin = rateLimit("login", 10, 60 * 1000, "Demasiados intentos de login. Esperá 1 minuto.");
 const limitWebhook = rateLimit("webhook", 1000, 60 * 1000, "Demasiadas peticiones al webhook");
 const limitAdmin = rateLimit("admin", 200, 60 * 1000, "Demasiadas peticiones al panel admin");
+const limitMedico = rateLimit("medico", 30, 60 * 1000, "Demasiadas peticiones. Esperá un momento.");
 
-module.exports = { rateLimit, limitLogin, limitWebhook, limitAdmin, getIP };
+module.exports = { rateLimit, limitLogin, limitWebhook, limitAdmin, limitMedico, getIP };
