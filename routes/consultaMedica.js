@@ -5,7 +5,7 @@
 const express = require("express");
 const { CONFIG, log } = require("../config");
 const { Medico, ConsultaMedica } = require("../db/models");
-const { generarToken, requireAuth } = require("../services/auth");
+const { generarToken, requireAuth, hashPassword } = require("../services/auth");
 const { limitMedico } = require("../services/ratelimit");
 const { transcribirConsultaMedica } = require("../services/deepgram");
 
@@ -22,13 +22,14 @@ module.exports = function (app) {
       const phone = String(req.body?.phone || "").trim();
       const nombre = String(req.body?.nombre || "").trim();
       const especialidad = String(req.body?.especialidad || "").trim();
+      const password = String(req.body?.password || "");
       if (!phone || !nombre) return res.status(400).json({ error: "phone y nombre son requeridos" });
+      if (password.length < 8) return res.status(400).json({ error: "La contraseña debe tener al menos 8 caracteres" });
 
-      const medico = await Medico.findOneAndUpdate(
-        { phone },
-        { $setOnInsert: { phone, nombre, especialidad, activo: true } },
-        { upsert: true, new: true, setDefaultsOnInsert: true }
-      );
+      const yaExiste = await Medico.findOne({ phone });
+      if (yaExiste) return res.status(409).json({ error: "Ese teléfono ya está registrado" });
+
+      const medico = await Medico.create({ phone, nombre, especialidad, passwordHash: hashPassword(password), activo: true });
       res.json({ ok: true, phone: medico.phone, nombre: medico.nombre });
     } catch (e) {
       log.error("[MEDICO_REGISTRO]", e.message);
@@ -36,14 +37,17 @@ module.exports = function (app) {
     }
   });
 
-  // ─── LOGIN (sin contraseña — solo médicos activos) ─────────────────────
+  // ─── LOGIN (usuario = teléfono + contraseña) ────────────────────────────
   app.post("/medico/login", limitMedico, async (req, res) => {
     try {
       const phone = String(req.body?.phone || "").trim();
-      if (!phone) return res.status(400).json({ error: "phone es requerido" });
+      const password = String(req.body?.password || "");
+      if (!phone || !password) return res.status(400).json({ error: "phone y password son requeridos" });
 
       const medico = await Medico.findOne({ phone, activo: true });
-      if (!medico) return res.status(401).json({ error: "Médico no encontrado o inactivo" });
+      if (!medico || medico.passwordHash !== hashPassword(password)) {
+        return res.status(401).json({ error: "Teléfono o contraseña incorrectos" });
+      }
 
       const token = generarToken(medico.phone, "medico");
       res.json({ token, phone: medico.phone, nombre: medico.nombre });

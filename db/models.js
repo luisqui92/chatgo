@@ -385,6 +385,7 @@ const medicoSchema = new mongoose.Schema({
   phone: { type: String, unique: true, index: true, required: true },
   nombre: { type: String, required: true },
   especialidad: { type: String, default: "" },
+  passwordHash: { type: String, required: true },
   activo: { type: Boolean, default: true },
 }, { timestamps: true });
 const Medico = mongoose.model("Medico", medicoSchema);
