@@ -31,7 +31,7 @@ const { procesarMensajeUsuario, preguntarOpcionesViaje, procesarCalculoViaje } =
 
 // ─── CORS ───────────────────────────────────────────────────────────────────
 app.use((req, res, next) => {
-  const allowed = ["https://chatgo.ia.bo", "https://www.chatgo.ia.bo", "https://salud.chatgo.ia.bo", "http://localhost:3000", "http://localhost:5173"];
+  const allowed = ["https://chatgo.ia.bo", "https://www.chatgo.ia.bo", "http://localhost:3000", "http://localhost:5173"];
   const origin = req.headers.origin;
   if (origin && allowed.includes(origin)) {
     res.setHeader("Access-Control-Allow-Origin", origin);
@@ -44,7 +44,7 @@ app.use((req, res, next) => {
 });
 
 app.use((req, res, next) => {
-  const allowed = ["https://chatgo.ia.bo", "http://chatgo.ia.bo", "https://salud.chatgo.ia.bo", "http://localhost:3000"];
+  const allowed = ["https://chatgo.ia.bo", "http://chatgo.ia.bo", "http://localhost:3000"];
   const origin = req.headers.origin;
   if (allowed.includes(origin)) {
     res.setHeader("Access-Control-Allow-Origin", origin);
@@ -120,6 +120,12 @@ app.get("/qr/:filename", (req, res) => {
   if (!fs.existsSync(file)) return res.status(404).send("Not found");
   res.setHeader("Cache-Control", "public, max-age=86400");
   res.sendFile(file);
+});
+
+// Web de consultas médicas (mismo dominio/certificado que la API, sin subdominio aparte)
+app.get("/salud", (_req, res) => {
+  const path = require("path");
+  res.sendFile(path.join(__dirname, "salud.html"));
 });
 
 // ─── SERVER ───────────────────────────────────────────────────────────────────
