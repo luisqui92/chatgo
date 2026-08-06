@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ChatGo Salud · Transcripción de consultas</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#0f1419;color:#e6e6e6;min-height:100vh;padding-bottom:40px;}
+.header{background:#161b22;padding:16px;border-bottom:1px solid #30363d;position:sticky;top:0;z-index:10;display:flex;justify-content:space-between;align-items:center;}
+.header h1{font-size:18px;color:#00d97e;}
+.header p{font-size:12px;color:#8b949e;margin-top:2px;}
+.header button{background:none;border:1px solid #30363d;color:#8b949e;border-radius:8px;padding:6px 12px;font-size:12px;}
+.wrap{max-width:480px;margin:0 auto;padding:16px;}
+.card{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:20px;margin-bottom:14px;}
+label{display:block;font-size:12px;color:#8b949e;margin-bottom:6px;margin-top:14px;}
+label:first-child{margin-top:0;}
+input,select{width:100%;background:#0f1419;border:1px solid #30363d;color:#e6e6e6;border-radius:8px;padding:11px;font-size:14px;}
+input:focus{outline:none;border-color:#00d97e;}
+button.primary{width:100%;background:#00d97e;color:#0f1419;border:none;border-radius:8px;padding:13px;font-size:15px;font-weight:600;margin-top:18px;}
+button.primary:disabled{opacity:.5;}
+button.secondary{width:100%;background:none;border:1px solid #30363d;color:#e6e6e6;border-radius:8px;padding:12px;font-size:14px;margin-top:10px;}
+button.link{background:none;border:none;color:#58a6ff;font-size:13px;margin-top:16px;width:100%;text-align:center;}
+.error{background:rgba(248,81,73,.12);border:1px solid rgba(248,81,73,.3);color:#f85149;border-radius:8px;padding:10px 12px;font-size:13px;margin-top:14px;}
+.hint{font-size:12px;color:#8b949e;margin-top:8px;}
+.fab{position:fixed;bottom:20px;right:20px;background:#00d97e;color:#0f1419;border:none;border-radius:30px;padding:14px 22px;font-size:14px;font-weight:600;box-shadow:0 4px 14px rgba(0,0,0,.4);}
+.consulta{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:14px;margin-bottom:10px;}
+.consulta .top{display:flex;justify-content:space-between;align-items:center;}
+.consulta .nombre{font-size:15px;font-weight:600;}
+.consulta .fecha{font-size:11px;color:#8b949e;margin-top:4px;}
+.badge{font-size:11px;padding:3px 9px;border-radius:12px;white-space:nowrap;}
+.badge-procesando{background:rgba(210,153,34,.15);color:#d29922;}
+.badge-completado{background:rgba(63,185,80,.15);color:#3fb950;}
+.badge-error{background:rgba(248,81,73,.15);color:#f85149;}
+.empty{color:#8b949e;text-align:center;padding:50px 20px;font-size:13px;}
+.loading{text-align:center;padding:60px 20px;color:#8b949e;}
+.rec-box{text-align:center;padding:10px 0;}
+.rec-btn{width:88px;height:88px;border-radius:50%;border:none;background:#f85149;color:#fff;font-size:30px;margin:10px auto;display:flex;align-items:center;justify-content:center;}
+.rec-btn.idle{background:#00d97e;}
+.rec-time{font-size:22px;font-family:monospace;margin-top:10px;color:#e6e6e6;}
+.rec-status{font-size:13px;color:#8b949e;margin-top:6px;}
+.file-label{display:block;text-align:center;border:1px dashed #30363d;border-radius:8px;padding:14px;font-size:13px;color:#8b949e;margin-top:10px;cursor:pointer;}
+.segmento{border-radius:10px;padding:10px 14px;margin-bottom:10px;max-width:88%;}
+.segmento.h0{background:#1c2a3a;margin-right:auto;}
+.segmento.h1{background:#22301f;margin-left:auto;}
+.segmento .quien{font-size:11px;color:#8b949e;margin-bottom:4px;}
+.segmento .texto{font-size:14px;line-height:1.4;}
+.back{background:none;border:none;color:#58a6ff;font-size:13px;margin-bottom:14px;}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <h1>🩺 ChatGo Salud</h1>
+    <p id="headerSub">Transcripción de consultas</p>
+  </div>
+  <button id="btnLogout" style="display:none">Salir</button>
+</div>
+
+<div class="wrap" id="app">
+  <div class="loading">⏳ Cargando...</div>
+</div>
+
+<script>
+const API = "https://api.chatgo.ia.bo";
+let TOKEN = localStorage.getItem("salud_token") || null;
+let MEDICO_NOMBRE = localStorage.getItem("salud_nombre") || "";
+const app = document.getElementById("app");
+const headerSub = document.getElementById("headerSub");
+const btnLogout = document.getElementById("btnLogout");
+
+function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+async function api(path, opts = {}) {
+  const headers = opts.headers || {};
+  if (TOKEN) headers["Authorization"] = "Bearer " + TOKEN;
+  const res = await fetch(API + path, { ...opts, headers });
+  let data = null;
+  try { data = await res.json(); } catch {}
+  if (!res.ok) throw { status: res.status, error: (data && data.error) || "Error de conexión" };
+  return data;
+}
+
+function logout() {
+  TOKEN = null; MEDICO_NOMBRE = "";
+  localStorage.removeItem("salud_token");
+  localStorage.removeItem("salud_nombre");
+  btnLogout.style.display = "none";
+  headerSub.textContent = "Transcripción de consultas";
+  renderLogin();
+}
+btnLogout.onclick = logout;
+
+// ─── LOGIN ───────────────────────────────────────────────────────────────
+function renderLogin() {
+  app.innerHTML = `
+    <div class="card">
+      <label>Teléfono</label>
+      <input id="lPhone" type="tel" placeholder="591XXXXXXXX">
+      <label>Contraseña</label>
+      <input id="lPass" type="password" placeholder="••••••••">
+      <div id="lErr"></div>
+      <button class="primary" id="lBtn">Ingresar</button>
+      <button class="link" id="lGoReg">¿No tenés cuenta? Registrate</button>
+    </div>`;
+  document.getElementById("lGoReg").onclick = renderRegistro;
+  document.getElementById("lBtn").onclick = async () => {
+    const phone = document.getElementById("lPhone").value.trim();
+    const password = document.getElementById("lPass").value;
+    const errBox = document.getElementById("lErr");
+    errBox.innerHTML = "";
+    if (!phone || !password) { errBox.innerHTML = `<div class="error">Completá teléfono y contraseña</div>`; return; }
+    try {
+      const data = await api("/medico/login", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({ phone, password }) });
+      TOKEN = data.token; MEDICO_NOMBRE = data.nombre;
+      localStorage.setItem("salud_token", TOKEN);
+      localStorage.setItem("salud_nombre", MEDICO_NOMBRE);
+      renderDashboard();
+    } catch (e) {
+      errBox.innerHTML = `<div class="error">${esc(e.error || "No se pudo iniciar sesión")}</div>`;
+    }
+  };
+}
+
+// ─── REGISTRO ────────────────────────────────────────────────────────────
+function renderRegistro() {
+  app.innerHTML = `
+    <div class="card">
+      <label>Teléfono</label>
+      <input id="rPhone" type="tel" placeholder="591XXXXXXXX">
+      <label>Nombre completo</label>
+      <input id="rNombre" type="text" placeholder="Dra. Fulana Pérez">
+      <label>Especialidad (opcional)</label>
+      <input id="rEsp" type="text" placeholder="Medicina general">
+      <label>Contraseña (mínimo 8 caracteres)</label>
+      <input id="rPass" type="password" placeholder="••••••••">
+      <div id="rErr"></div>
+      <button class="primary" id="rBtn">Registrarme</button>
+      <button class="link" id="rGoLogin">Ya tengo cuenta, ingresar</button>
+    </div>`;
+  document.getElementById("rGoLogin").onclick = renderLogin;
+  document.getElementById("rBtn").onclick = async () => {
+    const phone = document.getElementById("rPhone").value.trim();
+    const nombre = document.getElementById("rNombre").value.trim();
+    const especialidad = document.getElementById("rEsp").value.trim();
+    const password = document.getElementById("rPass").value;
+    const errBox = document.getElementById("rErr");
+    errBox.innerHTML = "";
+    if (!phone || !nombre || !password) { errBox.innerHTML = `<div class="error">Completá teléfono, nombre y contraseña</div>`; return; }
+    try {
+      await api("/medico/registro", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({ phone, nombre, especialidad, password }) });
+      errBox.innerHTML = `<div class="hint">✅ Cuenta creada. Ahora ingresá con tu teléfono y contraseña.</div>`;
+      setTimeout(renderLogin, 1200);
+    } catch (e) {
+      errBox.innerHTML = `<div class="error">${esc(e.error || "No se pudo registrar")}</div>`;
+    }
+  };
+}
+
+// ─── DASHBOARD ───────────────────────────────────────────────────────────
+async function renderDashboard() {
+  headerSub.textContent = "Hola, " + (MEDICO_NOMBRE || "");
+  btnLogout.style.display = "inline-block";
+  app.innerHTML = `<div class="loading">⏳ Cargando tus consultas...</div>`;
+  try {
+    const data = await api("/medico/consultas");
+    const items = data.consultas || [];
+    const estadoTxt = { procesando: "⏳ Procesando", completado: "✅ Listo", error: "⚠️ Error" };
+    app.innerHTML = `
+      <button class="secondary" id="btnNueva">🎙️ Nueva consulta</button>
+      ${items.length === 0 ? `<div class="empty">Todavía no subiste ninguna consulta.</div>` : ""}
+      ${items.map(c => `
+        <div class="consulta" data-id="${c._id}">
+          <div class="top">
+            <div class="nombre">${esc(c.pacienteNombre || "Sin nombre de paciente")}</div>
+            <span class="badge badge-${c.estado}">${estadoTxt[c.estado] || c.estado}</span>
+          </div>
+          <div class="fecha">${new Date(c.createdAt).toLocaleString("es-BO")}${c.duracionSegundos ? " · " + Math.round(c.duracionSegundos/60) + " min" : ""}</div>
+        </div>`).join("")}
+    `;
+    document.getElementById("btnNueva").onclick = renderNuevaConsulta;
+    document.querySelectorAll(".consulta").forEach(el => {
+      el.onclick = () => renderDetalle(el.dataset.id);
+    });
+  } catch (e) {
+    if (e.status === 401) return logout();
+    app.innerHTML = `<div class="error">${esc(e.error || "Error cargando consultas")}</div>`;
+  }
+}
+
+// ─── NUEVA CONSULTA (grabar o subir archivo) ────────────────────────────
+function renderNuevaConsulta() {
+  app.innerHTML = `
+    <button class="back" id="btnBack">← Volver</button>
+    <div class="card">
+      <label>Nombre del paciente (opcional)</label>
+      <input id="ncPaciente" type="text" placeholder="Ej: Juan Pérez">
+      <div class="rec-box">
+        <button class="rec-btn idle" id="recBtn">🎙️</button>
+        <div class="rec-time" id="recTime">00:00</div>
+        <div class="rec-status" id="recStatus">Tocá para grabar</div>
+      </div>
+      <label class="file-label" for="ncFile">📁 O subí un archivo de audio ya grabado</label>
+      <input type="file" id="ncFile" accept="audio/*" style="display:none">
+      <div id="ncErr"></div>
+      <button class="primary" id="ncSubir" style="display:none">Subir y transcribir</button>
+    </div>`;
+  document.getElementById("btnBack").onclick = renderDashboard;
+
+  let mediaRecorder = null, chunks = [], blob = null, mimeType = "audio/webm";
+  let seconds = 0, timerId = null;
+  const recBtn = document.getElementById("recBtn");
+  const recTime = document.getElementById("recTime");
+  const recStatus = document.getElementById("recStatus");
+  const ncSubir = document.getElementById("ncSubir");
+  const ncErr = document.getElementById("ncErr");
+
+  function fmt(s){ const m=String(Math.floor(s/60)).padStart(2,"0"); const r=String(s%60).padStart(2,"0"); return m+":"+r; }
+
+  recBtn.onclick = async () => {
+    if (!mediaRecorder || mediaRecorder.state === "inactive") {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const tipos = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"];
+        mimeType = tipos.find(t => MediaRecorder.isTypeSupported(t)) || "";
+        mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+        chunks = [];
+        mediaRecorder.ondataavailable = e => chunks.push(e.data);
+        mediaRecorder.onstop = () => {
+          blob = new Blob(chunks, { type: mimeType || "audio/webm" });
+          stream.getTracks().forEach(t => t.stop());
+          recStatus.textContent = "Grabación lista (" + fmt(seconds) + ")";
+          ncSubir.style.display = "block";
+        };
+        mediaRecorder.start();
+        seconds = 0; recTime.textContent = "00:00";
+        timerId = setInterval(() => { seconds++; recTime.textContent = fmt(seconds); }, 1000);
+        recBtn.classList.remove("idle");
+        recBtn.textContent = "⏹️";
+        recStatus.textContent = "Grabando... tocá para detener";
+        ncSubir.style.display = "none";
+      } catch (e) {
+        ncErr.innerHTML = `<div class="error">No se pudo acceder al micrófono: ${esc(e.message)}</div>`;
+      }
+    } else {
+      mediaRecorder.stop();
+      clearInterval(timerId);
+      recBtn.classList.add("idle");
+      recBtn.textContent = "🎙️";
+    }
+  };
+
+  document.getElementById("ncFile").onchange = (e) => {
+    const f = e.target.files[0];
+    if (!f) return;
+    blob = f; mimeType = f.type || "audio/mpeg";
+    recStatus.textContent = "Archivo listo: " + f.name;
+    ncSubir.style.display = "block";
+  };
+
+  ncSubir.onclick = async () => {
+    if (!blob) return;
+    ncErr.innerHTML = "";
+    ncSubir.disabled = true;
+    ncSubir.textContent = "Subiendo y transcribiendo... puede tardar un minuto";
+    const pacienteNombre = document.getElementById("ncPaciente").value.trim();
+    try {
+      const qs = pacienteNombre ? "?pacienteNombre=" + encodeURIComponent(pacienteNombre) : "";
+      const data = await api("/medico/consultas" + qs, {
+        method: "POST",
+        headers: { "Content-Type": mimeType || "audio/webm" },
+        body: blob,
+      });
+      renderDetalle(data.consulta._id);
+    } catch (e) {
+      // no se pierde la grabación: se puede reintentar sin volver a grabar
+      ncSubir.disabled = false;
+      ncSubir.textContent = "Reintentar subir";
+      ncErr.innerHTML = `<div class="error">${esc(e.error || "No se pudo subir. Revisá tu conexión y volvé a intentar.")}</div>`;
+    }
+  };
+}
+
+// ─── DETALLE ─────────────────────────────────────────────────────────────
+async function renderDetalle(id) {
+  app.innerHTML = `<div class="loading">⏳ Cargando...</div>`;
+  try {
+    const data = await api("/medico/consultas/" + id);
+    const c = data.consulta;
+    let body = "";
+    if (c.estado === "procesando") {
+      body = `<div class="hint">⏳ Todavía se está procesando. Volvé a entrar en un momento.</div>`;
+    } else if (c.estado === "error") {
+      body = `<div class="error">⚠️ ${esc(c.error || "Ocurrió un error al transcribir")}</div>`;
+    } else if (c.segmentos && c.segmentos.length) {
+      body = c.segmentos.map(s => `
+        <div class="segmento h${s.hablante % 2}">
+          <div class="quien">Hablante ${s.hablante + 1}</div>
+          <div class="texto">${esc(s.texto)}</div>
+        </div>`).join("");
+    } else {
+      body = `<div class="hint">${esc(c.transcripcionCompleta || "Sin transcripción")}</div>`;
+    }
+    app.innerHTML = `
+      <button class="back" id="btnBack">← Volver</button>
+      <div class="card">
+        <div class="nombre" style="font-size:16px;font-weight:600">${esc(c.pacienteNombre || "Sin nombre de paciente")}</div>
+        <div class="fecha">${new Date(c.createdAt).toLocaleString("es-BO")}${c.duracionSegundos ? " · " + Math.round(c.duracionSegundos/60) + " min" : ""}</div>
+      </div>
+      <div style="margin-top:14px">${body}</div>
+    `;
+    document.getElementById("btnBack").onclick = renderDashboard;
+  } catch (e) {
+    if (e.status === 401) return logout();
+    app.innerHTML = `<div class="error">${esc(e.error || "Error cargando la consulta")}</div>`;
+  }
+}
+
+// ─── ARRANQUE ────────────────────────────────────────────────────────────
+if (TOKEN) renderDashboard(); else renderLogin();
+</script>
+</body>
+</html>
