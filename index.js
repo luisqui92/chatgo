@@ -30,6 +30,19 @@ const app = express();
 // ─── MÓDULOS ─────────────────────────────────────────────────────────────────
 const { CONFIG, log, validateConfig } = require("./config");
 validateConfig();
+
+// ─── RED DE SEGURIDAD GLOBAL ────────────────────────────────────────────────
+// Que un error suelto (promesa sin catch, throw fuera de un try) NUNCA tumbe el
+// bot entero. Logueamos y seguimos vivos — para un bot de taxi, "seguir
+// respondiendo" es más importante que morir limpio. (PM2 igual reinicia si el
+// proceso llegara a salir.)
+process.on("unhandledRejection", (reason) => {
+  log.error("[UNHANDLED_REJECTION]", reason?.message || String(reason), reason?.stack || "");
+});
+process.on("uncaughtException", (err) => {
+  log.error("[UNCAUGHT_EXCEPTION]", err?.message || String(err), err?.stack || "");
+});
+
 log.info(`🧩 Módulos activos: ${CONFIG.MODULOS_ACTIVOS.length ? CONFIG.MODULOS_ACTIVOS.join(", ") : "(solo taxi)"}`);
 const models = require("./db/models");
 const { Usuario, Chofer, Viaje, SessionState, ListaEspera, RateLimit, CodigoPromo, LocationReference, NotificacionPago } = models;

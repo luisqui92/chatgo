@@ -201,9 +201,12 @@ if (!process.env.META_APP_SECRET) {
 
 // ─── VALIDACIÓN DE VARIABLES DE ENTORNO ─────────────────────────────────────
 function validateConfig() {
+  // OJO: este proyecto usa Prisma + MySQL. La base se configura por DATABASE_URL,
+  // NO por MONGODB_URI (residuo de la versión vieja en Mongo). Validar la variable
+  // equivocada fue lo que permitió que convivieran dos versiones/stacks distintos.
   const required = [
-    "WHATSAPP_TOKEN", "WHATSAPP_PHONE_ID", "VERIFY_TOKEN", 
-    "GOOGLE_MAPS_KEY", "OPENAI_KEY", "MONGODB_URI"
+    "WHATSAPP_TOKEN", "WHATSAPP_PHONE_ID", "VERIFY_TOKEN",
+    "GOOGLE_MAPS_KEY", "OPENAI_KEY", "DATABASE_URL"
   ];
   const warned = [
     "META_APP_SECRET", "JWT_SECRET", "ADMIN_PASSWORD"

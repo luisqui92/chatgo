@@ -174,6 +174,9 @@ app.post("/webhook", limitWebhook, async (req, res) => {
         }
       } catch (eInner) {
         log.error("[WEBHOOK_MSG]", eInner.message, eInner.stack);
+        // NUNCA dejar al usuario mudo ante un error: avisarle para que reintente,
+        // en vez de que crea que el bot murió. (msg.from sigue en scope acá.)
+        try { if (msg?.from) await enviarMensaje(msg.from, "⚠️ Uy, tuvimos un problemita técnico. Por favor reintentá en un momentito 🙏"); } catch (_) {}
       }
     }
   } catch (e) {
