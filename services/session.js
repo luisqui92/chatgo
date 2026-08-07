@@ -5,6 +5,7 @@ const { horaStrBolivia, fechaStrBolivia } = require("../services/utils");
 const { SessionState, ListaEspera, RateLimit, prisma } = require("../db/models");
 
 const sessionCache = new Map();
+const sessionCacheAt = new Map(); // phone -> último uso (para el TTL del caché)
 const processedMsgIds = new Map();
 
 function yaProcesoMensaje(msgId) {
@@ -19,15 +20,19 @@ function yaProcesoMensaje(msgId) {
 }
 
 async function getSession(phone) {
-  if (sessionCache.has(phone)) return sessionCache.get(phone);
+  if (sessionCache.has(phone)) {
+    sessionCacheAt.set(phone, Date.now()); // refrescar: sesión activa = no expira
+    return sessionCache.get(phone);
+  }
   const doc = await SessionState.findUnique({ where: { phone } });
   const data = doc ? doc.data : null;
-  if (data) sessionCache.set(phone, data);
+  if (data) { sessionCache.set(phone, data); sessionCacheAt.set(phone, Date.now()); }
   return data;
 }
 
 async function setSession(phone, data) {
   sessionCache.set(phone, data);
+  sessionCacheAt.set(phone, Date.now());
   await SessionState.upsert({
     where: { phone },
     update: { data },
@@ -44,6 +49,7 @@ async function updateSession(phone, patch) {
 
 async function deleteSession(phone) {
   sessionCache.delete(phone);
+  sessionCacheAt.delete(phone);
   await SessionState.deleteMany({ where: { phone } });
 }
 
@@ -101,16 +107,19 @@ async function checkRateLimit(phone) {
 
 
 // ─── TTL del sessionCache — evita memory leak ───────────────────────────────
-// sessionCache guarda timestamps lastSet — los entries viejos se eliminan cada 5 min
+// Solo se eliminan las sesiones SIN USO por más de 30 min (el tiempo de último
+// uso vive en sessionCacheAt). Antes se leía val._cachedAt, que nunca se escribía
+// → se borraba TODO el caché cada 5 min y no cacheaba nada (lento).
 setInterval(() => {
   try {
     const expiraMs = 30 * 60 * 1000; // 30 min sin uso → fuera del cache
     const now = Date.now();
     let eliminados = 0;
-    for (const [key, val] of sessionCache.entries()) {
-      const lastSet = val?._cachedAt || 0;
+    for (const key of sessionCache.keys()) {
+      const lastSet = sessionCacheAt.get(key) || 0;
       if (now - lastSet > expiraMs) {
         sessionCache.delete(key);
+        sessionCacheAt.delete(key);
         eliminados++;
       }
     }
