@@ -378,9 +378,36 @@ notificacionPagoSchema.index({ createdAt: 1 }, { expireAfterSeconds: 1200 });
 const NotificacionPago = mongoose.model("NotificacionPago", notificacionPagoSchema, "notificacionespago");
 
 
-// NOTA: los modelos de ChatGo Salud (Medico, ConsultaMedica) NO viven acá — están
-// en db/modelsSalud.js, con su propia conexión a un cluster de MongoDB separado.
-// Es una decisión deliberada: los datos de consultas médicas no comparten base
-// de datos con los de taxis/choferes/pasajeros.
+// ─── MÓDULO CONSULTAS MÉDICAS ────────────────────────────────────────────────
+// Médico que sube consultas para transcribir. Login con teléfono + contraseña;
+// solo médicos ya registrados/activos pueden entrar. Mismo cluster/conexión
+// que el resto de chatgo (misma base de datos, colecciones separadas).
+const medicoSchema = new mongoose.Schema({
+  phone: { type: String, unique: true, index: true, required: true },
+  nombre: { type: String, required: true },
+  especialidad: { type: String, default: "" },
+  passwordHash: { type: String, required: true },
+  activo: { type: Boolean, default: true },
+}, { timestamps: true });
+const Medico = mongoose.model("Medico", medicoSchema);
 
-module.exports = { Usuario, Chofer, Viaje, SessionState, ListaEspera, RateLimit, CodigoPromo, LocationReference, Demanda, EventoChofer, AlertaSeg, Surge, ViajeDemo, EsquinaMapeada, PreRegistroFlota, Flota, NotificacionPago };
+// Una consulta médica transcrita: audio subido por el médico, diarizado
+// (separa quién habla) por AssemblyAI.
+const consultaMedicaSchema = new mongoose.Schema({
+  medicoPhone: { type: String, index: true, required: true },
+  pacienteNombre: { type: String, default: "" },
+  estado: { type: String, enum: ["procesando", "completado", "error"], default: "procesando", index: true },
+  duracionSegundos: Number,
+  transcripcionCompleta: String,
+  segmentos: [{
+    hablante: String,   // "A", "B"... según lo que detecta AssemblyAI (no sabe cuál es médico/paciente)
+    texto: String,
+    inicioSeg: Number,
+    finSeg: Number,
+  }],
+  error: String,
+}, { timestamps: true });
+consultaMedicaSchema.index({ medicoPhone: 1, createdAt: -1 });
+const ConsultaMedica = mongoose.model("ConsultaMedica", consultaMedicaSchema);
+
+module.exports = { Usuario, Chofer, Viaje, SessionState, ListaEspera, RateLimit, CodigoPromo, LocationReference, Demanda, EventoChofer, AlertaSeg, Surge, ViajeDemo, EsquinaMapeada, PreRegistroFlota, Flota, NotificacionPago, Medico, ConsultaMedica };

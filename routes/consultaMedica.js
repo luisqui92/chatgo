@@ -1,11 +1,11 @@
 // ChatGo — Consultas médicas: transcripción de audio largo con diarización (AssemblyAI)
 // Prototipo: médicos suben el audio de la consulta (grabado en el celular o PC) y
 // reciben la transcripción separada por hablante. Login con teléfono + contraseña —
-// solo médicos ya registrados/activos pueden entrar. Datos en un cluster de MongoDB
-// APARTE (db/modelsSalud.js), separado por completo del que usa el bot de taxis.
+// solo médicos ya registrados/activos pueden entrar. Mismo cluster de MongoDB que
+// el resto de chatgo (colecciones separadas: medicos, consultamedicas).
 const express = require("express");
 const { CONFIG, log } = require("../config");
-const { Medico, ConsultaMedica } = require("../db/modelsSalud");
+const { Medico, ConsultaMedica } = require("../db/models");
 const { generarToken, requireAuth, hashPassword } = require("../services/auth");
 const { limitMedico } = require("../services/ratelimit");
 const { transcribirConsultaMedica } = require("../services/assemblyai");
@@ -17,13 +17,6 @@ const requireMedico = requireAuth(["medico"]);
 const audioRaw = express.raw({ type: "audio/*", limit: "80mb" });
 
 module.exports = function (app) {
-  // Si todavía no se configuró MONGODB_URI_SALUD, avisar en vez de tirar 500 raros
-  app.use("/medico", (req, res, next) => {
-    if (!Medico) {
-      return res.status(503).json({ error: "Módulo de salud no configurado (falta MONGODB_URI_SALUD)" });
-    }
-    next();
-  });
 
   // ─── REGISTRO ───────────────────────────────────────────────────────────
   app.post("/medico/registro", limitMedico, async (req, res) => {
