@@ -11,7 +11,6 @@ const CONFIG = {
   GOOGLE_MAPS_KEY: process.env.GOOGLE_MAPS_KEY,
   GOOGLE_MAP_ID: process.env.GOOGLE_MAP_ID || "", // Map ID vectorial → navegación 3D (inclinación + rotación)
   OPENAI_KEY: process.env.OPENAI_KEY,
-  MONGODB_URI: process.env.MONGODB_URI,
   ADMIN_PHONE: process.env.ADMIN_PHONE || "59162741818",
   QR_IMAGE_URL: process.env.QR_IMAGE_URL || (process.env.APP_URL ? `${process.env.APP_URL}/qr/pago.jpg` : null),
 
