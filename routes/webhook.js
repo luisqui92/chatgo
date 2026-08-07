@@ -14,6 +14,8 @@ const { procesarMensajeUsuario } = require("../flows/pasajero");
 const { procesarMensajeChofer } = require("../flows/chofer");
 const { enPromoGratis, fechaStrBolivia, formatearFechaPromo, promoCodigosActiva } = require("../services/utils");
 
+// Para no spamear el aviso de "muchos mensajes": recordamos a quién ya avisamos.
+const avisosRateLimit = new Map(); // phone -> timestamp del último aviso
 
 module.exports = function(app, { procesarMensajeUsuario, procesarMensajeChofer, Chofer, Viaje, getSession, sessionCache, yaProcesoMensaje }) {
 
@@ -81,7 +83,17 @@ app.post("/webhook", limitWebhook, async (req, res) => {
         if (waName) await updateSession(phone, { waName });
 
         const dentroLimite = await checkRateLimit(phone);
-        if (!dentroLimite) { log.warn(`[WEBHOOK] Rate limit excedido para ${phone}`); continue; }
+        if (!dentroLimite) {
+          log.warn(`[WEBHOOK] Rate limit excedido para ${phone}`);
+          // Avisar (una vez cada 15 min) en lugar de quedar mudo. Anti-spam:
+          // si no, cada mensaje de más generaría una respuesta.
+          const ahora = Date.now();
+          if (ahora - (avisosRateLimit.get(phone) || 0) > 15 * 60 * 1000) {
+            avisosRateLimit.set(phone, ahora);
+            try { await enviarMensaje(phone, "🚦 Estás enviando muchos mensajes muy seguido. Esperá un momentito y volvé a intentar. 🙏"); } catch (_) {}
+          }
+          continue;
+        }
 
         // VERIFICACIÓN WEB EN 1 TOQUE: "ChatGo-XXXXXX" enlaza el número con la
         // sesión de la página web. Se procesa antes que cualquier otro flujo.

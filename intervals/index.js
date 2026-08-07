@@ -461,24 +461,24 @@ setInterval(async () => {
               viaje.destinoLat, viaje.destinoLng
             );
 
-            const linkMonitoreo = "https://chatgo.ia.bo/rastreo.html?id=" + viaje.id + "&api=" + encodeURIComponent(CONFIG.APP_URL + "/track/" + viaje.id + "/pos");
+            const linkMonitoreo = (CONFIG.APP_URL || "https://api.chatgo.ia.bo") + "/track/" + viaje.id;
 
             if (traficoActual?.hayTrafico) {
               // Hay tráfico real — avisar al chofer
               const linkAlternativo = "https://www.google.com/maps/dir/?api=1&origin=" + posChofer.lat + "," + posChofer.lng + "&destination=" + viaje.destinoLat + "," + viaje.destinoLng + "&travelmode=driving";
               await enviarMensaje(
                 viaje.choferPhone,
-                `🚦 *Aviso de tráfico*\n\nHay tráfico significativo en tu zona (factor x\${traficoActual.factorTrafico}).\n\nTiempo estimado restante: ~\${traficoActual.minutosConTrafico} min\n\n🗺️ Considera ruta alternativa:\n\${linkAlternativo}`
+                `🚦 *Aviso de tráfico*\n\nHay tráfico significativo en tu zona (factor x${traficoActual.factorTrafico}).\n\nTiempo estimado restante: ~${traficoActual.minutosConTrafico} min\n\n🗺️ Considera ruta alternativa:\n${linkAlternativo}`
               );
-              log.info(`[TRAFICO] Viaje \${viaje._id} — tráfico x\${traficoActual.factorTrafico}, avisando a chofer`);
+              log.info(`[TRAFICO] Viaje ${viaje.id} — tráfico x${traficoActual.factorTrafico}, avisando a chofer`);
             } else {
               // No hay tráfico pero igual se está tardando — posible desvío
               const distDestino = distPuntos(posChofer.lat, posChofer.lng, viaje.destinoLat, viaje.destinoLng);
               await enviarMensaje(
                 CONFIG.ADMIN_PHONE,
-                `🚨 *Posible desvío de ruta*\n\n👤 Chofer: \${viaje.choferNombre} (+\${viaje.choferPhone})\n🚗 Placa: \${viaje.choferPlaca}\n⏱️ Lleva \${minutosEnViaje} min (estimado: \${viaje.tiempoEstimadoMin} min)\n📍 A \${Math.round(distDestino * 1000)}m del destino\n\n🔍 Monitoreo: \${linkMonitoreo}`
+                `🚨 *Posible desvío de ruta*\n\n👤 Chofer: ${viaje.choferNombre} (+${viaje.choferPhone})\n🚗 Placa: ${viaje.choferPlaca}\n⏱️ Lleva ${minutosEnViaje} min (estimado: ${viaje.tiempoEstimadoMin} min)\n📍 A ${Math.round(distDestino * 1000)}m del destino\n\n🔍 Monitoreo: ${linkMonitoreo}`
               );
-              log.warn(`[DESVIO] Viaje \${viaje._id} — \${minutosEnViaje}min / estimado \${viaje.tiempoEstimadoMin}min`);
+              log.warn(`[DESVIO] Viaje ${viaje.id} — ${minutosEnViaje}min / estimado ${viaje.tiempoEstimadoMin}min`);
             }
           }
         }
@@ -496,12 +496,12 @@ setInterval(async () => {
 
           if (ratioDesvio > 2.5 && !alertasTraficoEnviadas.has(keyDesvio)) {
             alertasTraficoEnviadas.add(keyDesvio);
-            const linkMonitoreo = "https://chatgo.ia.bo/rastreo.html?id=" + viaje.id + "&api=" + encodeURIComponent(CONFIG.APP_URL + "/track/" + viaje.id + "/pos");
+            const linkMonitoreo = (CONFIG.APP_URL || "https://api.chatgo.ia.bo") + "/track/" + viaje.id;
             await enviarMensaje(
               CONFIG.ADMIN_PHONE,
-              `🚨 *Desvío de ruta detectado*\n\n👤 Chofer: \${viaje.choferNombre} (+\${viaje.choferPhone})\n🚗 Placa: \${viaje.choferPlaca}\n📐 Ratio de desvío: x\${Math.round(ratioDesvio * 10) / 10}\n\n🔍 Monitoreo: \${linkMonitoreo}`
+              `🚨 *Desvío de ruta detectado*\n\n👤 Chofer: ${viaje.choferNombre} (+${viaje.choferPhone})\n🚗 Placa: ${viaje.choferPlaca}\n📐 Ratio de desvío: x${Math.round(ratioDesvio * 10) / 10}\n\n🔍 Monitoreo: ${linkMonitoreo}`
             );
-            log.warn(`[DESVIO_GEO] Viaje \${viaje._id} — ratio \${ratioDesvio.toFixed(2)}`);
+            log.warn(`[DESVIO_GEO] Viaje ${viaje.id} — ratio ${ratioDesvio.toFixed(2)}`);
           }
         }
 
