@@ -94,6 +94,11 @@ const app = document.getElementById("app");
 const headerSub = document.getElementById("headerSub");
 const btnLogout = document.getElementById("btnLogout");
 
+// La transcripción de consultas largas corre en segundo plano en el servidor;
+// mientras esté "procesando", esta pantalla se refresca sola cada tanto.
+let pollTimeout = null;
+function detenerPolling() { if (pollTimeout) { clearTimeout(pollTimeout); pollTimeout = null; } }
+
 function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 
 async function api(path, opts = {}) {
@@ -118,6 +123,7 @@ btnLogout.onclick = logout;
 
 // ─── LOGIN ───────────────────────────────────────────────────────────────
 function renderLogin() {
+  detenerPolling();
   app.innerHTML = `
     <div class="card">
       <label>Teléfono</label>
@@ -149,6 +155,7 @@ function renderLogin() {
 
 // ─── REGISTRO ────────────────────────────────────────────────────────────
 function renderRegistro() {
+  detenerPolling();
   app.innerHTML = `
     <div class="card">
       <label>Teléfono</label>
@@ -184,6 +191,7 @@ function renderRegistro() {
 
 // ─── DASHBOARD ───────────────────────────────────────────────────────────
 async function renderDashboard() {
+  detenerPolling();
   headerSub.textContent = "Hola, " + (MEDICO_NOMBRE || "");
   btnLogout.style.display = "inline-block";
   app.innerHTML = `<div class="loading">⏳ Cargando tus consultas...</div>`;
@@ -215,6 +223,7 @@ async function renderDashboard() {
 
 // ─── NUEVA CONSULTA (grabar con onda de voz en vivo, o subir archivo) ──
 function renderNuevaConsulta() {
+  detenerPolling();
   app.innerHTML = `
     <button class="back" id="btnBack">← Volver</button>
     <div class="card">
@@ -351,7 +360,7 @@ function renderNuevaConsulta() {
     if (!blob) return;
     ncErr.innerHTML = "";
     ncSubir.disabled = true;
-    ncSubir.textContent = "Subiendo y transcribiendo... puede tardar un rato";
+    ncSubir.textContent = "Subiendo audio...";
     const pacienteNombre = document.getElementById("ncPaciente").value.trim();
     try {
       const qs = pacienteNombre ? "?pacienteNombre=" + encodeURIComponent(pacienteNombre) : "";
@@ -371,14 +380,18 @@ function renderNuevaConsulta() {
 }
 
 // ─── DETALLE ─────────────────────────────────────────────────────────────
-async function renderDetalle(id) {
-  app.innerHTML = `<div class="loading">⏳ Cargando...</div>`;
+// Si la consulta todavía está "procesando" (audios de 30-45 min pueden tardar
+// varios minutos), esta pantalla se refresca sola hasta que termine.
+async function renderDetalle(id, esRefrescoAutomatico) {
+  detenerPolling();
+  if (!esRefrescoAutomatico) app.innerHTML = `<div class="loading">⏳ Cargando...</div>`;
   try {
     const data = await api("/medico/consultas/" + id);
     const c = data.consulta;
     let body = "";
     if (c.estado === "procesando") {
-      body = `<div class="hint">⏳ Todavía se está procesando. Volvé a entrar en un momento.</div>`;
+      body = `<div class="hint">⏳ Transcribiendo tu consulta... para audios largos puede tardar varios minutos. Esta pantalla se actualiza sola, no hace falta que hagas nada.</div>`;
+      pollTimeout = setTimeout(() => renderDetalle(id, true), 8000);
     } else if (c.estado === "error") {
       body = `<div class="error">⚠️ ${esc(c.error || "Ocurrió un error al transcribir")}</div>`;
     } else if (c.segmentos && c.segmentos.length) {

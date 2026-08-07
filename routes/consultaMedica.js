@@ -59,7 +59,11 @@ module.exports = function (app) {
     }
   });
 
-  // ─── SUBIR AUDIO DE CONSULTA → TRANSCRIBIR ─────────────────────────────
+  // ─── SUBIR AUDIO DE CONSULTA → TRANSCRIBIR (en segundo plano) ──────────
+  // Con consultas de 30-45 min, esperar la transcripción entera en el mismo
+  // pedido HTTP no funciona (nginx corta conexiones largas). Por eso acá solo
+  // se guarda el audio y se responde al toque; la transcripción sigue sola
+  // en background y la web se fija después (polling) cuando termina.
   app.post("/medico/consultas", limitMedico, requireMedico, audioRaw, async (req, res) => {
     const medicoPhone = req.adminUser.usuario;
     const audioBuffer = req.body;
@@ -70,24 +74,22 @@ module.exports = function (app) {
     const pacienteNombre = String(req.query.pacienteNombre || "").trim();
     const consulta = await ConsultaMedica.create({ medicoPhone, pacienteNombre, estado: "procesando" });
 
-    try {
-      const { transcripcionCompleta, segmentos, duracionSegundos } =
-        await transcribirConsultaMedica(audioBuffer);
+    res.status(202).json({ ok: true, consulta });
 
-      consulta.estado = "completado";
-      consulta.transcripcionCompleta = transcripcionCompleta;
-      consulta.segmentos = segmentos;
-      consulta.duracionSegundos = duracionSegundos;
-      await consulta.save();
-
-      res.status(201).json({ ok: true, consulta });
-    } catch (e) {
-      log.error("[CONSULTA_MEDICA] Error transcribiendo:", e.response?.data || e.message);
-      consulta.estado = "error";
-      consulta.error = e.response?.data?.error || e.message;
-      await consulta.save();
-      res.status(502).json({ ok: false, error: "No se pudo transcribir el audio", consultaId: consulta._id });
-    }
+    transcribirConsultaMedica(audioBuffer)
+      .then(async ({ transcripcionCompleta, segmentos, duracionSegundos }) => {
+        consulta.estado = "completado";
+        consulta.transcripcionCompleta = transcripcionCompleta;
+        consulta.segmentos = segmentos;
+        consulta.duracionSegundos = duracionSegundos;
+        await consulta.save();
+      })
+      .catch(async (e) => {
+        log.error("[CONSULTA_MEDICA] Error transcribiendo:", e.response?.data || e.message);
+        consulta.estado = "error";
+        consulta.error = e.response?.data?.error || e.message;
+        await consulta.save();
+      });
   });
 
   // ─── LISTAR CONSULTAS PROPIAS ───────────────────────────────────────────

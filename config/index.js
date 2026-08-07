@@ -19,7 +19,7 @@ const CONFIG = {
   TIMEOUT_GOOGLE: 10000,
   TIMEOUT_META: 15000,
   TIMEOUT_ASSEMBLYAI: 120000, // por cada llamada (subir audio, pedir transcripción, cada poll)
-  TIMEOUT_TRANSCRIPCION_TOTAL: 600000, // 10 min: presupuesto total esperando que termine una consulta larga
+  TIMEOUT_TRANSCRIPCION_TOTAL: 1200000, // 20 min: corre en segundo plano, hay margen de sobra para consultas de 45 min
 
   TIMEOUT_ACEPTACION_CHOFER: 30,
   ESPERA_NOTIFICAR_SIN_CHOFER: 120,
