@@ -17,7 +17,25 @@ const { choferPagoAlDia, consumirCodigoPromo, enPromoGratis, fechaStrBolivia } =
 // ASIGNAR CHOFER — FIX BUG#1 (race condition promo) + FIX BUG#7 (recursión)
 // ═══════════════════════════════════════════════════════════════════════════
 
+// Capa de protección: el paso más crítico del negocio (asignar chofer tras
+// "Confirmar"). Si CUALQUIER cosa falla adentro (hipo de MySQL, Traccar, etc.),
+// el pasajero NUNCA queda mudo: se le avisa y se lo deja en lista de espera para
+// que el reintento automático (intervals) lo tome. Sin esto, un error tras
+// confirmar dejaba al pasajero sin ninguna respuesta.
 async function asignarChofer(userPhone, session, excludeTraccarIds = [], intento = 0) {
+  try {
+    return await _asignarChoferImpl(userPhone, session, excludeTraccarIds, intento);
+  } catch (e) {
+    log.error("[ASIGNAR] Error inesperado:", e.message, e.stack);
+    if (!session?.origenWeb) {
+      try { await enviarMensaje(userPhone, "⚠️ Tuvimos un problema técnico asignando tu chofer. Ya lo estamos reintentando; si no llega en un ratito, volvé a escribir tu destino. 🙏"); } catch (_) {}
+    }
+    try { await addListaEspera(userPhone, { ...session, step: "sin_chofer" }); } catch (_) {}
+    return false;
+  }
+}
+
+async function _asignarChoferImpl(userPhone, session, excludeTraccarIds = [], intento = 0) {
   // Validar que origen y destino no sean el mismo punto
   if (session?.ubicaciones?.origen && session?.ubicaciones?.destino) {
     const o = session.ubicaciones.origen;

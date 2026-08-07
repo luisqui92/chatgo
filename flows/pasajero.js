@@ -1637,7 +1637,14 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
         // El usuario está mandando el pin de su casa o trabajo para guardarlo
         const tipoLugar = session.lugarPersonalPendiente; // "casa" o "trabajo"
         const esOrigen = session.step === "guardando_lugar_personal_origen";
-        
+
+        // PROTECCIÓN: si en vez del PIN mandó texto/audio, coords viene null.
+        // Antes esto crasheaba (coords.lat) y dejaba al usuario TRABADO 30 min.
+        if (!coords || coords.lat == null) {
+          await enviarMensaje(phone, `📍 Necesito la *ubicación* de tu ${tipoLugar || "lugar"} como *pin*, no texto.\n\nTocá 📎 → *Ubicación* → enviá el pin, o escribí *CANCELAR* para salir.`);
+          return;
+        }
+
         // Resolver dirección amigable
         let nombreLugar = tipoLugar;
         try { 
