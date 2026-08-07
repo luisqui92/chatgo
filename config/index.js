@@ -12,6 +12,7 @@ const CONFIG = {
   OPENAI_KEY: process.env.OPENAI_KEY,
   ASSEMBLYAI_API_KEY: process.env.ASSEMBLYAI_API_KEY,
   MONGODB_URI: process.env.MONGODB_URI,
+  MYSQL_SALUD_URL: process.env.MYSQL_SALUD_URL, // Cloud SQL separado, solo para ChatGo Salud
   ADMIN_PHONE: process.env.ADMIN_PHONE || "59162741818",
   QR_IMAGE_URL: process.env.QR_IMAGE_URL || (process.env.APP_URL ? `${process.env.APP_URL}/qr/pago.jpg` : null),
 
