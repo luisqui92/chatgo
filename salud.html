@@ -63,7 +63,15 @@ button.link{background:none;border:none;color:var(--primary);font-size:13px;marg
 .nota-titulo{font-size:13px;font-weight:700;color:var(--primary);margin-bottom:10px;}
 .nota-campo{font-size:13px;line-height:1.5;margin-bottom:8px;}
 .nota-campo b{color:var(--text);}
-.paciente-info{font-size:13px;color:var(--text-muted);margin-top:4px;}
+.paciente-info{font-size:13px;color:var(--text-muted);margin-top:4px;line-height:1.5;}
+.avatar-card{text-align:center;}
+.avatar{width:60px;height:60px;border-radius:50%;background:linear-gradient(160deg,var(--accent-2),var(--primary));color:#fff;font-size:22px;font-weight:700;display:flex;align-items:center;justify-content:center;margin:0 auto 10px;}
+.stats-row{display:flex;gap:10px;margin-bottom:14px;}
+.stat{flex:1;background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px 8px;text-align:center;box-shadow:0 1px 3px rgba(15,39,51,.05);}
+.stat-num{font-size:18px;font-weight:700;color:var(--primary);}
+.stat-lbl{font-size:11px;color:var(--text-muted);margin-top:2px;}
+.dato-row{font-size:14px;padding:9px 0;border-bottom:1px solid var(--border);}
+.dato-row:last-child{border-bottom:none;}
 
 /* ─── Panel "escuchando" con onda de voz, estilo asistente clínico ────── */
 .listen-panel{display:none;background:linear-gradient(160deg,var(--primary-dark),#0a2e38);border-radius:16px;padding:22px 18px;text-align:center;color:#fff;margin-bottom:16px;}
@@ -118,6 +126,11 @@ function edadDesde(fechaNacimiento) {
   const m = hoy.getMonth() - nac.getMonth();
   if (m < 0 || (m === 0 && hoy.getDate() < nac.getDate())) edad--;
   return edad;
+}
+
+function iniciales(nombre) {
+  const partes = String(nombre || "").trim().split(/\s+/);
+  return ((partes[0]?.[0] || "") + (partes[1]?.[0] || "")).toUpperCase();
 }
 
 async function api(path, opts = {}) {
@@ -304,12 +317,40 @@ function pintarKardex(p, consultas, tabActiva) {
   const edad = edadDesde(p.fechaNacimiento);
   const estadoTxt = { procesando: "⏳ Transcribiendo", completado: "✅ Listo", error: "⚠️ Error" };
 
+  const consultasCompletas = consultas.filter(c => c.estado === "completado");
+  const ultima = consultas[0]; // ya viene ordenado por fecha descendente
+  const ultimaConDx = consultasCompletas.find(c => c.notaClinica && (c.notaClinica.diagnostico || c.notaClinica.motivoConsulta));
+
   const tabPaciente = `
-    <div class="card">
+    <div class="card avatar-card">
+      <div class="avatar">${esc(iniciales(p.nombre))}</div>
+      <div class="nombre" style="font-size:16px;font-weight:700">${esc(p.nombre)}</div>
       <div class="paciente-info">${edad != null ? edad + " años" : "Edad no registrada"}${p.sexo ? " · " + esc(p.sexo) : ""}</div>
-      ${p.telefono ? `<div class="paciente-info" style="margin-top:6px">📞 ${esc(p.telefono)}</div>` : ""}
-      ${p.notas ? `<div class="paciente-info" style="margin-top:6px">📝 ${esc(p.notas)}</div>` : ""}
-    </div>`;
+    </div>
+
+    <div class="stats-row">
+      <div class="stat"><div class="stat-num">${consultas.length}</div><div class="stat-lbl">Consultas</div></div>
+      <div class="stat"><div class="stat-num">${ultima ? new Date(ultima.createdAt).toLocaleDateString("es-BO", {day:"2-digit", month:"short"}) : "—"}</div><div class="stat-lbl">Última visita</div></div>
+    </div>
+
+    <div class="card">
+      <div class="seccion-titulo" style="margin-top:0">Contacto</div>
+      <div class="dato-row">📞 ${p.telefono ? esc(p.telefono) : "No registrado"}</div>
+      <div class="dato-row">🎂 ${p.fechaNacimiento ? new Date(p.fechaNacimiento).toLocaleDateString("es-BO") : "No registrada"}</div>
+    </div>
+
+    <div class="card">
+      <div class="seccion-titulo" style="margin-top:0">Notas</div>
+      <div class="paciente-info">${p.notas ? esc(p.notas) : "Sin notas registradas todavía."}</div>
+    </div>
+
+    ${ultimaConDx ? `
+    <div class="card">
+      <div class="seccion-titulo" style="margin-top:0">Último diagnóstico</div>
+      <div class="fecha" style="margin-bottom:6px">${new Date(ultimaConDx.createdAt).toLocaleDateString("es-BO")}</div>
+      ${ultimaConDx.notaClinica.motivoConsulta ? `<div class="nota-campo"><b>Motivo:</b> ${esc(ultimaConDx.notaClinica.motivoConsulta)}</div>` : ""}
+      ${ultimaConDx.notaClinica.diagnostico ? `<div class="nota-campo"><b>Diagnóstico:</b> ${esc(ultimaConDx.notaClinica.diagnostico)}</div>` : ""}
+    </div>` : ""}`;
 
   const tabConsultas = `
     <button class="secondary" id="btnNuevaConsulta">🎙️ Nueva consulta</button>
