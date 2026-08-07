@@ -6,7 +6,13 @@ const http = require("http");
 const os = require("os");
 const { CONFIG, log } = require("../config");
 const { Usuario, Chofer, Viaje, ListaEspera, CodigoPromo, LocationReference } = require("../db/models");
-const { getSession, updateSession, checkRateLimit, sessionCache, yaProcesoMensaje } = require("../services/session");
+const { getSession, updateSession, deleteSession, checkRateLimit, sessionCache, yaProcesoMensaje } = require("../services/session");
+
+// Steps que NO se resetean por inactividad (viaje/pedido activo en curso).
+const STEPS_ACTIVOS_PROTEGIDOS = new Set([
+  "esperando_chofer", "en_curso", "viaje_en_curso", "confirmando_viaje_voz",
+  "chofer_en_camino", "chofer_esperando_pasajero", "esperando_pasajero", "en_viaje",
+]);
 const { enviarMensaje, enviarBotones, verificarFirmaMeta, registrarNumeroEntrada } = require("../services/whatsapp");
 const { procesarModulos } = require("../modules");
 const { procesarVerificacionWeb } = require("./web");
@@ -138,7 +144,22 @@ app.post("/webhook", limitWebhook, async (req, res) => {
         // Los CHOFERES siempre se atienden por el número padre: las órdenes de
         // trabajo, botones y chat les llegan de UN solo número, escriban donde escriban
         if (esChofer) registrarNumeroEntrada(phone, CONFIG.WHATSAPP_PHONE_ID);
-        const session = await getSession(phone);
+        let session = await getSession(phone);
+
+        // ─── TIMEOUT DE INACTIVIDAD: reset silencioso al inicio ────────────────
+        // Si el usuario dejó una conversación a medias (pedir viaje, vinculación
+        // familiar, registro, etc.) y vuelve después de un rato, empieza de cero
+        // SIN mensaje de aviso. No tocamos viajes/pedidos activos.
+        if (session && session.step && session.step !== "inicio" &&
+            !STEPS_ACTIVOS_PROTEGIDOS.has(session.step)) {
+          const ultimaAct = session.updatedAt ? new Date(session.updatedAt).getTime() : 0;
+          const inactivoMs = ultimaAct ? Date.now() - ultimaAct : 0;
+          if (inactivoMs > CONFIG.TIMEOUT_INACTIVIDAD_MIN * 60 * 1000) {
+            log.info(`[TIMEOUT_SESION] ${phone} inactivo ${Math.round(inactivoMs / 60000)}min en step "${session.step}" → reset silencioso`);
+            try { await deleteSession(phone); } catch (_) {}
+            session = null; // el flujo lo trata como usuario nuevo (inicio)
+          }
+        }
 
         // Si es chofer registrado, NUNCA lo tratamos como pasajero por sesión residual.
         // Solo va al flujo pasajero si tiene un viaje activo como pasajero en DB.

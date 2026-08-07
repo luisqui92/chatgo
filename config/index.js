@@ -35,6 +35,10 @@ const CONFIG = {
   MAX_PARADAS: 3,
   // Tiempo máximo inactividad en flujo de pedido antes de limpiar sesión (30 minutos)
   SESSION_PEDIDO_TIMEOUT_MS: 30 * 60 * 1000,
+  // Inactividad tras la cual, al volver a escribir, la sesión se resetea al
+  // inicio EN SILENCIO (sin importar el paso: pedir viaje, vinculación, etc.).
+  // No aplica a viajes activos. Configurable con TIMEOUT_INACTIVIDAD_MIN.
+  TIMEOUT_INACTIVIDAD_MIN: Number(process.env.TIMEOUT_INACTIVIDAD_MIN || 10),
   // URL pública de la app (Railway o dominio propio)
   APP_URL: process.env.APP_URL || "",
   // Máximo de reintentos en asignarChofer para evitar recursión infinita
