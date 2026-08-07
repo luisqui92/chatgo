@@ -123,6 +123,13 @@ app.get("/qr/:filename", (req, res) => {
   res.sendFile(file);
 });
 
+// Logo de Vitalis (ChatGo Salud)
+app.get("/salud/logo.png", (_req, res) => {
+  const path = require("path");
+  res.setHeader("Cache-Control", "public, max-age=86400");
+  res.sendFile(path.join(__dirname, "public", "salud", "logo.png"));
+});
+
 // Web de consultas médicas (mismo dominio/certificado que la API, sin subdominio aparte)
 app.get("/salud", (_req, res) => {
   const path = require("path");
