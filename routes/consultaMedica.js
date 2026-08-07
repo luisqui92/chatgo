@@ -1,13 +1,13 @@
-// ChatGo — Consultas médicas: transcripción de audio largo con diarización (Deepgram)
+// ChatGo — Consultas médicas: transcripción de audio largo con diarización (AssemblyAI)
 // Prototipo: médicos suben el audio de la consulta (grabado en el celular o PC) y
-// reciben la transcripción separada por hablante. Login simple por teléfono,
-// sin contraseña — solo médicos ya registrados/activos pueden entrar.
+// reciben la transcripción separada por hablante. Login con teléfono + contraseña —
+// solo médicos ya registrados/activos pueden entrar.
 const express = require("express");
 const { CONFIG, log } = require("../config");
 const { Medico, ConsultaMedica } = require("../db/models");
 const { generarToken, requireAuth, hashPassword } = require("../services/auth");
 const { limitMedico } = require("../services/ratelimit");
-const { transcribirConsultaMedica } = require("../services/deepgram");
+const { transcribirConsultaMedica } = require("../services/assemblyai");
 
 const requireMedico = requireAuth(["medico"]);
 
@@ -70,7 +70,7 @@ module.exports = function (app) {
 
     try {
       const { transcripcionCompleta, segmentos, duracionSegundos } =
-        await transcribirConsultaMedica(audioBuffer, req.headers["content-type"]);
+        await transcribirConsultaMedica(audioBuffer);
 
       consulta.estado = "completado";
       consulta.transcripcionCompleta = transcripcionCompleta;
@@ -82,7 +82,7 @@ module.exports = function (app) {
     } catch (e) {
       log.error("[CONSULTA_MEDICA] Error transcribiendo:", e.response?.data || e.message);
       consulta.estado = "error";
-      consulta.error = e.response?.data?.err_msg || e.message;
+      consulta.error = e.response?.data?.error || e.message;
       await consulta.save();
       res.status(502).json({ ok: false, error: "No se pudo transcribir el audio", consultaId: consulta._id });
     }

@@ -379,8 +379,8 @@ const NotificacionPago = mongoose.model("NotificacionPago", notificacionPagoSche
 
 
 // ─── MÓDULO CONSULTAS MÉDICAS ────────────────────────────────────────────────
-// Médico que sube consultas para transcribir. Login simple por teléfono
-// (sin contraseña): solo médicos ya registrados/activos pueden entrar.
+// Médico que sube consultas para transcribir. Login con teléfono + contraseña;
+// solo médicos ya registrados/activos pueden entrar.
 const medicoSchema = new mongoose.Schema({
   phone: { type: String, unique: true, index: true, required: true },
   nombre: { type: String, required: true },
@@ -391,7 +391,7 @@ const medicoSchema = new mongoose.Schema({
 const Medico = mongoose.model("Medico", medicoSchema);
 
 // Una consulta médica transcrita: audio subido por el médico, diarizado
-// (separa quién habla) por Deepgram.
+// (separa quién habla) por AssemblyAI.
 const consultaMedicaSchema = new mongoose.Schema({
   medicoPhone: { type: String, index: true, required: true },
   pacienteNombre: { type: String, default: "" },
@@ -399,7 +399,7 @@ const consultaMedicaSchema = new mongoose.Schema({
   duracionSegundos: Number,
   transcripcionCompleta: String,
   segmentos: [{
-    hablante: Number,   // 0, 1, 2... según lo que detecta Deepgram (no sabe cuál es médico/paciente)
+    hablante: String,   // "A", "B"... según lo que detecta AssemblyAI (no sabe cuál es médico/paciente)
     texto: String,
     inicioSeg: Number,
     finSeg: Number,

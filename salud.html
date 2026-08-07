@@ -295,8 +295,8 @@ async function renderDetalle(id) {
       body = `<div class="error">⚠️ ${esc(c.error || "Ocurrió un error al transcribir")}</div>`;
     } else if (c.segmentos && c.segmentos.length) {
       body = c.segmentos.map(s => `
-        <div class="segmento h${s.hablante % 2}">
-          <div class="quien">Hablante ${s.hablante + 1}</div>
+        <div class="segmento h${s.hablante && s.hablante.charCodeAt(0) % 2}">
+          <div class="quien">Hablante ${esc(s.hablante)}</div>
           <div class="texto">${esc(s.texto)}</div>
         </div>`).join("");
     } else {

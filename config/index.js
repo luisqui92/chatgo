@@ -10,7 +10,7 @@ const CONFIG = {
   META_APP_SECRET: process.env.META_APP_SECRET,
   GOOGLE_MAPS_KEY: process.env.GOOGLE_MAPS_KEY,
   OPENAI_KEY: process.env.OPENAI_KEY,
-  DEEPGRAM_API_KEY: process.env.DEEPGRAM_API_KEY,
+  ASSEMBLYAI_API_KEY: process.env.ASSEMBLYAI_API_KEY,
   MONGODB_URI: process.env.MONGODB_URI,
   ADMIN_PHONE: process.env.ADMIN_PHONE || "59162741818",
   QR_IMAGE_URL: process.env.QR_IMAGE_URL || (process.env.APP_URL ? `${process.env.APP_URL}/qr/pago.jpg` : null),
@@ -18,7 +18,8 @@ const CONFIG = {
   TIMEOUT_OPENAI: 45000,
   TIMEOUT_GOOGLE: 10000,
   TIMEOUT_META: 15000,
-  TIMEOUT_DEEPGRAM: 180000, // consultas médicas largas (hasta ~1h de audio)
+  TIMEOUT_ASSEMBLYAI: 120000, // por cada llamada (subir audio, pedir transcripción, cada poll)
+  TIMEOUT_TRANSCRIPCION_TOTAL: 600000, // 10 min: presupuesto total esperando que termine una consulta larga
 
   TIMEOUT_ACEPTACION_CHOFER: 30,
   ESPERA_NOTIFICAR_SIN_CHOFER: 120,
@@ -158,8 +159,8 @@ if (!process.env.META_APP_SECRET) {
   log.warn("⚠️  META_APP_SECRET no configurado — el webhook acepta requests sin validar firma. Configúralo en producción.");
 }
 
-if (!process.env.DEEPGRAM_API_KEY) {
-  log.warn("⚠️  DEEPGRAM_API_KEY no configurado — la transcripción de consultas médicas fallará hasta que lo configures.");
+if (!process.env.ASSEMBLYAI_API_KEY) {
+  log.warn("⚠️  ASSEMBLYAI_API_KEY no configurado — la transcripción de consultas médicas fallará hasta que lo configures.");
 }
 
 
