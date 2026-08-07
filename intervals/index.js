@@ -71,15 +71,15 @@ setInterval(async () => {
 
         const segundos = (ahora.getTime() - new Date(espera.timestamp).getTime()) / 1000;
 
-        if (espera.ofertaActivaWialonId && espera.ofertaActivaHasta) {
+        if (espera.ofertaActivaChoferId && espera.ofertaActivaHasta) {
           const expirada = new Date(espera.ofertaActivaHasta) < ahora;
           if (!expirada) continue;
           log.info(`[ESPERA] Oferta expirada para ${espera.userPhone}`);
           await ListaEspera.update({
             where: { userPhone: espera.userPhone },
             data: {
-              ofertasRechazadas: [...(espera.ofertasRechazadas || []), espera.ofertaActivaWialonId],
-              ofertaActivaWialonId: null,
+              ofertasRechazadas: [...(espera.ofertasRechazadas || []), espera.ofertaActivaChoferId],
+              ofertaActivaChoferId: null,
               ofertaActivaHasta: null,
             },
           });
@@ -116,7 +116,7 @@ setInterval(async () => {
             await ListaEspera.update({
               where: { userPhone: espera.userPhone },
               data: {
-                ofertaActivaWialonId: chofer.traccarId,
+                ofertaActivaChoferId: chofer.traccarId,
                 ofertaActivaHasta,
                 ultimoMensajeAt: new Date(),
               },
@@ -137,7 +137,7 @@ setInterval(async () => {
           } else {
             await ListaEspera.update({
               where: { userPhone: espera.userPhone },
-              data: { ofertaActivaWialonId: chofer.traccarId, ofertaActivaHasta },
+              data: { ofertaActivaChoferId: chofer.traccarId, ofertaActivaHasta },
             });
             log.info(`[ESPERA] Anti-spam: chofer encontrado para ${espera.userPhone} pero mensaje reciente (${Math.round(msSinMensaje/1000)}s ago) — silencioso`);
           }

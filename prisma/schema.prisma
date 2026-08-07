@@ -48,7 +48,6 @@ model Usuario {
 model Chofer {
   id                          String    @id @default(uuid())
   phone                       String    @unique
-  wialonId                    String?   @unique
   traccarId                   String?   @unique
   fotoChofer                  String?
   fotoVehiculo                String?
@@ -84,7 +83,6 @@ model Viaje {
   id                      String    @id @default(uuid())
   usuarioPhone            String?
   choferPhone             String?
-  choferWialonId          String?
   choferTraccarId         String?
   choferNombre            String?
   choferPlaca             String?
@@ -187,7 +185,7 @@ model ListaEspera {
   tipoVehiculoSolicitado String?  // auto | moto | null
   timestamp             DateTime  @default(now())
   notificado            Boolean   @default(false)
-  ofertaActivaWialonId  String?
+  ofertaActivaChoferId  String?   // traccarId del chofer con la oferta activa
   ofertaActivaHasta     DateTime?
   ofertasRechazadas     Json?     // [String]
   ultimoMensajeAt       DateTime?
@@ -197,7 +195,7 @@ model ListaEspera {
 
   @@index([ciudad])
   @@index([timestamp])
-  @@index([ofertaActivaWialonId, timestamp])
+  @@index([ofertaActivaChoferId, timestamp])
   @@map("listaesperas")
 }
 

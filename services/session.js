@@ -68,7 +68,7 @@ async function addListaEspera(userPhone, session) {
     precio: session.precio ?? session.precioFinal ?? session.precioAuto ?? null,
     precioPorKm: session.precioPorKm ?? null,
     tipoVehiculoSolicitado: tipoSolicitado,
-    ofertaActivaWialonId: null,
+    ofertaActivaChoferId: null,
     ofertaActivaHasta: null,
   };
   return await ListaEspera.upsert({
