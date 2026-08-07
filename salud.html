@@ -56,6 +56,9 @@ button.link{background:none;border:none;color:var(--primary);font-size:13px;marg
 .segmento .quien{font-size:11px;color:var(--text-muted);margin-bottom:4px;font-weight:600;}
 .segmento .texto{font-size:14px;line-height:1.4;}
 .back{background:none;border:none;color:var(--primary);font-size:13px;margin-bottom:14px;font-weight:600;}
+.tabs{display:flex;gap:4px;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:4px;margin-bottom:16px;}
+.tab{flex:1;background:none;border:none;padding:10px;font-size:13px;font-weight:600;color:var(--text-muted);border-radius:7px;}
+.tab.activo{background:var(--primary);color:#fff;}
 .seccion-titulo{font-size:12px;font-weight:700;color:var(--primary);text-transform:uppercase;letter-spacing:.4px;margin:20px 0 8px;}
 .nota-titulo{font-size:13px;font-weight:700;color:var(--primary);margin-bottom:10px;}
 .nota-campo{font-size:13px;line-height:1.5;margin-bottom:8px;}
@@ -282,44 +285,64 @@ function renderNuevoPaciente() {
   };
 }
 
-// ─── DETALLE DE PACIENTE (Kardex): info + línea de tiempo de consultas ─
-async function renderPacienteDetalle(pacienteId) {
+// ─── DETALLE DE PACIENTE (Kardex con pestañas: Paciente / Consultas) ───
+// Trae los datos UNA vez; cambiar de pestaña es instantáneo (sin red),
+// para no estar yendo y viniendo cada vez que querés ver otra cosa.
+async function renderPacienteDetalle(pacienteId, tabInicial) {
   detenerPolling();
   app.innerHTML = `<div class="loading">⏳ Cargando...</div>`;
   try {
     const data = await api("/medico/pacientes/" + pacienteId);
-    const p = data.paciente;
-    const consultas = data.consultas || [];
-    const edad = edadDesde(p.fechaNacimiento);
-    const estadoTxt = { procesando: "⏳ Transcribiendo", completado: "✅ Listo", error: "⚠️ Error" };
-    app.innerHTML = `
-      <button class="back" id="btnBack">← Volver</button>
-      <div class="card">
-        <div class="nombre" style="font-size:17px;font-weight:700">${esc(p.nombre)}</div>
-        <div class="paciente-info">${edad != null ? edad + " años" : "Edad no registrada"}${p.sexo ? " · " + esc(p.sexo) : ""}${p.telefono ? " · " + esc(p.telefono) : ""}</div>
-        ${p.notas ? `<div class="paciente-info" style="margin-top:6px">📝 ${esc(p.notas)}</div>` : ""}
-      </div>
-      <button class="secondary" id="btnNuevaConsulta">🎙️ Nueva consulta</button>
-      <div class="seccion-titulo">Línea de tiempo</div>
-      ${consultas.length === 0 ? `<div class="empty">Todavía no hay consultas registradas.</div>` : ""}
-      ${consultas.map(c => `
-        <div class="item" data-id="${c._id}">
-          <div class="top">
-            <div class="fecha">${new Date(c.createdAt).toLocaleString("es-BO")}</div>
-            <span class="badge badge-${c.estado}">${estadoTxt[c.estado] || c.estado}</span>
-          </div>
-          ${c.notaClinica && c.notaClinica.motivoConsulta ? `<div class="preview">${esc(c.notaClinica.motivoConsulta)}</div>` : ""}
-          ${c.notaClinica && c.notaClinica.diagnostico ? `<div class="preview"><b>Dx:</b> ${esc(c.notaClinica.diagnostico)}</div>` : ""}
-        </div>`).join("")}
-    `;
-    document.getElementById("btnBack").onclick = renderDashboard;
+    pintarKardex(data.paciente, data.consultas || [], tabInicial || "consultas");
+  } catch (e) {
+    if (e.status === 401) return logout();
+    app.innerHTML = `<div class="error">${esc(e.error || "Error cargando el paciente")}</div>`;
+  }
+}
+
+function pintarKardex(p, consultas, tabActiva) {
+  const edad = edadDesde(p.fechaNacimiento);
+  const estadoTxt = { procesando: "⏳ Transcribiendo", completado: "✅ Listo", error: "⚠️ Error" };
+
+  const tabPaciente = `
+    <div class="card">
+      <div class="paciente-info">${edad != null ? edad + " años" : "Edad no registrada"}${p.sexo ? " · " + esc(p.sexo) : ""}</div>
+      ${p.telefono ? `<div class="paciente-info" style="margin-top:6px">📞 ${esc(p.telefono)}</div>` : ""}
+      ${p.notas ? `<div class="paciente-info" style="margin-top:6px">📝 ${esc(p.notas)}</div>` : ""}
+    </div>`;
+
+  const tabConsultas = `
+    <button class="secondary" id="btnNuevaConsulta">🎙️ Nueva consulta</button>
+    ${consultas.length === 0 ? `<div class="empty">Todavía no hay consultas registradas.</div>` : ""}
+    ${consultas.map(c => `
+      <div class="item" data-id="${c._id}">
+        <div class="top">
+          <div class="fecha">${new Date(c.createdAt).toLocaleString("es-BO")}</div>
+          <span class="badge badge-${c.estado}">${estadoTxt[c.estado] || c.estado}</span>
+        </div>
+        ${c.notaClinica && c.notaClinica.motivoConsulta ? `<div class="preview">${esc(c.notaClinica.motivoConsulta)}</div>` : ""}
+        ${c.notaClinica && c.notaClinica.diagnostico ? `<div class="preview"><b>Dx:</b> ${esc(c.notaClinica.diagnostico)}</div>` : ""}
+      </div>`).join("")}`;
+
+  app.innerHTML = `
+    <button class="back" id="btnBack">← Pacientes</button>
+    <div class="nombre" style="font-size:18px;font-weight:700;margin-bottom:10px">${esc(p.nombre)}</div>
+    <div class="tabs">
+      <button class="tab ${tabActiva === "paciente" ? "activo" : ""}" data-tab="paciente">Paciente</button>
+      <button class="tab ${tabActiva === "consultas" ? "activo" : ""}" data-tab="consultas">Consultas</button>
+    </div>
+    <div id="tabContent">${tabActiva === "paciente" ? tabPaciente : tabConsultas}</div>
+  `;
+
+  document.getElementById("btnBack").onclick = renderDashboard;
+  document.querySelectorAll(".tab").forEach(btn => {
+    btn.onclick = () => pintarKardex(p, consultas, btn.dataset.tab);
+  });
+  if (tabActiva === "consultas") {
     document.getElementById("btnNuevaConsulta").onclick = () => renderNuevaConsulta(p._id, p.nombre);
     document.querySelectorAll(".item").forEach(el => {
       el.onclick = () => renderDetalle(el.dataset.id);
     });
-  } catch (e) {
-    if (e.status === 401) return logout();
-    app.innerHTML = `<div class="error">${esc(e.error || "Error cargando el paciente")}</div>`;
   }
 }
 
@@ -346,7 +369,7 @@ function renderNuevaConsulta(pacienteId, pacienteNombre) {
       <div id="ncErr"></div>
       <button class="primary" id="ncSubir" style="display:none">Subir y transcribir</button>
     </div>`;
-  document.getElementById("btnBack").onclick = () => renderPacienteDetalle(pacienteId);
+  document.getElementById("btnBack").onclick = () => renderPacienteDetalle(pacienteId, "consultas");
 
   let mediaRecorder = null, chunks = [], blob = null, mimeType = "audio/webm";
   let seconds = 0, timerId = null;
@@ -539,7 +562,7 @@ async function renderDetalle(id, esRefrescoAutomatico) {
       ${notaHtml}
       <div style="margin-top:14px">${body}</div>
     `;
-    document.getElementById("btnBack").onclick = () => renderPacienteDetalle(c.pacienteId);
+    document.getElementById("btnBack").onclick = () => renderPacienteDetalle(c.pacienteId, "consultas");
 
     if (c.estado === "procesando" || (c.estado === "completado" && c.notaClinicaEstado === "pendiente")) {
       pollTimeout = setTimeout(() => renderDetalle(id, true), 8000);
