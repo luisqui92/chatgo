@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ChatGo Salud · Transcripción de consultas</title>
+<title>ChatGo Salud · Kardex inteligente</title>
 <style>
 :root{
   --primary:#0e7490;
@@ -30,7 +30,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;backgrou
 label{display:block;font-size:12px;color:var(--text-muted);margin-bottom:6px;margin-top:14px;}
 label:first-child{margin-top:0;}
 input,select{width:100%;background:#f7fafb;border:1px solid var(--border);color:var(--text);border-radius:8px;padding:11px;font-size:14px;}
-input:focus{outline:none;border-color:var(--primary);}
+input:focus,select:focus{outline:none;border-color:var(--primary);}
 button{font-family:inherit;}
 button.primary{width:100%;background:var(--primary);color:#fff;border:none;border-radius:8px;padding:13px;font-size:15px;font-weight:600;margin-top:18px;}
 button.primary:disabled{opacity:.5;}
@@ -38,10 +38,11 @@ button.secondary{width:100%;background:#e6f3f6;border:1px solid var(--border);co
 button.link{background:none;border:none;color:var(--primary);font-size:13px;margin-top:16px;width:100%;text-align:center;}
 .error{background:var(--danger-bg);border:1px solid rgba(185,28,28,.25);color:var(--danger);border-radius:8px;padding:10px 12px;font-size:13px;margin-top:14px;}
 .hint{font-size:12px;color:var(--text-muted);margin-top:8px;}
-.consulta{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:10px;box-shadow:0 1px 3px rgba(15,39,51,.05);}
-.consulta .top{display:flex;justify-content:space-between;align-items:center;}
-.consulta .nombre{font-size:15px;font-weight:600;}
-.consulta .fecha{font-size:11px;color:var(--text-muted);margin-top:4px;}
+.item{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:10px;box-shadow:0 1px 3px rgba(15,39,51,.05);cursor:pointer;}
+.item .top{display:flex;justify-content:space-between;align-items:center;}
+.item .nombre{font-size:15px;font-weight:600;}
+.item .fecha{font-size:11px;color:var(--text-muted);margin-top:4px;}
+.item .preview{font-size:12px;color:var(--text-muted);margin-top:6px;}
 .badge{font-size:11px;padding:3px 9px;border-radius:12px;white-space:nowrap;font-weight:600;}
 .badge-procesando{background:var(--warning-bg);color:var(--warning);}
 .badge-completado{background:var(--success-bg);color:var(--success);}
@@ -55,6 +56,11 @@ button.link{background:none;border:none;color:var(--primary);font-size:13px;marg
 .segmento .quien{font-size:11px;color:var(--text-muted);margin-bottom:4px;font-weight:600;}
 .segmento .texto{font-size:14px;line-height:1.4;}
 .back{background:none;border:none;color:var(--primary);font-size:13px;margin-bottom:14px;font-weight:600;}
+.seccion-titulo{font-size:12px;font-weight:700;color:var(--primary);text-transform:uppercase;letter-spacing:.4px;margin:20px 0 8px;}
+.nota-titulo{font-size:13px;font-weight:700;color:var(--primary);margin-bottom:10px;}
+.nota-campo{font-size:13px;line-height:1.5;margin-bottom:8px;}
+.nota-campo b{color:var(--text);}
+.paciente-info{font-size:13px;color:var(--text-muted);margin-top:4px;}
 
 /* ─── Panel "escuchando" con onda de voz, estilo asistente clínico ────── */
 .listen-panel{display:none;background:linear-gradient(160deg,var(--primary-dark),#0a2e38);border-radius:16px;padding:22px 18px;text-align:center;color:#fff;margin-bottom:16px;}
@@ -75,7 +81,7 @@ button.link{background:none;border:none;color:var(--primary);font-size:13px;marg
 <div class="header">
   <div>
     <h1>🩺 ChatGo Salud</h1>
-    <p id="headerSub">Transcripción de consultas</p>
+    <p id="headerSub">Kardex inteligente</p>
   </div>
   <button id="btnLogout" style="display:none">Salir</button>
 </div>
@@ -94,12 +100,22 @@ const app = document.getElementById("app");
 const headerSub = document.getElementById("headerSub");
 const btnLogout = document.getElementById("btnLogout");
 
-// La transcripción de consultas largas corre en segundo plano en el servidor;
-// mientras esté "procesando", esta pantalla se refresca sola cada tanto.
+// La transcripción y la nota clínica de consultas largas corren en segundo
+// plano en el servidor; mientras no terminan, la pantalla se refresca sola.
 let pollTimeout = null;
 function detenerPolling() { if (pollTimeout) { clearTimeout(pollTimeout); pollTimeout = null; } }
 
 function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+function edadDesde(fechaNacimiento) {
+  if (!fechaNacimiento) return null;
+  const nac = new Date(fechaNacimiento);
+  const hoy = new Date();
+  let edad = hoy.getFullYear() - nac.getFullYear();
+  const m = hoy.getMonth() - nac.getMonth();
+  if (m < 0 || (m === 0 && hoy.getDate() < nac.getDate())) edad--;
+  return edad;
+}
 
 async function api(path, opts = {}) {
   const headers = opts.headers || {};
@@ -116,7 +132,7 @@ function logout() {
   localStorage.removeItem("salud_token");
   localStorage.removeItem("salud_nombre");
   btnLogout.style.display = "none";
-  headerSub.textContent = "Transcripción de consultas";
+  headerSub.textContent = "Kardex inteligente";
   renderLogin();
 }
 btnLogout.onclick = logout;
@@ -189,46 +205,131 @@ function renderRegistro() {
   };
 }
 
-// ─── DASHBOARD ───────────────────────────────────────────────────────────
+// ─── DASHBOARD = LISTA DE PACIENTES ─────────────────────────────────────
 async function renderDashboard() {
   detenerPolling();
   headerSub.textContent = "Hola, " + (MEDICO_NOMBRE || "");
   btnLogout.style.display = "inline-block";
-  app.innerHTML = `<div class="loading">⏳ Cargando tus consultas...</div>`;
+  app.innerHTML = `<div class="loading">⏳ Cargando tus pacientes...</div>`;
   try {
-    const data = await api("/medico/consultas");
-    const items = data.consultas || [];
-    const estadoTxt = { procesando: "⏳ Procesando", completado: "✅ Listo", error: "⚠️ Error" };
+    const data = await api("/medico/pacientes");
+    const items = data.pacientes || [];
     app.innerHTML = `
-      <button class="secondary" id="btnNueva">🎙️ Nueva consulta</button>
-      ${items.length === 0 ? `<div class="empty">Todavía no subiste ninguna consulta.</div>` : ""}
-      ${items.map(c => `
-        <div class="consulta" data-id="${c._id}">
-          <div class="top">
-            <div class="nombre">${esc(c.pacienteNombre || "Sin nombre de paciente")}</div>
-            <span class="badge badge-${c.estado}">${estadoTxt[c.estado] || c.estado}</span>
-          </div>
-          <div class="fecha">${new Date(c.createdAt).toLocaleString("es-BO")}${c.duracionSegundos ? " · " + Math.round(c.duracionSegundos/60) + " min" : ""}</div>
-        </div>`).join("")}
+      <button class="secondary" id="btnNuevoPaciente">➕ Nuevo paciente</button>
+      ${items.length === 0 ? `<div class="empty">Todavía no registraste ningún paciente.</div>` : ""}
+      ${items.map(p => {
+        const edad = edadDesde(p.fechaNacimiento);
+        return `
+        <div class="item" data-id="${p._id}">
+          <div class="nombre">${esc(p.nombre)}</div>
+          <div class="paciente-info">${edad != null ? edad + " años" : ""}${edad != null && p.sexo ? " · " : ""}${esc(p.sexo || "")}</div>
+        </div>`;
+      }).join("")}
     `;
-    document.getElementById("btnNueva").onclick = renderNuevaConsulta;
-    document.querySelectorAll(".consulta").forEach(el => {
-      el.onclick = () => renderDetalle(el.dataset.id);
+    document.getElementById("btnNuevoPaciente").onclick = renderNuevoPaciente;
+    document.querySelectorAll(".item").forEach(el => {
+      el.onclick = () => renderPacienteDetalle(el.dataset.id);
     });
   } catch (e) {
     if (e.status === 401) return logout();
-    app.innerHTML = `<div class="error">${esc(e.error || "Error cargando consultas")}</div>`;
+    app.innerHTML = `<div class="error">${esc(e.error || "Error cargando pacientes")}</div>`;
   }
 }
 
-// ─── NUEVA CONSULTA (grabar con onda de voz en vivo, o subir archivo) ──
-function renderNuevaConsulta() {
+// ─── NUEVO PACIENTE ──────────────────────────────────────────────────────
+function renderNuevoPaciente() {
   detenerPolling();
   app.innerHTML = `
     <button class="back" id="btnBack">← Volver</button>
     <div class="card">
-      <label>Nombre del paciente (opcional)</label>
-      <input id="ncPaciente" type="text" placeholder="Ej: Juan Pérez">
+      <label>Nombre completo</label>
+      <input id="pNombre" type="text" placeholder="Ej: Juan Pérez">
+      <label>Fecha de nacimiento (opcional)</label>
+      <input id="pFecha" type="date">
+      <label>Sexo (opcional)</label>
+      <select id="pSexo">
+        <option value="">— Sin especificar —</option>
+        <option value="Femenino">Femenino</option>
+        <option value="Masculino">Masculino</option>
+        <option value="Otro">Otro</option>
+      </select>
+      <label>Teléfono (opcional)</label>
+      <input id="pTelefono" type="tel" placeholder="591XXXXXXXX">
+      <label>Notas (opcional)</label>
+      <input id="pNotas" type="text" placeholder="Alergias, observaciones generales...">
+      <div id="pErr"></div>
+      <button class="primary" id="pBtn">Guardar paciente</button>
+    </div>`;
+  document.getElementById("btnBack").onclick = renderDashboard;
+  document.getElementById("pBtn").onclick = async () => {
+    const nombre = document.getElementById("pNombre").value.trim();
+    const fechaNacimiento = document.getElementById("pFecha").value || null;
+    const sexo = document.getElementById("pSexo").value;
+    const telefono = document.getElementById("pTelefono").value.trim();
+    const notas = document.getElementById("pNotas").value.trim();
+    const errBox = document.getElementById("pErr");
+    errBox.innerHTML = "";
+    if (!nombre) { errBox.innerHTML = `<div class="error">El nombre es obligatorio</div>`; return; }
+    try {
+      const data = await api("/medico/pacientes", {
+        method: "POST", headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({ nombre, fechaNacimiento, sexo, telefono, notas }),
+      });
+      renderPacienteDetalle(data.paciente._id);
+    } catch (e) {
+      errBox.innerHTML = `<div class="error">${esc(e.error || "No se pudo guardar el paciente")}</div>`;
+    }
+  };
+}
+
+// ─── DETALLE DE PACIENTE (Kardex): info + línea de tiempo de consultas ─
+async function renderPacienteDetalle(pacienteId) {
+  detenerPolling();
+  app.innerHTML = `<div class="loading">⏳ Cargando...</div>`;
+  try {
+    const data = await api("/medico/pacientes/" + pacienteId);
+    const p = data.paciente;
+    const consultas = data.consultas || [];
+    const edad = edadDesde(p.fechaNacimiento);
+    const estadoTxt = { procesando: "⏳ Transcribiendo", completado: "✅ Listo", error: "⚠️ Error" };
+    app.innerHTML = `
+      <button class="back" id="btnBack">← Volver</button>
+      <div class="card">
+        <div class="nombre" style="font-size:17px;font-weight:700">${esc(p.nombre)}</div>
+        <div class="paciente-info">${edad != null ? edad + " años" : "Edad no registrada"}${p.sexo ? " · " + esc(p.sexo) : ""}${p.telefono ? " · " + esc(p.telefono) : ""}</div>
+        ${p.notas ? `<div class="paciente-info" style="margin-top:6px">📝 ${esc(p.notas)}</div>` : ""}
+      </div>
+      <button class="secondary" id="btnNuevaConsulta">🎙️ Nueva consulta</button>
+      <div class="seccion-titulo">Línea de tiempo</div>
+      ${consultas.length === 0 ? `<div class="empty">Todavía no hay consultas registradas.</div>` : ""}
+      ${consultas.map(c => `
+        <div class="item" data-id="${c._id}">
+          <div class="top">
+            <div class="fecha">${new Date(c.createdAt).toLocaleString("es-BO")}</div>
+            <span class="badge badge-${c.estado}">${estadoTxt[c.estado] || c.estado}</span>
+          </div>
+          ${c.notaClinica && c.notaClinica.motivoConsulta ? `<div class="preview">${esc(c.notaClinica.motivoConsulta)}</div>` : ""}
+          ${c.notaClinica && c.notaClinica.diagnostico ? `<div class="preview"><b>Dx:</b> ${esc(c.notaClinica.diagnostico)}</div>` : ""}
+        </div>`).join("")}
+    `;
+    document.getElementById("btnBack").onclick = renderDashboard;
+    document.getElementById("btnNuevaConsulta").onclick = () => renderNuevaConsulta(p._id, p.nombre);
+    document.querySelectorAll(".item").forEach(el => {
+      el.onclick = () => renderDetalle(el.dataset.id);
+    });
+  } catch (e) {
+    if (e.status === 401) return logout();
+    app.innerHTML = `<div class="error">${esc(e.error || "Error cargando el paciente")}</div>`;
+  }
+}
+
+// ─── NUEVA CONSULTA (grabar con onda de voz en vivo, o subir archivo) ──
+function renderNuevaConsulta(pacienteId, pacienteNombre) {
+  detenerPolling();
+  app.innerHTML = `
+    <button class="back" id="btnBack">← Volver</button>
+    <div class="card">
+      <div class="hint" style="margin-bottom:14px">Paciente: <b>${esc(pacienteNombre)}</b></div>
 
       <div class="listen-panel" id="listenPanel">
         <canvas id="waveCanvas"></canvas>
@@ -245,7 +346,7 @@ function renderNuevaConsulta() {
       <div id="ncErr"></div>
       <button class="primary" id="ncSubir" style="display:none">Subir y transcribir</button>
     </div>`;
-  document.getElementById("btnBack").onclick = renderDashboard;
+  document.getElementById("btnBack").onclick = () => renderPacienteDetalle(pacienteId);
 
   let mediaRecorder = null, chunks = [], blob = null, mimeType = "audio/webm";
   let seconds = 0, timerId = null;
@@ -361,10 +462,8 @@ function renderNuevaConsulta() {
     ncErr.innerHTML = "";
     ncSubir.disabled = true;
     ncSubir.textContent = "Subiendo audio...";
-    const pacienteNombre = document.getElementById("ncPaciente").value.trim();
     try {
-      const qs = pacienteNombre ? "?pacienteNombre=" + encodeURIComponent(pacienteNombre) : "";
-      const data = await api("/medico/consultas" + qs, {
+      const data = await api("/medico/consultas?pacienteId=" + encodeURIComponent(pacienteId), {
         method: "POST",
         headers: { "Content-Type": mimeType || "audio/webm" },
         body: blob,
@@ -379,23 +478,50 @@ function renderNuevaConsulta() {
   };
 }
 
-// ─── DETALLE ─────────────────────────────────────────────────────────────
-// Si la consulta todavía está "procesando" (audios de 30-45 min pueden tardar
-// varios minutos), esta pantalla se refresca sola hasta que termine.
+// ─── DETALLE DE CONSULTA: transcripción + nota clínica generada por IA ──
+// Mientras la transcripción o la nota clínica siguen en camino, esta
+// pantalla se refresca sola cada 8s hasta que ambas terminan.
 async function renderDetalle(id, esRefrescoAutomatico) {
   detenerPolling();
   if (!esRefrescoAutomatico) app.innerHTML = `<div class="loading">⏳ Cargando...</div>`;
   try {
     const data = await api("/medico/consultas/" + id);
     const c = data.consulta;
+
+    let notaHtml = "";
+    if (c.estado === "completado") {
+      if (c.notaClinicaEstado === "pendiente") {
+        notaHtml = `<div class="card"><div class="hint">🧠 Generando nota clínica...</div></div>`;
+      } else if (c.notaClinicaEstado === "error") {
+        notaHtml = `<div class="card"><div class="error">⚠️ No se pudo generar la nota clínica automática. La transcripción completa queda más abajo.</div></div>`;
+      } else if (c.notaClinica) {
+        const n = c.notaClinica;
+        const meds = (n.medicamentosRecetados || []).map(m =>
+          esc(m.nombre + (m.dosis ? " " + m.dosis : "") + (m.frecuencia ? " — " + m.frecuencia : ""))
+        ).join("; ");
+        notaHtml = `
+          <div class="card">
+            <div class="nota-titulo">🧠 Nota clínica generada por IA (revisar antes de usar)</div>
+            ${n.motivoConsulta ? `<div class="nota-campo"><b>Motivo:</b> ${esc(n.motivoConsulta)}</div>` : ""}
+            ${(n.sintomas||[]).length ? `<div class="nota-campo"><b>Síntomas:</b> ${esc(n.sintomas.join(", "))}</div>` : ""}
+            ${n.antecedentesRelevantes ? `<div class="nota-campo"><b>Antecedentes:</b> ${esc(n.antecedentesRelevantes)}</div>` : ""}
+            ${n.diagnostico ? `<div class="nota-campo"><b>Diagnóstico:</b> ${esc(n.diagnostico)}</div>` : ""}
+            ${(n.diagnosticosDiferenciales||[]).length ? `<div class="nota-campo"><b>Diferenciales:</b> ${esc(n.diagnosticosDiferenciales.join(", "))}</div>` : ""}
+            ${n.plan ? `<div class="nota-campo"><b>Plan:</b> ${esc(n.plan)}</div>` : ""}
+            ${meds ? `<div class="nota-campo"><b>Medicamentos:</b> ${meds}</div>` : ""}
+            ${(n.examenesSolicitados||[]).length ? `<div class="nota-campo"><b>Exámenes:</b> ${esc(n.examenesSolicitados.join(", "))}</div>` : ""}
+            ${n.proximoControl ? `<div class="nota-campo"><b>Próximo control:</b> ${esc(n.proximoControl)}</div>` : ""}
+          </div>`;
+      }
+    }
+
     let body = "";
     if (c.estado === "procesando") {
       body = `<div class="hint">⏳ Transcribiendo tu consulta... para audios largos puede tardar varios minutos. Esta pantalla se actualiza sola, no hace falta que hagas nada.</div>`;
-      pollTimeout = setTimeout(() => renderDetalle(id, true), 8000);
     } else if (c.estado === "error") {
       body = `<div class="error">⚠️ ${esc(c.error || "Ocurrió un error al transcribir")}</div>`;
     } else if (c.segmentos && c.segmentos.length) {
-      body = c.segmentos.map(s => `
+      body = `<div class="seccion-titulo">Transcripción</div>` + c.segmentos.map(s => `
         <div class="segmento h${s.hablante && s.hablante.charCodeAt(0) % 2}">
           <div class="quien">Hablante ${esc(s.hablante)}</div>
           <div class="texto">${esc(s.texto)}</div>
@@ -403,15 +529,21 @@ async function renderDetalle(id, esRefrescoAutomatico) {
     } else {
       body = `<div class="hint">${esc(c.transcripcionCompleta || "Sin transcripción")}</div>`;
     }
+
     app.innerHTML = `
       <button class="back" id="btnBack">← Volver</button>
       <div class="card">
         <div class="nombre" style="font-size:16px;font-weight:600">${esc(c.pacienteNombre || "Sin nombre de paciente")}</div>
         <div class="fecha">${new Date(c.createdAt).toLocaleString("es-BO")}${c.duracionSegundos ? " · " + Math.round(c.duracionSegundos/60) + " min" : ""}</div>
       </div>
+      ${notaHtml}
       <div style="margin-top:14px">${body}</div>
     `;
-    document.getElementById("btnBack").onclick = renderDashboard;
+    document.getElementById("btnBack").onclick = () => renderPacienteDetalle(c.pacienteId);
+
+    if (c.estado === "procesando" || (c.estado === "completado" && c.notaClinicaEstado === "pendiente")) {
+      pollTimeout = setTimeout(() => renderDetalle(id, true), 8000);
+    }
   } catch (e) {
     if (e.status === 401) return logout();
     app.innerHTML = `<div class="error">${esc(e.error || "Error cargando la consulta")}</div>`;

@@ -94,6 +94,7 @@ require("./routes/webhook")(app, allDeps);
 require("./routes/admin")(app, allDeps);
 require("./routes/pagoNotificacion")(app, allDeps);
 require("./routes/consultaMedica")(app, allDeps);
+require("./routes/pacientes")(app, allDeps);
 
 // ─── INTERVALS ────────────────────────────────────────────────────────────────
 const { iniciarIntervals } = require("./intervals");

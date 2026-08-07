@@ -391,11 +391,26 @@ const medicoSchema = new mongoose.Schema({
 }, { timestamps: true });
 const Medico = mongoose.model("Medico", medicoSchema);
 
+// Paciente: la entidad central del Kardex. Todo lo demás (consultas, y más
+// adelante medicamentos/antecedentes/signos vitales) cuelga de acá.
+const pacienteSchema = new mongoose.Schema({
+  medicoPhone: { type: String, index: true, required: true },
+  nombre: { type: String, required: true },
+  fechaNacimiento: { type: Date, default: null },
+  sexo: { type: String, default: "" },
+  telefono: { type: String, default: "" },
+  notas: { type: String, default: "" },
+}, { timestamps: true });
+pacienteSchema.index({ medicoPhone: 1, nombre: 1 });
+const Paciente = mongoose.model("Paciente", pacienteSchema);
+
 // Una consulta médica transcrita: audio subido por el médico, diarizado
-// (separa quién habla) por AssemblyAI.
+// (separa quién habla) por AssemblyAI. Ligada a un Paciente real (no texto
+// libre) para que la línea de tiempo del Kardex tenga sentido.
 const consultaMedicaSchema = new mongoose.Schema({
   medicoPhone: { type: String, index: true, required: true },
-  pacienteNombre: { type: String, default: "" },
+  pacienteId: { type: mongoose.Schema.Types.ObjectId, ref: "Paciente", required: true, index: true },
+  pacienteNombre: { type: String, default: "" }, // copia del nombre al momento de crear, para no tener que hacer join en las listas
   estado: { type: String, enum: ["procesando", "completado", "error"], default: "procesando", index: true },
   duracionSegundos: Number,
   transcripcionCompleta: String,
@@ -406,8 +421,24 @@ const consultaMedicaSchema = new mongoose.Schema({
     finSeg: Number,
   }],
   error: String,
+  // Nota clínica estructurada, generada por IA a partir de la transcripción
+  // una vez que esta termina. Es un segundo paso, independiente del de arriba.
+  notaClinicaEstado: { type: String, enum: ["pendiente", "completado", "error"], default: "pendiente" },
+  notaClinica: {
+    motivoConsulta: String,
+    sintomas: [String],
+    antecedentesRelevantes: String,
+    diagnostico: String,
+    diagnosticosDiferenciales: [String],
+    plan: String,
+    medicamentosRecetados: [{ nombre: String, dosis: String, frecuencia: String }],
+    examenesSolicitados: [String],
+    proximoControl: String,
+  },
+  notaClinicaError: String,
 }, { timestamps: true });
 consultaMedicaSchema.index({ medicoPhone: 1, createdAt: -1 });
+consultaMedicaSchema.index({ pacienteId: 1, createdAt: -1 });
 const ConsultaMedica = mongoose.model("ConsultaMedica", consultaMedicaSchema);
 
-module.exports = { Usuario, Chofer, Viaje, SessionState, ListaEspera, RateLimit, CodigoPromo, LocationReference, Demanda, EventoChofer, AlertaSeg, Surge, ViajeDemo, EsquinaMapeada, PreRegistroFlota, Flota, NotificacionPago, Medico, ConsultaMedica };
+module.exports = { Usuario, Chofer, Viaje, SessionState, ListaEspera, RateLimit, CodigoPromo, LocationReference, Demanda, EventoChofer, AlertaSeg, Surge, ViajeDemo, EsquinaMapeada, PreRegistroFlota, Flota, NotificacionPago, Medico, Paciente, ConsultaMedica };

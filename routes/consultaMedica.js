@@ -5,10 +5,11 @@
 // el resto de chatgo (colecciones separadas: medicos, consultamedicas).
 const express = require("express");
 const { CONFIG, log } = require("../config");
-const { Medico, ConsultaMedica } = require("../db/models");
+const { Medico, Paciente, ConsultaMedica } = require("../db/models");
 const { generarToken, requireAuth, hashPassword } = require("../services/auth");
 const { limitMedico } = require("../services/ratelimit");
 const { transcribirConsultaMedica } = require("../services/assemblyai");
+const { generarNotaClinica } = require("../services/notaClinica");
 
 const requireMedico = requireAuth(["medico"]);
 
@@ -71,8 +72,14 @@ module.exports = function (app) {
       return res.status(400).json({ error: "Falta el audio (Content-Type debe ser audio/*)" });
     }
 
-    const pacienteNombre = String(req.query.pacienteNombre || "").trim();
-    const consulta = await ConsultaMedica.create({ medicoPhone, pacienteNombre, estado: "procesando" });
+    const pacienteId = String(req.query.pacienteId || "").trim();
+    if (!pacienteId) return res.status(400).json({ error: "Falta pacienteId — elegí o creá un paciente antes de grabar" });
+    const paciente = await Paciente.findOne({ _id: pacienteId, medicoPhone });
+    if (!paciente) return res.status(404).json({ error: "Paciente no encontrado" });
+
+    const consulta = await ConsultaMedica.create({
+      medicoPhone, pacienteId: paciente._id, pacienteNombre: paciente.nombre, estado: "procesando",
+    });
 
     res.status(202).json({ ok: true, consulta });
 
@@ -82,6 +89,16 @@ module.exports = function (app) {
         consulta.transcripcionCompleta = transcripcionCompleta;
         consulta.segmentos = segmentos;
         consulta.duracionSegundos = duracionSegundos;
+        await consulta.save();
+
+        try {
+          consulta.notaClinica = await generarNotaClinica(transcripcionCompleta);
+          consulta.notaClinicaEstado = "completado";
+        } catch (e) {
+          log.error("[NOTA_CLINICA]", e.response?.data || e.message);
+          consulta.notaClinicaEstado = "error";
+          consulta.notaClinicaError = e.message;
+        }
         await consulta.save();
       })
       .catch(async (e) => {
