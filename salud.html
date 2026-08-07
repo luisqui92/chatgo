@@ -195,7 +195,7 @@ async function renderDashboard() {
       <button class="secondary" id="btnNueva">🎙️ Nueva consulta</button>
       ${items.length === 0 ? `<div class="empty">Todavía no subiste ninguna consulta.</div>` : ""}
       ${items.map(c => `
-        <div class="consulta" data-id="${c.id}">
+        <div class="consulta" data-id="${c._id}">
           <div class="top">
             <div class="nombre">${esc(c.pacienteNombre || "Sin nombre de paciente")}</div>
             <span class="badge badge-${c.estado}">${estadoTxt[c.estado] || c.estado}</span>
@@ -360,7 +360,7 @@ function renderNuevaConsulta() {
         headers: { "Content-Type": mimeType || "audio/webm" },
         body: blob,
       });
-      renderDetalle(data.consulta.id);
+      renderDetalle(data.consulta._id);
     } catch (e) {
       // no se pierde la grabación: se puede reintentar sin volver a grabar
       ncSubir.disabled = false;

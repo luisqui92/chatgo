@@ -1,11 +1,11 @@
 // ChatGo — Consultas médicas: transcripción de audio largo con diarización (AssemblyAI)
 // Prototipo: médicos suben el audio de la consulta (grabado en el celular o PC) y
 // reciben la transcripción separada por hablante. Login con teléfono + contraseña —
-// solo médicos ya registrados/activos pueden entrar. Datos en MySQL (Cloud SQL),
-// separado por completo de la base de MongoDB que usa el bot de taxis.
+// solo médicos ya registrados/activos pueden entrar. Datos en un cluster de MongoDB
+// APARTE (db/modelsSalud.js), separado por completo del que usa el bot de taxis.
 const express = require("express");
 const { CONFIG, log } = require("../config");
-const sql = require("../db/sqlSalud");
+const { Medico, ConsultaMedica } = require("../db/modelsSalud");
 const { generarToken, requireAuth, hashPassword } = require("../services/auth");
 const { limitMedico } = require("../services/ratelimit");
 const { transcribirConsultaMedica } = require("../services/assemblyai");
@@ -17,10 +17,10 @@ const requireMedico = requireAuth(["medico"]);
 const audioRaw = express.raw({ type: "audio/*", limit: "80mb" });
 
 module.exports = function (app) {
-  // Si todavía no se configuró MYSQL_SALUD_URL, avisar en vez de tirar 500 raros
+  // Si todavía no se configuró MONGODB_URI_SALUD, avisar en vez de tirar 500 raros
   app.use("/medico", (req, res, next) => {
-    if (!sql.estaConfigurado()) {
-      return res.status(503).json({ error: "Módulo de salud no configurado (falta MYSQL_SALUD_URL)" });
+    if (!Medico) {
+      return res.status(503).json({ error: "Módulo de salud no configurado (falta MONGODB_URI_SALUD)" });
     }
     next();
   });
@@ -35,11 +35,11 @@ module.exports = function (app) {
       if (!phone || !nombre) return res.status(400).json({ error: "phone y nombre son requeridos" });
       if (password.length < 8) return res.status(400).json({ error: "La contraseña debe tener al menos 8 caracteres" });
 
-      const yaExiste = await sql.medicoBuscarPorPhone(phone);
+      const yaExiste = await Medico.findOne({ phone });
       if (yaExiste) return res.status(409).json({ error: "Ese teléfono ya está registrado" });
 
-      await sql.medicoCrear({ phone, nombre, especialidad, passwordHash: hashPassword(password) });
-      res.json({ ok: true, phone, nombre });
+      const medico = await Medico.create({ phone, nombre, especialidad, passwordHash: hashPassword(password), activo: true });
+      res.json({ ok: true, phone: medico.phone, nombre: medico.nombre });
     } catch (e) {
       log.error("[MEDICO_REGISTRO]", e.message);
       res.status(500).json({ error: "Error registrando médico" });
@@ -53,8 +53,8 @@ module.exports = function (app) {
       const password = String(req.body?.password || "");
       if (!phone || !password) return res.status(400).json({ error: "phone y password son requeridos" });
 
-      const medico = await sql.medicoBuscarPorPhone(phone);
-      if (!medico || !medico.activo || medico.password_hash !== hashPassword(password)) {
+      const medico = await Medico.findOne({ phone, activo: true });
+      if (!medico || medico.passwordHash !== hashPassword(password)) {
         return res.status(401).json({ error: "Teléfono o contraseña incorrectos" });
       }
 
@@ -75,18 +75,25 @@ module.exports = function (app) {
     }
 
     const pacienteNombre = String(req.query.pacienteNombre || "").trim();
-    const id = await sql.consultaCrear({ medicoPhone, pacienteNombre });
+    const consulta = await ConsultaMedica.create({ medicoPhone, pacienteNombre, estado: "procesando" });
 
     try {
       const { transcripcionCompleta, segmentos, duracionSegundos } =
         await transcribirConsultaMedica(audioBuffer);
 
-      await sql.consultaMarcarCompletada(id, { transcripcionCompleta, segmentos, duracionSegundos });
-      res.status(201).json({ ok: true, consulta: { id, pacienteNombre, estado: "completado", transcripcionCompleta, segmentos, duracionSegundos } });
+      consulta.estado = "completado";
+      consulta.transcripcionCompleta = transcripcionCompleta;
+      consulta.segmentos = segmentos;
+      consulta.duracionSegundos = duracionSegundos;
+      await consulta.save();
+
+      res.status(201).json({ ok: true, consulta });
     } catch (e) {
       log.error("[CONSULTA_MEDICA] Error transcribiendo:", e.response?.data || e.message);
-      await sql.consultaMarcarError(id, e.response?.data?.error || e.message);
-      res.status(502).json({ ok: false, error: "No se pudo transcribir el audio", consultaId: id });
+      consulta.estado = "error";
+      consulta.error = e.response?.data?.error || e.message;
+      await consulta.save();
+      res.status(502).json({ ok: false, error: "No se pudo transcribir el audio", consultaId: consulta._id });
     }
   });
 
@@ -94,7 +101,11 @@ module.exports = function (app) {
   app.get("/medico/consultas", requireMedico, async (req, res) => {
     try {
       const medicoPhone = req.adminUser.usuario;
-      const consultas = await sql.consultaListarPorMedico(medicoPhone);
+      const consultas = await ConsultaMedica.find({ medicoPhone })
+        .select("pacienteNombre estado duracionSegundos createdAt")
+        .sort({ createdAt: -1 })
+        .limit(50)
+        .lean();
       res.json({ consultas });
     } catch (e) {
       log.error("[MEDICO_CONSULTAS_LIST]", e.message);
@@ -106,7 +117,7 @@ module.exports = function (app) {
   app.get("/medico/consultas/:id", requireMedico, async (req, res) => {
     try {
       const medicoPhone = req.adminUser.usuario;
-      const consulta = await sql.consultaObtenerDetalle(req.params.id, medicoPhone);
+      const consulta = await ConsultaMedica.findOne({ _id: req.params.id, medicoPhone }).lean();
       if (!consulta) return res.status(404).json({ error: "Consulta no encontrada" });
       res.json({ consulta });
     } catch (e) {
