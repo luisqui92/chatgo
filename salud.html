@@ -59,8 +59,8 @@ button.link{background:none;border:none;color:var(--primary);font-size:13px;marg
 .segmento .quien{font-size:11px;color:var(--text-muted);margin-bottom:4px;font-weight:600;}
 .segmento .texto{font-size:14px;line-height:1.4;}
 .back{background:none;border:none;color:var(--primary);font-size:13px;margin-bottom:14px;font-weight:600;}
-.tabs{display:flex;gap:4px;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:4px;margin-bottom:16px;}
-.tab{flex:1;background:none;border:none;padding:10px;font-size:13px;font-weight:600;color:var(--text-muted);border-radius:7px;}
+.tabs{display:flex;gap:4px;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:4px;margin-bottom:16px;overflow-x:auto;}
+.tab{flex:0 0 auto;background:none;border:none;padding:10px 14px;font-size:13px;font-weight:600;color:var(--text-muted);border-radius:7px;white-space:nowrap;}
 .tab.activo{background:var(--primary);color:#fff;}
 .seccion-titulo{font-size:12px;font-weight:700;color:var(--primary);text-transform:uppercase;letter-spacing:.4px;margin:20px 0 8px;}
 .nota-titulo{font-size:13px;font-weight:700;color:var(--primary);margin-bottom:10px;}
@@ -472,14 +472,14 @@ async function renderPacienteDetalle(pacienteId, tabInicial) {
   app.innerHTML = `<div class="loading">⏳ Cargando...</div>`;
   try {
     const data = await api("/medico/pacientes/" + pacienteId);
-    pintarKardex(data.paciente, data.consultas || [], tabInicial || "consultas");
+    pintarKardex(data.paciente, data.consultas || [], data.medicamentos || [], data.vacunas || [], tabInicial || "consultas");
   } catch (e) {
     if (e.status === 401) return logout();
     app.innerHTML = `<div class="error">${esc(e.error || "Error cargando el paciente")}</div>`;
   }
 }
 
-function pintarKardex(p, consultas, tabActiva) {
+function pintarKardex(p, consultas, medicamentos, vacunas, tabActiva) {
   detenerPolling();
   const edad = edadDesde(p.fechaNacimiento);
   const estadoTxt = { procesando: "⏳ Transcribiendo", completado: "✅ Listo", error: "⚠️ Error" };
@@ -558,20 +558,99 @@ function pintarKardex(p, consultas, tabActiva) {
         ${c.notaClinica && c.notaClinica.diagnostico ? `<div class="preview"><b>Dx:</b> ${esc(c.notaClinica.diagnostico)}</div>` : ""}
       </div>`).join("")}`;
 
+  const medActivos = medicamentos.filter(m => !m.fechaFin);
+  const medPasados = medicamentos.filter(m => m.fechaFin);
+  function medItemHtml(m) {
+    return `
+      <div class="item" style="cursor:default">
+        <div class="top">
+          <div class="nombre">${esc(m.nombre)}</div>
+          ${!m.fechaFin ? `<span class="badge badge-completado">Activo</span>` : `<span class="badge" style="background:var(--border);color:var(--text-muted)">Finalizado</span>`}
+        </div>
+        <div class="paciente-info">${[m.dosis, m.frecuencia].filter(Boolean).map(esc).join(" · ")}</div>
+        ${m.notas ? `<div class="paciente-info">📝 ${esc(m.notas)}</div>` : ""}
+        <div style="display:flex;gap:8px;margin-top:8px">
+          ${!m.fechaFin ? `<button class="link" data-dar-baja="${m._id}" style="margin:0;flex:1">Dar de baja</button>` : ""}
+          <button class="link" data-borrar-med="${m._id}" style="margin:0;flex:1;color:var(--danger)">Eliminar</button>
+        </div>
+      </div>`;
+  }
+  const tabMedicamentos = `
+    <div class="card">
+      <div class="seccion-titulo" style="margin-top:0">Agregar medicamento</div>
+      <input id="medNombre" type="text" placeholder="Nombre (ej: Losartán)">
+      <input id="medDosis" type="text" placeholder="Dosis (ej: 50mg)" style="margin-top:8px">
+      <input id="medFrecuencia" type="text" placeholder="Frecuencia (ej: 1 vez al día)" style="margin-top:8px">
+      <button class="secondary" id="btnAgregarMed">➕ Agregar</button>
+    </div>
+    ${medActivos.length ? `<div class="seccion-titulo">Activos</div>${medActivos.map(medItemHtml).join("")}` : ""}
+    ${medPasados.length ? `<div class="seccion-titulo">Pasados</div>${medPasados.map(medItemHtml).join("")}` : ""}
+    ${medicamentos.length === 0 ? `<div class="empty">Todavía no hay medicamentos registrados.</div>` : ""}`;
+
+  const tabAntecedentes = `
+    <div class="card">
+      <div class="seccion-titulo" style="margin-top:0">Antecedentes personales</div>
+      ${(p.antecedentesPersonales||[]).map((a,i) => `
+        <div class="dato-row" style="display:flex;justify-content:space-between;align-items:center">
+          <span>${esc(a)}</span>
+          <button class="link" data-borrar-antp="${i}" style="margin:0;width:auto;color:var(--danger)">✕</button>
+        </div>`).join("")}
+      ${(p.antecedentesPersonales||[]).length === 0 ? `<div class="hint">Sin antecedentes personales cargados.</div>` : ""}
+      <input id="antpNuevo" type="text" placeholder="Ej: Hipertensión desde 2019" style="margin-top:10px">
+      <button class="secondary" id="btnAgregarAntP">➕ Agregar</button>
+    </div>
+    <div class="card">
+      <div class="seccion-titulo" style="margin-top:0">Antecedentes familiares</div>
+      ${(p.antecedentesFamiliares||[]).map((a,i) => `
+        <div class="dato-row" style="display:flex;justify-content:space-between;align-items:center">
+          <span><b>${esc(a.parentesco)}:</b> ${esc(a.condicion)}</span>
+          <button class="link" data-borrar-antf="${i}" style="margin:0;width:auto;color:var(--danger)">✕</button>
+        </div>`).join("")}
+      ${(p.antecedentesFamiliares||[]).length === 0 ? `<div class="hint">Sin antecedentes familiares cargados.</div>` : ""}
+      <input id="antfParentesco" type="text" placeholder="Parentesco (ej: Madre)" style="margin-top:10px">
+      <input id="antfCondicion" type="text" placeholder="Condición (ej: Diabetes tipo 2)" style="margin-top:8px">
+      <button class="secondary" id="btnAgregarAntF">➕ Agregar</button>
+    </div>`;
+
+  const tabVacunas = `
+    <div class="card">
+      <div class="seccion-titulo" style="margin-top:0">Agregar vacuna</div>
+      <input id="vacNombre" type="text" placeholder="Nombre (ej: Influenza)">
+      <input id="vacDosis" type="text" placeholder="Dosis (ej: 1ra dosis, Refuerzo)" style="margin-top:8px">
+      <label>Fecha</label>
+      <input id="vacFecha" type="date">
+      <button class="secondary" id="btnAgregarVac">➕ Agregar</button>
+    </div>
+    ${vacunas.length === 0 ? `<div class="empty">Todavía no hay vacunas registradas.</div>` : ""}
+    ${vacunas.map(v => `
+      <div class="item" style="cursor:default">
+        <div class="top">
+          <div class="nombre">${esc(v.nombre)}${v.dosis ? " — " + esc(v.dosis) : ""}</div>
+          <button class="link" data-borrar-vac="${v._id}" style="margin:0;width:auto;color:var(--danger)">✕</button>
+        </div>
+        <div class="fecha">${new Date(v.fecha).toLocaleDateString("es-BO")}</div>
+      </div>`).join("")}`;
+
+  const tabs = { paciente: tabPaciente, consultas: tabConsultas, medicamentos: tabMedicamentos, antecedentes: tabAntecedentes, vacunas: tabVacunas };
+
   app.innerHTML = `
     <button class="back" id="btnBack">← Pacientes</button>
     <div class="nombre" style="font-size:18px;font-weight:700;margin-bottom:10px">${esc(p.nombre)}</div>
     <div class="tabs">
       <button class="tab ${tabActiva === "paciente" ? "activo" : ""}" data-tab="paciente">Paciente</button>
       <button class="tab ${tabActiva === "consultas" ? "activo" : ""}" data-tab="consultas">Consultas</button>
+      <button class="tab ${tabActiva === "medicamentos" ? "activo" : ""}" data-tab="medicamentos">Medicación</button>
+      <button class="tab ${tabActiva === "antecedentes" ? "activo" : ""}" data-tab="antecedentes">Antecedentes</button>
+      <button class="tab ${tabActiva === "vacunas" ? "activo" : ""}" data-tab="vacunas">Vacunas</button>
     </div>
-    <div id="tabContent">${tabActiva === "paciente" ? tabPaciente : tabConsultas}</div>
+    <div id="tabContent">${tabs[tabActiva] || tabConsultas}</div>
   `;
 
   document.getElementById("btnBack").onclick = renderDashboard;
   document.querySelectorAll(".tab").forEach(btn => {
-    btn.onclick = () => pintarKardex(p, consultas, btn.dataset.tab);
+    btn.onclick = () => pintarKardex(p, consultas, medicamentos, vacunas, btn.dataset.tab);
   });
+
   if (tabActiva === "consultas") {
     document.getElementById("btnNuevaConsulta").onclick = () => renderNuevaConsulta(p._id, p.nombre);
     document.querySelectorAll(".item").forEach(el => {
@@ -579,11 +658,101 @@ function pintarKardex(p, consultas, tabActiva) {
     });
   }
 
+  if (tabActiva === "medicamentos") {
+    document.getElementById("btnAgregarMed").onclick = async () => {
+      const nombre = document.getElementById("medNombre").value.trim();
+      if (!nombre) return;
+      try {
+        await api("/medico/pacientes/" + p._id + "/medicamentos", {
+          method: "POST", headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({
+            nombre,
+            dosis: document.getElementById("medDosis").value.trim(),
+            frecuencia: document.getElementById("medFrecuencia").value.trim(),
+          }),
+        });
+        renderPacienteDetalle(p._id, "medicamentos");
+      } catch (e) { /* se queda en la pantalla, el médico puede reintentar */ }
+    };
+    document.querySelectorAll("[data-dar-baja]").forEach(btn => {
+      btn.onclick = async () => {
+        await api("/medico/medicamentos/" + btn.dataset.darBaja, {
+          method: "PATCH", headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({ fechaFin: new Date().toISOString() }),
+        });
+        renderPacienteDetalle(p._id, "medicamentos");
+      };
+    });
+    document.querySelectorAll("[data-borrar-med]").forEach(btn => {
+      btn.onclick = async () => {
+        if (!confirm("¿Eliminar este medicamento?")) return;
+        await api("/medico/medicamentos/" + btn.dataset.borrarMed, { method: "DELETE" });
+        renderPacienteDetalle(p._id, "medicamentos");
+      };
+    });
+  }
+
+  if (tabActiva === "antecedentes") {
+    document.getElementById("btnAgregarAntP").onclick = async () => {
+      const texto = document.getElementById("antpNuevo").value.trim();
+      if (!texto) return;
+      const nuevos = [...(p.antecedentesPersonales||[]), texto];
+      await api("/medico/pacientes/" + p._id, { method: "PATCH", headers: {"Content-Type":"application/json"}, body: JSON.stringify({ antecedentesPersonales: nuevos }) });
+      renderPacienteDetalle(p._id, "antecedentes");
+    };
+    document.querySelectorAll("[data-borrar-antp]").forEach(btn => {
+      btn.onclick = async () => {
+        const idx = Number(btn.dataset.borrarAntp);
+        const nuevos = (p.antecedentesPersonales||[]).filter((_,i) => i !== idx);
+        await api("/medico/pacientes/" + p._id, { method: "PATCH", headers: {"Content-Type":"application/json"}, body: JSON.stringify({ antecedentesPersonales: nuevos }) });
+        renderPacienteDetalle(p._id, "antecedentes");
+      };
+    });
+    document.getElementById("btnAgregarAntF").onclick = async () => {
+      const parentesco = document.getElementById("antfParentesco").value.trim();
+      const condicion = document.getElementById("antfCondicion").value.trim();
+      if (!parentesco && !condicion) return;
+      const nuevos = [...(p.antecedentesFamiliares||[]), { parentesco, condicion }];
+      await api("/medico/pacientes/" + p._id, { method: "PATCH", headers: {"Content-Type":"application/json"}, body: JSON.stringify({ antecedentesFamiliares: nuevos }) });
+      renderPacienteDetalle(p._id, "antecedentes");
+    };
+    document.querySelectorAll("[data-borrar-antf]").forEach(btn => {
+      btn.onclick = async () => {
+        const idx = Number(btn.dataset.borrarAntf);
+        const nuevos = (p.antecedentesFamiliares||[]).filter((_,i) => i !== idx);
+        await api("/medico/pacientes/" + p._id, { method: "PATCH", headers: {"Content-Type":"application/json"}, body: JSON.stringify({ antecedentesFamiliares: nuevos }) });
+        renderPacienteDetalle(p._id, "antecedentes");
+      };
+    });
+  }
+
+  if (tabActiva === "vacunas") {
+    document.getElementById("btnAgregarVac").onclick = async () => {
+      const nombre = document.getElementById("vacNombre").value.trim();
+      const fecha = document.getElementById("vacFecha").value;
+      if (!nombre || !fecha) return;
+      try {
+        await api("/medico/pacientes/" + p._id + "/vacunas", {
+          method: "POST", headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({ nombre, dosis: document.getElementById("vacDosis").value.trim(), fecha }),
+        });
+        renderPacienteDetalle(p._id, "vacunas");
+      } catch (e) { /* se queda en la pantalla, el médico puede reintentar */ }
+    };
+    document.querySelectorAll("[data-borrar-vac]").forEach(btn => {
+      btn.onclick = async () => {
+        if (!confirm("¿Eliminar esta vacuna?")) return;
+        await api("/medico/vacunas/" + btn.dataset.borrarVac, { method: "DELETE" });
+        renderPacienteDetalle(p._id, "vacunas");
+      };
+    });
+  }
+
   if (tabActiva === "paciente" && p.briefClinicoEstado === "generando") {
     pollTimeout = setTimeout(async () => {
       try {
         const data = await api("/medico/pacientes/" + p._id);
-        pintarKardex(data.paciente, data.consultas || [], "paciente");
+        pintarKardex(data.paciente, data.consultas || [], data.medicamentos || [], data.vacunas || [], "paciente");
       } catch (e) {
         if (e.status === 401) return logout();
       }

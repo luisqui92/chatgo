@@ -400,6 +400,8 @@ const pacienteSchema = new mongoose.Schema({
   sexo: { type: String, default: "" },
   telefono: { type: String, default: "" },
   notas: { type: String, default: "" },
+  antecedentesPersonales: { type: [String], default: [] }, // ej: "Hipertensión desde 2019", "Alergia a penicilina"
+  antecedentesFamiliares: { type: [{ parentesco: String, condicion: String }], default: [] },
   // Brief Clínico Inteligente: resumen ejecutivo generado por IA a partir del
   // historial de consultas, para que el médico lo lea antes de la próxima
   // visita. Se regenera solo cada vez que termina la nota clínica de una
@@ -458,6 +460,36 @@ consultaMedicaSchema.index({ medicoPhone: 1, createdAt: -1 });
 consultaMedicaSchema.index({ pacienteId: 1, createdAt: -1 });
 const ConsultaMedica = mongoose.model("ConsultaMedica", consultaMedicaSchema);
 
+// Gestión de medicación: lista de medicamentos activos/pasados del paciente.
+// Carga manual del médico (no se auto-completa desde las notas clínicas,
+// para no arriesgar duplicados o datos inconsistentes sin que el médico
+// los revise primero).
+const medicamentoSchema = new mongoose.Schema({
+  pacienteId: { type: mongoose.Schema.Types.ObjectId, ref: "Paciente", required: true, index: true },
+  medicoPhone: { type: String, index: true, required: true },
+  nombre: { type: String, required: true },
+  dosis: { type: String, default: "" },
+  frecuencia: { type: String, default: "" },
+  fechaInicio: { type: Date, default: null },
+  fechaFin: { type: Date, default: null }, // null = activo/en curso
+  notas: { type: String, default: "" }, // efectos secundarios, alergias relacionadas, etc.
+}, { timestamps: true });
+medicamentoSchema.index({ pacienteId: 1, fechaFin: 1 });
+const Medicamento = mongoose.model("Medicamento", medicamentoSchema);
+
+// Vacunación: vacunas aplicadas (y se puede usar para anotar dosis pendientes
+// con fecha futura como recordatorio).
+const vacunaSchema = new mongoose.Schema({
+  pacienteId: { type: mongoose.Schema.Types.ObjectId, ref: "Paciente", required: true, index: true },
+  medicoPhone: { type: String, index: true, required: true },
+  nombre: { type: String, required: true },
+  dosis: { type: String, default: "" }, // ej: "1ra dosis", "Refuerzo"
+  fecha: { type: Date, required: true },
+  notas: { type: String, default: "" },
+}, { timestamps: true });
+vacunaSchema.index({ pacienteId: 1, fecha: -1 });
+const Vacuna = mongoose.model("Vacuna", vacunaSchema);
+
 // Vincula el celular de un médico como "micrófono remoto" para su compu de
 // escritorio (sin micrófono propio). Un código por médico por día; la compu
 // deja un comando pendiente ("iniciar"/"detener") que el celular recoge la
@@ -478,4 +510,4 @@ const vinculacionSchema = new mongoose.Schema({
 }, { timestamps: true });
 const Vinculacion = mongoose.model("Vinculacion", vinculacionSchema);
 
-module.exports = { Usuario, Chofer, Viaje, SessionState, ListaEspera, RateLimit, CodigoPromo, LocationReference, Demanda, EventoChofer, AlertaSeg, Surge, ViajeDemo, EsquinaMapeada, PreRegistroFlota, Flota, NotificacionPago, Medico, Paciente, ConsultaMedica, Vinculacion };
+module.exports = { Usuario, Chofer, Viaje, SessionState, ListaEspera, RateLimit, CodigoPromo, LocationReference, Demanda, EventoChofer, AlertaSeg, Surge, ViajeDemo, EsquinaMapeada, PreRegistroFlota, Flota, NotificacionPago, Medico, Paciente, ConsultaMedica, Vinculacion, Medicamento, Vacuna };
