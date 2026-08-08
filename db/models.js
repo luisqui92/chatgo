@@ -441,4 +441,24 @@ consultaMedicaSchema.index({ medicoPhone: 1, createdAt: -1 });
 consultaMedicaSchema.index({ pacienteId: 1, createdAt: -1 });
 const ConsultaMedica = mongoose.model("ConsultaMedica", consultaMedicaSchema);
 
-module.exports = { Usuario, Chofer, Viaje, SessionState, ListaEspera, RateLimit, CodigoPromo, LocationReference, Demanda, EventoChofer, AlertaSeg, Surge, ViajeDemo, EsquinaMapeada, PreRegistroFlota, Flota, NotificacionPago, Medico, Paciente, ConsultaMedica };
+// Vincula el celular de un médico como "micrófono remoto" para su compu de
+// escritorio (sin micrófono propio). Un código por médico por día; la compu
+// deja un comando pendiente ("iniciar"/"detener") que el celular recoge la
+// próxima vez que pregunta (poll cada 1-2s) y ejecuta.
+const vinculacionSchema = new mongoose.Schema({
+  medicoPhone: { type: String, unique: true, index: true, required: true },
+  codigo: { type: String, required: true },
+  fechaStr: { type: String, required: true }, // día boliviano al que corresponde el código (YYYY-MM-DD)
+  vinculado: { type: Boolean, default: false },
+  estado: { type: String, enum: ["esperando", "armado", "grabando"], default: "esperando" },
+  comandoPendiente: {
+    accion: { type: String, enum: ["iniciar", "detener"] },
+    pacienteId: String,
+    pacienteNombre: String,
+    emitidoEn: Date,
+  },
+  consultaId: { type: mongoose.Schema.Types.ObjectId, ref: "ConsultaMedica", default: null },
+}, { timestamps: true });
+const Vinculacion = mongoose.model("Vinculacion", vinculacionSchema);
+
+module.exports = { Usuario, Chofer, Viaje, SessionState, ListaEspera, RateLimit, CodigoPromo, LocationReference, Demanda, EventoChofer, AlertaSeg, Surge, ViajeDemo, EsquinaMapeada, PreRegistroFlota, Flota, NotificacionPago, Medico, Paciente, ConsultaMedica, Vinculacion };

@@ -139,6 +139,77 @@ function iniciales(nombre) {
   return ((partes[0]?.[0] || "") + (partes[1]?.[0] || "")).toUpperCase();
 }
 
+function fmt(s){ const m=String(Math.floor(s/60)).padStart(2,"0"); const r=String(s%60).padStart(2,"0"); return m+":"+r; }
+
+// Dibuja la onda de voz en vivo sobre un <canvas>, a partir de un MediaStream
+// del micrófono. Se usa tanto grabando local (compu con micrófono) como en
+// el celular vinculado como micrófono remoto.
+function crearVisualizadorOnda(waveCanvas) {
+  let audioCtx = null, analyser = null, dataArray = null, animId = null;
+
+  function dibujar() {
+    animId = requestAnimationFrame(dibujar);
+    analyser.getByteFrequencyData(dataArray);
+    const ctx = waveCanvas.getContext("2d");
+    const w = waveCanvas.width, h = waveCanvas.height;
+    ctx.clearRect(0, 0, w, h);
+    const bars = 32;
+    const step = Math.floor(dataArray.length / bars);
+    const barWidth = w / bars;
+    for (let i = 0; i < bars; i++) {
+      const value = dataArray[i * step] / 255;
+      const barHeight = Math.max(4, value * h * 0.9);
+      const x = i * barWidth;
+      const y = (h - barHeight) / 2;
+      const grad = ctx.createLinearGradient(0, y, 0, y + barHeight);
+      grad.addColorStop(0, "#22d3ee");
+      grad.addColorStop(1, "#0891b2");
+      ctx.fillStyle = grad;
+      const bw = barWidth * 0.6, r = bw / 2;
+      const bx = x + barWidth * 0.2;
+      ctx.beginPath();
+      ctx.moveTo(bx + r, y);
+      ctx.arcTo(bx + bw, y, bx + bw, y + barHeight, r);
+      ctx.arcTo(bx + bw, y + barHeight, bx, y + barHeight, r);
+      ctx.arcTo(bx, y + barHeight, bx, y, r);
+      ctx.arcTo(bx, y, bx + bw, y, r);
+      ctx.closePath();
+      ctx.fill();
+    }
+  }
+
+  return {
+    iniciar(stream) {
+      const dpr = window.devicePixelRatio || 1;
+      const rect = waveCanvas.getBoundingClientRect();
+      waveCanvas.width = rect.width * dpr;
+      waveCanvas.height = rect.height * dpr;
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const source = audioCtx.createMediaStreamSource(stream);
+      analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 256;
+      source.connect(analyser);
+      dataArray = new Uint8Array(analyser.frequencyBinCount);
+      dibujar();
+    },
+    detener() {
+      if (animId) cancelAnimationFrame(animId);
+      if (audioCtx) audioCtx.close();
+      audioCtx = null; analyser = null;
+    },
+  };
+}
+
+// Sube el audio grabado/subido y crea la consulta. Se usa tanto grabando
+// local como desde el celular vinculado como micrófono remoto.
+async function subirConsulta(pacienteId, blob, mimeType) {
+  return api("/medico/consultas?pacienteId=" + encodeURIComponent(pacienteId), {
+    method: "POST",
+    headers: { "Content-Type": mimeType || "audio/webm" },
+    body: blob,
+  });
+}
+
 async function api(path, opts = {}) {
   const headers = opts.headers || {};
   if (TOKEN) headers["Authorization"] = "Bearer " + TOKEN;
@@ -238,6 +309,7 @@ async function renderDashboard() {
     const items = data.pacientes || [];
     app.innerHTML = `
       <button class="secondary" id="btnNuevoPaciente">➕ Nuevo paciente</button>
+      <button class="link" id="btnVincular" style="margin-top:6px">🔗 Vincular este celular como micrófono</button>
       ${items.length === 0 ? `<div class="empty">Todavía no registraste ningún paciente.</div>` : ""}
       ${items.map(p => {
         const edad = edadDesde(p.fechaNacimiento);
@@ -249,6 +321,7 @@ async function renderDashboard() {
       }).join("")}
     `;
     document.getElementById("btnNuevoPaciente").onclick = renderNuevoPaciente;
+    document.getElementById("btnVincular").onclick = renderVincular;
     document.querySelectorAll(".item").forEach(el => {
       el.onclick = () => renderPacienteDetalle(el.dataset.id);
     });
@@ -415,72 +488,20 @@ function renderNuevaConsulta(pacienteId, pacienteNombre) {
       <input type="file" id="ncFile" accept="audio/*" style="display:none">
       <div id="ncErr"></div>
       <button class="primary" id="ncSubir" style="display:none">Subir y transcribir</button>
+      <button class="link" id="btnRemota">💻📱 ¿Esta compu no tiene micrófono? Grabar con el celular vinculado</button>
     </div>`;
   document.getElementById("btnBack").onclick = () => renderPacienteDetalle(pacienteId, "consultas");
+  document.getElementById("btnRemota").onclick = () => renderNuevaConsultaRemota(pacienteId, pacienteNombre);
 
   let mediaRecorder = null, chunks = [], blob = null, mimeType = "audio/webm";
   let seconds = 0, timerId = null;
-  let audioCtx = null, analyser = null, dataArray = null, animId = null;
   const recBtn = document.getElementById("recBtn");
   const recTime = document.getElementById("recTime");
   const recStatus = document.getElementById("recStatus");
   const ncSubir = document.getElementById("ncSubir");
   const ncErr = document.getElementById("ncErr");
   const listenPanel = document.getElementById("listenPanel");
-  const waveCanvas = document.getElementById("waveCanvas");
-
-  function fmt(s){ const m=String(Math.floor(s/60)).padStart(2,"0"); const r=String(s%60).padStart(2,"0"); return m+":"+r; }
-
-  function dibujarOnda() {
-    animId = requestAnimationFrame(dibujarOnda);
-    analyser.getByteFrequencyData(dataArray);
-    const ctx = waveCanvas.getContext("2d");
-    const w = waveCanvas.width, h = waveCanvas.height;
-    ctx.clearRect(0, 0, w, h);
-    const bars = 32;
-    const step = Math.floor(dataArray.length / bars);
-    const barWidth = w / bars;
-    for (let i = 0; i < bars; i++) {
-      const value = dataArray[i * step] / 255;
-      const barHeight = Math.max(4, value * h * 0.9);
-      const x = i * barWidth;
-      const y = (h - barHeight) / 2;
-      const grad = ctx.createLinearGradient(0, y, 0, y + barHeight);
-      grad.addColorStop(0, "#22d3ee");
-      grad.addColorStop(1, "#0891b2");
-      ctx.fillStyle = grad;
-      const bw = barWidth * 0.6, r = bw / 2;
-      const bx = x + barWidth * 0.2;
-      ctx.beginPath();
-      ctx.moveTo(bx + r, y);
-      ctx.arcTo(bx + bw, y, bx + bw, y + barHeight, r);
-      ctx.arcTo(bx + bw, y + barHeight, bx, y + barHeight, r);
-      ctx.arcTo(bx, y + barHeight, bx, y, r);
-      ctx.arcTo(bx, y, bx + bw, y, r);
-      ctx.closePath();
-      ctx.fill();
-    }
-  }
-
-  function iniciarOnda(stream) {
-    const dpr = window.devicePixelRatio || 1;
-    const rect = waveCanvas.getBoundingClientRect();
-    waveCanvas.width = rect.width * dpr;
-    waveCanvas.height = rect.height * dpr;
-    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    const source = audioCtx.createMediaStreamSource(stream);
-    analyser = audioCtx.createAnalyser();
-    analyser.fftSize = 256;
-    source.connect(analyser);
-    dataArray = new Uint8Array(analyser.frequencyBinCount);
-    dibujarOnda();
-  }
-
-  function detenerOnda() {
-    if (animId) cancelAnimationFrame(animId);
-    if (audioCtx) audioCtx.close();
-    audioCtx = null; analyser = null;
-  }
+  const onda = crearVisualizadorOnda(document.getElementById("waveCanvas"));
 
   recBtn.onclick = async () => {
     if (!mediaRecorder || mediaRecorder.state === "inactive") {
@@ -494,7 +515,7 @@ function renderNuevaConsulta(pacienteId, pacienteNombre) {
         mediaRecorder.onstop = () => {
           blob = new Blob(chunks, { type: mimeType || "audio/webm" });
           stream.getTracks().forEach(t => t.stop());
-          detenerOnda();
+          onda.detener();
           listenPanel.style.display = "none";
           recStatus.textContent = "Grabación lista (" + fmt(seconds) + ")";
           ncSubir.style.display = "block";
@@ -502,7 +523,7 @@ function renderNuevaConsulta(pacienteId, pacienteNombre) {
         mediaRecorder.start();
         seconds = 0; recTime.textContent = "00:00";
         listenPanel.style.display = "block";
-        iniciarOnda(stream);
+        onda.iniciar(stream);
         timerId = setInterval(() => { seconds++; recTime.textContent = fmt(seconds); }, 1000);
         recBtn.classList.add("recording");
         recBtn.textContent = "⏹️";
@@ -533,11 +554,7 @@ function renderNuevaConsulta(pacienteId, pacienteNombre) {
     ncSubir.disabled = true;
     ncSubir.textContent = "Subiendo audio...";
     try {
-      const data = await api("/medico/consultas?pacienteId=" + encodeURIComponent(pacienteId), {
-        method: "POST",
-        headers: { "Content-Type": mimeType || "audio/webm" },
-        body: blob,
-      });
+      const data = await subirConsulta(pacienteId, blob, mimeType);
       renderDetalle(data.consulta._id);
     } catch (e) {
       // no se pierde la grabación: se puede reintentar sin volver a grabar
@@ -546,6 +563,211 @@ function renderNuevaConsulta(pacienteId, pacienteNombre) {
       ncErr.innerHTML = `<div class="error">${esc(e.error || "No se pudo subir. Revisá tu conexión y volvé a intentar.")}</div>`;
     }
   };
+}
+
+// ─── NUEVA CONSULTA — CONTROL REMOTO (desde la compu, graba el celular) ─
+// Requiere que el médico ya haya vinculado su celular hoy (ver renderVincular).
+async function renderNuevaConsultaRemota(pacienteId, pacienteNombre) {
+  detenerPolling();
+  app.innerHTML = `<div class="loading">⏳ Cargando...</div>`;
+  try {
+    const data = await api("/medico/vinculacion");
+    pintarControlRemoto(data.vinculacion, pacienteId, pacienteNombre);
+  } catch (e) {
+    if (e.status === 401) return logout();
+    app.innerHTML = `<div class="error">${esc(e.error || "Error cargando la vinculación")}</div>`;
+  }
+}
+
+function pintarControlRemoto(v, pacienteId, pacienteNombre) {
+  let cuerpo = "";
+  if (!v.vinculado) {
+    cuerpo = `
+      <div class="hint" style="margin-bottom:14px">Todavía no vinculaste tu celular hoy. Abrí Vitalis en el celular, tocá "Vincular como micrófono" e ingresá este código:</div>
+      <div style="text-align:center;font-size:38px;font-weight:700;letter-spacing:4px;color:var(--primary);padding:18px 0">${esc(v.codigo)}</div>
+      <div class="hint">Esta pantalla se actualiza sola apenas lo vincules.</div>`;
+  } else if (v.estado === "armado") {
+    cuerpo = `
+      <div class="hint" style="margin-bottom:14px">📱 Celular vinculado y listo, apoyado con la pantalla prendida.</div>
+      <button class="primary" id="btnIniciarRemoto" style="margin-top:0">🎙️ Iniciar grabación remota</button>`;
+  } else if (v.estado === "grabando") {
+    cuerpo = `
+      <div class="listen-panel" style="display:block">
+        <div class="listen-label" style="margin-bottom:6px">⏺ Grabando en el celular vinculado...</div>
+      </div>
+      <button class="primary" id="btnDetenerRemoto" style="margin-top:0;background:var(--danger)">⏹️ Detener grabación</button>`;
+  }
+
+  app.innerHTML = `
+    <button class="back" id="btnBack">← Volver</button>
+    <div class="card">
+      <div class="hint" style="margin-bottom:14px">Paciente: <b>${esc(pacienteNombre)}</b></div>
+      ${cuerpo}
+      <div id="ncrErr"></div>
+    </div>`;
+  document.getElementById("btnBack").onclick = () => renderPacienteDetalle(pacienteId, "consultas");
+
+  const btnIniciar = document.getElementById("btnIniciarRemoto");
+  if (btnIniciar) btnIniciar.onclick = async () => {
+    try {
+      await api("/medico/vinculacion/comando", {
+        method: "POST", headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({ accion: "iniciar", pacienteId, pacienteNombre }),
+      });
+      pollTimeout = setTimeout(() => renderNuevaConsultaRemota(pacienteId, pacienteNombre), 1500);
+    } catch (e) {
+      document.getElementById("ncrErr").innerHTML = `<div class="error">${esc(e.error || "No se pudo mandar la orden")}</div>`;
+    }
+  };
+
+  const btnDetener = document.getElementById("btnDetenerRemoto");
+  if (btnDetener) btnDetener.onclick = async () => {
+    try {
+      await api("/medico/vinculacion/comando", {
+        method: "POST", headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({ accion: "detener" }),
+      });
+    } catch (e) { /* seguimos igual esperando a que el celular reporte */ }
+  };
+
+  // Auto-refresco: si todavía no está vinculado, o está grabando (esperando
+  // que el celular suba y reporte el resultado), seguimos consultando solos.
+  if (!v.vinculado || v.estado === "grabando") {
+    pollTimeout = setTimeout(async () => {
+      try {
+        const data = await api("/medico/vinculacion");
+        if (data.vinculacion.estado === "armado" && data.vinculacion.consultaId) {
+          return renderDetalle(data.vinculacion.consultaId);
+        }
+        pintarControlRemoto(data.vinculacion, pacienteId, pacienteNombre);
+      } catch (e) {
+        if (e.status === 401) return logout();
+      }
+    }, v.vinculado ? 2000 : 3000);
+  }
+}
+
+// ─── VINCULAR CELULAR COMO MICRÓFONO REMOTO ─────────────────────────────
+// Vive en el celular: se ingresa el código del día una vez, y desde ahí
+// queda "armado" esperando que la compu mande la orden de grabar.
+async function renderVincular() {
+  detenerPolling();
+  app.innerHTML = `<div class="loading">⏳ Cargando...</div>`;
+  try {
+    const data = await api("/medico/vinculacion");
+    pintarVincular(data.vinculacion);
+  } catch (e) {
+    if (e.status === 401) return logout();
+    app.innerHTML = `<div class="error">${esc(e.error || "Error cargando la vinculación")}</div>`;
+  }
+}
+
+function pintarVincular(v) {
+  if (!v.vinculado) {
+    app.innerHTML = `
+      <button class="back" id="btnBack">← Volver</button>
+      <div class="card">
+        <div class="hint" style="margin-bottom:14px">Escribí el código de 6 dígitos que aparece en la compu:</div>
+        <input id="vCodigo" type="tel" maxlength="6" placeholder="000000" style="text-align:center;font-size:24px;letter-spacing:6px">
+        <div id="vErr"></div>
+        <button class="primary" id="vBtn">Vincular</button>
+      </div>`;
+    document.getElementById("btnBack").onclick = renderDashboard;
+    document.getElementById("vBtn").onclick = async () => {
+      const codigo = document.getElementById("vCodigo").value.trim();
+      const errBox = document.getElementById("vErr");
+      errBox.innerHTML = "";
+      try {
+        const data = await api("/medico/vinculacion/vincular", {
+          method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({ codigo }),
+        });
+        pintarVincular(data.vinculacion);
+      } catch (e) {
+        errBox.innerHTML = `<div class="error">${esc(e.error || "No se pudo vincular")}</div>`;
+      }
+    };
+    return;
+  }
+
+  // Ya vinculado: queda "armado" mirando si la compu mandó una orden.
+  app.innerHTML = `
+    <button class="back" id="btnBack">← Volver</button>
+    <div class="card" id="vCard">
+      <div class="hint">📱 Celular vinculado. Dejalo con la pantalla prendida al lado de la compu.</div>
+      <div class="hint" style="margin-top:10px" id="vEstado">🟢 Esperando la orden de grabar...</div>
+    </div>`;
+  document.getElementById("btnBack").onclick = renderDashboard;
+
+  let mediaRecorder = null, chunks = [], mimeType = "audio/webm", stream = null;
+  let pacienteActual = null;
+
+  async function arrancarGrabacionRemota(pacienteId, pacienteNombre) {
+    pacienteActual = { pacienteId, pacienteNombre };
+    document.getElementById("vCard").innerHTML = `
+      <div class="listen-panel" style="display:block">
+        <canvas id="waveCanvasRemoto"></canvas>
+        <div class="listen-time" id="recTimeRemoto">00:00</div>
+        <div class="listen-label">🎙️ Grabando: ${esc(pacienteNombre)}</div>
+      </div>
+      <div class="hint" style="text-align:center">Esperando que la compu diga "detener"...</div>
+      <button class="secondary" id="btnDetenerLocal">⏹️ Detener acá mismo</button>`;
+    const visual = crearVisualizadorOnda(document.getElementById("waveCanvasRemoto"));
+    const recTime = document.getElementById("recTimeRemoto");
+
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const tipos = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"];
+    mimeType = tipos.find(t => MediaRecorder.isTypeSupported(t)) || "";
+    mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+    chunks = [];
+    let seconds = 0;
+    const timerId = setInterval(() => { seconds++; recTime.textContent = fmt(seconds); }, 1000);
+    mediaRecorder.ondataavailable = e => chunks.push(e.data);
+    mediaRecorder.onstop = async () => {
+      clearInterval(timerId);
+      visual.detener();
+      stream.getTracks().forEach(t => t.stop());
+      const blob = new Blob(chunks, { type: mimeType || "audio/webm" });
+      document.getElementById("vCard").innerHTML = `<div class="hint">⏳ Subiendo la grabación...</div>`;
+      try {
+        const data = await subirConsulta(pacienteActual.pacienteId, blob, mimeType);
+        await api("/medico/vinculacion/estado", {
+          method: "POST", headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({ estado: "armado", consultaId: data.consulta._id }),
+        });
+      } catch (e) {
+        await api("/medico/vinculacion/estado", {
+          method: "POST", headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({ estado: "armado" }),
+        }).catch(() => {});
+      }
+      pintarVincular({ vinculado: true, estado: "armado" });
+    };
+    mediaRecorder.start();
+    visual.iniciar(stream);
+    document.getElementById("btnDetenerLocal").onclick = () => mediaRecorder.stop();
+
+    await api("/medico/vinculacion/estado", {
+      method: "POST", headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({ estado: "grabando" }),
+    }).catch(() => {});
+  }
+
+  (async function ciclo() {
+    try {
+      const data = await api("/medico/vinculacion");
+      const vv = data.vinculacion;
+      if (!vv.vinculado) return renderVincular(); // se desvinculó (cambió el día)
+
+      if (vv.comandoPendiente?.accion === "iniciar" && (!mediaRecorder || mediaRecorder.state === "inactive")) {
+        await arrancarGrabacionRemota(vv.comandoPendiente.pacienteId, vv.comandoPendiente.pacienteNombre);
+      } else if (vv.comandoPendiente?.accion === "detener" && mediaRecorder && mediaRecorder.state === "recording") {
+        mediaRecorder.stop();
+      }
+    } catch (e) {
+      if (e.status === 401) return logout();
+    }
+    pollTimeout = setTimeout(ciclo, 1500);
+  })();
 }
 
 // ─── DETALLE DE CONSULTA: transcripción + nota clínica generada por IA ──
