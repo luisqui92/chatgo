@@ -75,6 +75,8 @@ button.link{background:none;border:none;color:var(--primary);font-size:13px;marg
 .stat-lbl{font-size:11px;color:var(--text-muted);margin-top:2px;}
 .dato-row{font-size:14px;padding:9px 0;border-bottom:1px solid var(--border);}
 .dato-row:last-child{border-bottom:none;}
+.brief-card{background:linear-gradient(135deg,#e6f7fa,#f0f9fa);border:1px solid var(--accent-2);}
+.brief-alerta{color:var(--danger);}
 
 /* ─── Panel "escuchando" con onda de voz, estilo asistente clínico ────── */
 .listen-panel{display:none;background:linear-gradient(160deg,var(--primary-dark),#0a2e38);border-radius:16px;padding:22px 18px;text-align:center;color:#fff;margin-bottom:16px;}
@@ -393,6 +395,7 @@ async function renderPacienteDetalle(pacienteId, tabInicial) {
 }
 
 function pintarKardex(p, consultas, tabActiva) {
+  detenerPolling();
   const edad = edadDesde(p.fechaNacimiento);
   const estadoTxt = { procesando: "⏳ Transcribiendo", completado: "✅ Listo", error: "⚠️ Error" };
 
@@ -400,12 +403,38 @@ function pintarKardex(p, consultas, tabActiva) {
   const ultima = consultas[0]; // ya viene ordenado por fecha descendente
   const ultimaConDx = consultasCompletas.find(c => c.notaClinica && (c.notaClinica.diagnostico || c.notaClinica.motivoConsulta));
 
+  let briefHtml = "";
+  if (p.briefClinicoEstado === "generando") {
+    briefHtml = `<div class="card"><div class="hint">🧠 Generando brief clínico...</div></div>`;
+  } else if (p.briefClinicoEstado === "error") {
+    briefHtml = `<div class="card"><div class="error">⚠️ No se pudo generar el brief clínico automático.</div></div>`;
+  } else if (p.briefClinicoEstado === "completado" && p.briefClinico) {
+    const b = p.briefClinico;
+    briefHtml = `
+      <div class="card brief-card">
+        <div class="nota-titulo">🧠 Brief Clínico Inteligente</div>
+        ${b.estadoActual ? `<div class="nota-campo"><b>Estado actual:</b> ${esc(b.estadoActual)}</div>` : ""}
+        ${b.cambiosDesdeUltimaConsulta ? `<div class="nota-campo"><b>Cambios desde la última consulta:</b> ${esc(b.cambiosDesdeUltimaConsulta)}</div>` : ""}
+        ${(b.medicamentosActivos||[]).length ? `<div class="nota-campo"><b>Medicamentos activos:</b> ${esc(b.medicamentosActivos.join(", "))}</div>` : ""}
+        ${(b.examenesPendientes||[]).length ? `<div class="nota-campo"><b>Exámenes pendientes:</b> ${esc(b.examenesPendientes.join(", "))}</div>` : ""}
+        ${(b.alertas||[]).length ? `<div class="nota-campo brief-alerta"><b>⚠️ Alertas:</b> ${esc(b.alertas.join(", "))}</div>` : ""}
+        ${(b.factoresRiesgo||[]).length ? `<div class="nota-campo"><b>Factores de riesgo:</b> ${esc(b.factoresRiesgo.join(", "))}</div>` : ""}
+        ${(b.preguntasSugeridas||[]).length ? `<div class="nota-campo"><b>Preguntas sugeridas:</b> ${esc(b.preguntasSugeridas.join(" · "))}</div>` : ""}
+        ${(b.diagnosticosDiferenciales||[]).length ? `<div class="nota-campo"><b>Diferenciales a considerar:</b> ${esc(b.diagnosticosDiferenciales.join(", "))}</div>` : ""}
+        <div class="hint" style="margin-top:8px">Generado por IA como apoyo — no reemplaza el criterio profesional.</div>
+      </div>`;
+  } else {
+    briefHtml = `<div class="card"><div class="hint">🧠 El brief clínico va a aparecer acá después de la primera consulta con nota clínica generada.</div></div>`;
+  }
+
   const tabPaciente = `
     <div class="card avatar-card">
       <div class="avatar">${esc(iniciales(p.nombre))}</div>
       <div class="nombre" style="font-size:16px;font-weight:700">${esc(p.nombre)}</div>
       <div class="paciente-info">${edad != null ? edad + " años" : "Edad no registrada"}${p.sexo ? " · " + esc(p.sexo) : ""}</div>
     </div>
+
+    ${briefHtml}
 
     <div class="stats-row">
       <div class="stat"><div class="stat-num">${consultas.length}</div><div class="stat-lbl">Consultas</div></div>
@@ -463,6 +492,17 @@ function pintarKardex(p, consultas, tabActiva) {
     document.querySelectorAll(".item").forEach(el => {
       el.onclick = () => renderDetalle(el.dataset.id);
     });
+  }
+
+  if (tabActiva === "paciente" && p.briefClinicoEstado === "generando") {
+    pollTimeout = setTimeout(async () => {
+      try {
+        const data = await api("/medico/pacientes/" + p._id);
+        pintarKardex(data.paciente, data.consultas || [], "paciente");
+      } catch (e) {
+        if (e.status === 401) return logout();
+      }
+    }, 6000);
   }
 }
 

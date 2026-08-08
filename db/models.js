@@ -400,6 +400,23 @@ const pacienteSchema = new mongoose.Schema({
   sexo: { type: String, default: "" },
   telefono: { type: String, default: "" },
   notas: { type: String, default: "" },
+  // Brief Clínico Inteligente: resumen ejecutivo generado por IA a partir del
+  // historial de consultas, para que el médico lo lea antes de la próxima
+  // visita. Se regenera solo cada vez que termina la nota clínica de una
+  // consulta nueva (ver services/briefClinico.js).
+  briefClinicoEstado: { type: String, enum: ["pendiente", "generando", "completado", "error"], default: "pendiente" },
+  briefClinico: {
+    estadoActual: String,
+    cambiosDesdeUltimaConsulta: String,
+    medicamentosActivos: [String],
+    examenesPendientes: [String],
+    alertas: [String],
+    factoresRiesgo: [String],
+    preguntasSugeridas: [String],
+    diagnosticosDiferenciales: [String],
+  },
+  briefClinicoActualizadoEn: Date,
+  briefClinicoError: String,
 }, { timestamps: true });
 pacienteSchema.index({ medicoPhone: 1, nombre: 1 });
 const Paciente = mongoose.model("Paciente", pacienteSchema);

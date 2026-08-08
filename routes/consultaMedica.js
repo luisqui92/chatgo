@@ -10,6 +10,7 @@ const { generarToken, requireAuth, hashPassword } = require("../services/auth");
 const { limitMedico } = require("../services/ratelimit");
 const { transcribirConsultaMedica } = require("../services/assemblyai");
 const { generarNotaClinica } = require("../services/notaClinica");
+const { regenerarBriefClinico } = require("../services/briefClinico");
 
 const requireMedico = requireAuth(["medico"]);
 
@@ -100,6 +101,10 @@ module.exports = function (app) {
           consulta.notaClinicaError = e.message;
         }
         await consulta.save();
+
+        if (consulta.notaClinicaEstado === "completado") {
+          regenerarBriefClinico(consulta.pacienteId).catch(e => log.error("[BRIEF_CLINICO]", e.message));
+        }
       })
       .catch(async (e) => {
         log.error("[CONSULTA_MEDICA] Error transcribiendo:", e.response?.data || e.message);
