@@ -8,7 +8,7 @@ const { CONFIG, log } = require("../config");
 const { Medico, Paciente, ConsultaMedica } = require("../db/models");
 const { generarToken, requireAuth, hashPassword } = require("../services/auth");
 const { limitMedico } = require("../services/ratelimit");
-const { transcribirConsultaMedica } = require("../services/assemblyai");
+const { transcribirConsultaMedica, crearTokenStreaming } = require("../services/assemblyai");
 const { generarNotaClinica } = require("../services/notaClinica");
 const { regenerarBriefClinico } = require("../services/briefClinico");
 
@@ -19,6 +19,18 @@ const requireMedico = requireAuth(["medico"]);
 const audioRaw = express.raw({ type: "audio/*", limit: "80mb" });
 
 module.exports = function (app) {
+
+  // ─── TOKEN PARA VISTA PREVIA EN VIVO (el navegador se conecta directo
+  // al WebSocket de AssemblyAI mientras graba; nunca se manda la API key) ──
+  app.get("/medico/transcripcion-token", requireMedico, async (req, res) => {
+    try {
+      const token = await crearTokenStreaming();
+      res.json({ token });
+    } catch (e) {
+      log.error("[TRANSCRIPCION_TOKEN]", e.response?.data || e.message);
+      res.status(502).json({ error: "No se pudo generar el token de transcripción en vivo" });
+    }
+  });
 
   // ─── REGISTRO ───────────────────────────────────────────────────────────
   app.post("/medico/registro", limitMedico, async (req, res) => {

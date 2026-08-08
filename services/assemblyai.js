@@ -79,4 +79,19 @@ async function transcribirConsultaMedica(audioBuffer) {
   };
 }
 
-module.exports = { transcribirConsultaMedica };
+// Token de corta duración para que el navegador se conecte DIRECTO al
+// WebSocket de streaming de AssemblyAI (vista previa en vivo mientras se
+// graba). Nunca se manda la API key real al navegador.
+async function crearTokenStreaming() {
+  if (!CONFIG.ASSEMBLYAI_API_KEY) {
+    throw new Error("ASSEMBLYAI_API_KEY no configurado");
+  }
+  const res = await axios.get("https://streaming.assemblyai.com/v3/token", {
+    params: { expires_in_seconds: 60 },
+    headers: { Authorization: CONFIG.ASSEMBLYAI_API_KEY },
+    timeout: CONFIG.TIMEOUT_ASSEMBLYAI,
+  });
+  return res.data.token;
+}
+
+module.exports = { transcribirConsultaMedica, crearTokenStreaming };
