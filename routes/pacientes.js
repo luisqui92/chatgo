@@ -1,7 +1,7 @@
 // ChatGo Salud — Pacientes: la entidad central del Kardex. Cada consulta
 // (con su transcripción y nota clínica), medicamento y vacuna cuelga de un
 // paciente real.
-const { Paciente, ConsultaMedica, Medicamento, Vacuna } = require("../db/models");
+const { Paciente, ConsultaMedica, Medicamento, Vacuna, Medicion } = require("../db/models");
 const { requireAuth } = require("../services/auth");
 const { limitMedico } = require("../services/ratelimit");
 const { asyncRoute, ErrorHttp, obtenerOFallar } = require("../services/httpHelpers");
@@ -38,16 +38,17 @@ module.exports = function (app) {
     const medicoPhone = req.adminUser.usuario;
     const paciente = await obtenerOFallar(Paciente, { _id: req.params.id, medicoPhone }, "Paciente no encontrado");
 
-    const [consultas, medicamentos, vacunas] = await Promise.all([
+    const [consultas, medicamentos, vacunas, mediciones] = await Promise.all([
       ConsultaMedica.find({ pacienteId: paciente._id, medicoPhone })
         .select("estado notaClinicaEstado notaClinica.motivoConsulta notaClinica.diagnostico duracionSegundos createdAt")
         .sort({ createdAt: -1 })
         .lean(),
       Medicamento.find({ pacienteId: paciente._id, medicoPhone }).sort({ fechaFin: 1, createdAt: -1 }).lean(),
       Vacuna.find({ pacienteId: paciente._id, medicoPhone }).sort({ fecha: -1 }).lean(),
+      Medicion.find({ pacienteId: paciente._id, medicoPhone }).sort({ fecha: 1 }).lean(),
     ]);
 
-    res.json({ paciente, consultas, medicamentos, vacunas });
+    res.json({ paciente, consultas, medicamentos, vacunas, mediciones });
   }));
 
   // ─── EDITAR PACIENTE (datos básicos + antecedentes) ────────────────────

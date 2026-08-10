@@ -83,3 +83,11 @@ button.link{background:none;border:none;color:var(--primary);font-size:13px;marg
 .rec-status{font-size:13px;color:var(--text-muted);margin-top:8px;}
 
 .footer{text-align:center;font-size:11px;color:var(--text-muted);padding:18px 16px 22px;}
+
+/* ─── Evolución clínica: chips de tipo + gráfico de tendencia ──────────── */
+.chip-row{display:flex;gap:6px;overflow-x:auto;margin-bottom:14px;padding-bottom:2px;}
+.chip{flex:0 0 auto;background:var(--card);border:1px solid var(--border);color:var(--text-muted);border-radius:16px;padding:7px 14px;font-size:12px;font-weight:600;white-space:nowrap;}
+.chip.activo{background:var(--primary);border-color:var(--primary);color:#fff;}
+.chart-legend{display:flex;gap:14px;font-size:11px;color:var(--text-muted);margin-top:8px;}
+.chart-legend span{display:inline-flex;align-items:center;gap:5px;}
+.chart-legend i{width:8px;height:8px;border-radius:50%;display:inline-block;}

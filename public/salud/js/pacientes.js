@@ -88,14 +88,14 @@ async function renderPacienteDetalle(pacienteId, tabInicial) {
   app.innerHTML = `<div class="loading">⏳ Cargando...</div>`;
   try {
     const data = await api("/medico/pacientes/" + pacienteId);
-    pintarKardex(data.paciente, data.consultas || [], data.medicamentos || [], data.vacunas || [], tabInicial || "consultas");
+    pintarKardex(data.paciente, data.consultas || [], data.medicamentos || [], data.vacunas || [], data.mediciones || [], tabInicial || "consultas");
   } catch (e) {
     if (e.status === 401) return logout();
     app.innerHTML = `<div class="error">${esc(e.error || "Error cargando el paciente")}</div>`;
   }
 }
 
-function pintarKardex(p, consultas, medicamentos, vacunas, tabActiva) {
+function pintarKardex(p, consultas, medicamentos, vacunas, mediciones, tabActiva) {
   detenerPolling();
   const edad = edadDesde(p.fechaNacimiento);
   const estadoTxt = { procesando: "⏳ Transcribiendo", completado: "✅ Listo", error: "⚠️ Error" };
@@ -247,7 +247,7 @@ function pintarKardex(p, consultas, medicamentos, vacunas, tabActiva) {
         <div class="fecha">${new Date(v.fecha).toLocaleDateString("es-BO")}</div>
       </div>`).join("")}`;
 
-  const tabs = { paciente: tabPaciente, consultas: tabConsultas, medicamentos: tabMedicamentos, antecedentes: tabAntecedentes, vacunas: tabVacunas };
+  const tabs = { paciente: tabPaciente, consultas: tabConsultas, medicamentos: tabMedicamentos, antecedentes: tabAntecedentes, vacunas: tabVacunas, evolucion: tabEvolucionHtml(mediciones) };
 
   app.innerHTML = `
     <button class="back" id="btnBack">← Pacientes</button>
@@ -258,13 +258,14 @@ function pintarKardex(p, consultas, medicamentos, vacunas, tabActiva) {
       <button class="tab ${tabActiva === "medicamentos" ? "activo" : ""}" data-tab="medicamentos">Medicación</button>
       <button class="tab ${tabActiva === "antecedentes" ? "activo" : ""}" data-tab="antecedentes">Antecedentes</button>
       <button class="tab ${tabActiva === "vacunas" ? "activo" : ""}" data-tab="vacunas">Vacunas</button>
+      <button class="tab ${tabActiva === "evolucion" ? "activo" : ""}" data-tab="evolucion">Evolución</button>
     </div>
     <div id="tabContent">${tabs[tabActiva] || tabConsultas}</div>
   `;
 
   document.getElementById("btnBack").onclick = renderDashboard;
   document.querySelectorAll(".tab").forEach(btn => {
-    btn.onclick = () => pintarKardex(p, consultas, medicamentos, vacunas, btn.dataset.tab);
+    btn.onclick = () => pintarKardex(p, consultas, medicamentos, vacunas, mediciones, btn.dataset.tab);
   });
 
   if (tabActiva === "consultas") {
@@ -364,11 +365,15 @@ function pintarKardex(p, consultas, medicamentos, vacunas, tabActiva) {
     });
   }
 
+  if (tabActiva === "evolucion") {
+    wireTabEvolucion(p, mediciones);
+  }
+
   if (tabActiva === "paciente" && p.briefClinicoEstado === "generando") {
     pollTimeout = setTimeout(async () => {
       try {
         const data = await api("/medico/pacientes/" + p._id);
-        pintarKardex(data.paciente, data.consultas || [], data.medicamentos || [], data.vacunas || [], "paciente");
+        pintarKardex(data.paciente, data.consultas || [], data.medicamentos || [], data.vacunas || [], data.mediciones || [], "paciente");
       } catch (e) {
         if (e.status === 401) return logout();
       }

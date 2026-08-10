@@ -98,6 +98,7 @@ require("./routes/consultaMedica")(app, allDeps);
 require("./routes/pacientes")(app, allDeps);
 require("./routes/medicamentos")(app, allDeps);
 require("./routes/vacunas")(app, allDeps);
+require("./routes/mediciones")(app, allDeps);
 require("./routes/vinculacion")(app, allDeps);
 
 // ─── INTERVALS ────────────────────────────────────────────────────────────────

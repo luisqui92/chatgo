@@ -497,6 +497,22 @@ const vacunaSchema = new mongoose.Schema({
 vacunaSchema.index({ pacienteId: 1, fecha: -1 });
 const Vacuna = mongoose.model("Vacuna", vacunaSchema);
 
+// Evolución clínica: signos vitales/indicadores sueltos en el tiempo (presión,
+// glucosa, peso, etc.) para graficar tendencias. Carga manual del médico.
+// "tipo" es una clave fija (ver TIPOS_MEDICION en el frontend); valorSecundario
+// solo se usa para presión arterial (sistólica en valor, diastólica acá).
+const medicionSchema = new mongoose.Schema({
+  pacienteId: { type: mongoose.Schema.Types.ObjectId, ref: "Paciente", required: true, index: true },
+  medicoPhone: { type: String, index: true, required: true },
+  tipo: { type: String, required: true },
+  valor: { type: Number, required: true },
+  valorSecundario: { type: Number, default: null },
+  fecha: { type: Date, required: true },
+  notas: { type: String, default: "" },
+}, { timestamps: true });
+medicionSchema.index({ pacienteId: 1, tipo: 1, fecha: 1 });
+const Medicion = mongoose.model("Medicion", medicionSchema);
+
 // Vincula el celular de un médico como "micrófono remoto" para su compu de
 // escritorio (sin micrófono propio). Un código por médico por día; la compu
 // deja un comando pendiente ("iniciar"/"detener") que el celular recoge la
@@ -517,4 +533,4 @@ const vinculacionSchema = new mongoose.Schema({
 }, { timestamps: true });
 const Vinculacion = mongoose.model("Vinculacion", vinculacionSchema);
 
-module.exports = { Usuario, Chofer, Viaje, SessionState, ListaEspera, RateLimit, CodigoPromo, LocationReference, Demanda, EventoChofer, AlertaSeg, Surge, ViajeDemo, EsquinaMapeada, PreRegistroFlota, Flota, NotificacionPago, Medico, Paciente, ConsultaMedica, Vinculacion, Medicamento, Vacuna };
+module.exports = { Usuario, Chofer, Viaje, SessionState, ListaEspera, RateLimit, CodigoPromo, LocationReference, Demanda, EventoChofer, AlertaSeg, Surge, ViajeDemo, EsquinaMapeada, PreRegistroFlota, Flota, NotificacionPago, Medico, Paciente, ConsultaMedica, Vinculacion, Medicamento, Vacuna, Medicion };
