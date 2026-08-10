@@ -4,7 +4,7 @@
 // Login/registro vive aparte en routes/medicoAuth.js.
 const express = require("express");
 const { log } = require("../config");
-const { Paciente, ConsultaMedica } = require("../db/models");
+const { Paciente, ConsultaMedica, Medicamento } = require("../db/models");
 const { requireAuth } = require("../services/auth");
 const { limitMedico } = require("../services/ratelimit");
 const { transcribirConsultaMedica, crearTokenStreaming } = require("../services/assemblyai");
@@ -63,7 +63,13 @@ module.exports = function (app) {
         await consulta.save();
 
         try {
-          consulta.notaClinica = await generarNotaClinica(transcripcionCompleta);
+          const medicamentosActivos = await Medicamento.find({ pacienteId: paciente._id, medicoPhone, fechaFin: null })
+            .select("nombre").lean();
+          consulta.notaClinica = await generarNotaClinica(transcripcionCompleta, {
+            antecedentesPersonales: paciente.antecedentesPersonales || [],
+            antecedentesFamiliares: paciente.antecedentesFamiliares || [],
+            medicamentosActivos: medicamentosActivos.map(m => m.nombre),
+          });
           consulta.notaClinicaEstado = "completado";
         } catch (e) {
           log.error("[NOTA_CLINICA]", e.response?.data || e.message);

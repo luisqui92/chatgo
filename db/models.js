@@ -453,6 +453,13 @@ const consultaMedicaSchema = new mongoose.Schema({
     medicamentosRecetados: [{ nombre: String, dosis: String, frecuencia: String }],
     examenesSolicitados: [String],
     proximoControl: String,
+    // Sugerencias para el Kardex: cosas mencionadas en ESTA consulta que
+    // todavía no estaban registradas (el médico las aprueba una por una,
+    // no se cargan solas). medicamentosRecetados ya sirve de sugerencia
+    // para la pestaña Medicación, no hace falta duplicarlo acá.
+    antecedentesPersonalesNuevos: [String],
+    antecedentesFamiliaresNuevos: [{ parentesco: String, condicion: String }],
+    vacunasMencionadas: [{ nombre: String, dosis: String, fecha: String }],
   },
   notaClinicaError: String,
 }, { timestamps: true });

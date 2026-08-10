@@ -74,4 +74,38 @@ module.exports = function (app) {
     await paciente.save();
     res.json({ ok: true, paciente });
   }));
+
+  // ─── AGREGAR UN ANTECEDENTE PERSONAL ────────────────────────────────────
+  // Endpoint chico aparte del PATCH de arriba porque esto se usa desde la
+  // pantalla de "Sugerencias del Kardex" (detalle de consulta), que no tiene
+  // cargado el array completo del paciente para reenviarlo.
+  app.post("/medico/pacientes/:id/antecedentes-personales", limitMedico, requireMedico, asyncRoute(async (req, res) => {
+    const medicoPhone = req.adminUser.usuario;
+    const texto = String(req.body?.texto || "").trim();
+    if (!texto) throw new ErrorHttp(400, "texto es requerido");
+
+    const paciente = await Paciente.findOneAndUpdate(
+      { _id: req.params.id, medicoPhone },
+      { $addToSet: { antecedentesPersonales: texto } },
+      { new: true }
+    );
+    if (!paciente) throw new ErrorHttp(404, "Paciente no encontrado");
+    res.status(201).json({ ok: true, paciente });
+  }));
+
+  // ─── AGREGAR UN ANTECEDENTE FAMILIAR ────────────────────────────────────
+  app.post("/medico/pacientes/:id/antecedentes-familiares", limitMedico, requireMedico, asyncRoute(async (req, res) => {
+    const medicoPhone = req.adminUser.usuario;
+    const parentesco = String(req.body?.parentesco || "").trim();
+    const condicion = String(req.body?.condicion || "").trim();
+    if (!parentesco && !condicion) throw new ErrorHttp(400, "parentesco o condicion son requeridos");
+
+    const paciente = await Paciente.findOneAndUpdate(
+      { _id: req.params.id, medicoPhone },
+      { $push: { antecedentesFamiliares: { parentesco, condicion } } },
+      { new: true }
+    );
+    if (!paciente) throw new ErrorHttp(404, "Paciente no encontrado");
+    res.status(201).json({ ok: true, paciente });
+  }));
 };

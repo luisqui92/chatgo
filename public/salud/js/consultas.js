@@ -224,6 +224,36 @@ async function renderDetalle(id, esRefrescoAutomatico) {
       }
     }
 
+    let sugerenciasHtml = "";
+    if (c.estado === "completado" && c.notaClinicaEstado === "completado" && c.notaClinica) {
+      const n = c.notaClinica;
+      const items = [];
+      (n.medicamentosRecetados || []).forEach((m, i) => items.push({
+        tipo: "medicamento", i,
+        texto: esc(m.nombre + (m.dosis ? " " + m.dosis : "") + (m.frecuencia ? " — " + m.frecuencia : "")),
+      }));
+      (n.antecedentesPersonalesNuevos || []).forEach((a, i) => items.push({ tipo: "antp", i, texto: esc(a) }));
+      (n.antecedentesFamiliaresNuevos || []).forEach((a, i) => items.push({
+        tipo: "antf", i, texto: esc(`${a.parentesco}: ${a.condicion}`),
+      }));
+      (n.vacunasMencionadas || []).forEach((v, i) => items.push({
+        tipo: "vacuna", i,
+        texto: esc(v.nombre + (v.dosis ? " — " + v.dosis : "") + (v.fecha ? " (" + v.fecha + ")" : "")),
+      }));
+      if (items.length) {
+        sugerenciasHtml = `
+          <div class="card">
+            <div class="nota-titulo">➕ Sugerencias para el Kardex</div>
+            <div class="hint" style="margin-bottom:10px">Detectado en esta consulta. Revisá y agregá lo que corresponda — no se carga nada solo.</div>
+            ${items.map(it => `
+              <div class="dato-row" style="display:flex;justify-content:space-between;align-items:center;gap:10px">
+                <span>${it.texto}</span>
+                <button class="link" data-sugerencia="${it.tipo}:${it.i}" style="margin:0;width:auto;white-space:nowrap">➕ Agregar</button>
+              </div>`).join("")}
+          </div>`;
+      }
+    }
+
     let body = "";
     if (c.estado === "procesando") {
       body = `<div class="hint">⏳ Transcribiendo tu consulta... para audios largos puede tardar varios minutos. Esta pantalla se actualiza sola, no hace falta que hagas nada.</div>`;
@@ -246,9 +276,50 @@ async function renderDetalle(id, esRefrescoAutomatico) {
         <div class="fecha">${new Date(c.createdAt).toLocaleString("es-BO")}${c.duracionSegundos ? " · " + Math.round(c.duracionSegundos/60) + " min" : ""}</div>
       </div>
       ${notaHtml}
+      ${sugerenciasHtml}
       <div style="margin-top:14px">${body}</div>
     `;
     document.getElementById("btnBack").onclick = () => renderPacienteDetalle(c.pacienteId, "consultas");
+
+    document.querySelectorAll("[data-sugerencia]").forEach(btn => {
+      btn.onclick = async () => {
+        const [tipo, iStr] = btn.dataset.sugerencia.split(":");
+        const i = Number(iStr);
+        const n = c.notaClinica;
+        btn.disabled = true;
+        try {
+          if (tipo === "medicamento") {
+            const m = n.medicamentosRecetados[i];
+            await api("/medico/pacientes/" + c.pacienteId + "/medicamentos", {
+              method: "POST", headers: {"Content-Type":"application/json"},
+              body: JSON.stringify({ nombre: m.nombre, dosis: m.dosis || "", frecuencia: m.frecuencia || "" }),
+            });
+          } else if (tipo === "antp") {
+            await api("/medico/pacientes/" + c.pacienteId + "/antecedentes-personales", {
+              method: "POST", headers: {"Content-Type":"application/json"},
+              body: JSON.stringify({ texto: n.antecedentesPersonalesNuevos[i] }),
+            });
+          } else if (tipo === "antf") {
+            const a = n.antecedentesFamiliaresNuevos[i];
+            await api("/medico/pacientes/" + c.pacienteId + "/antecedentes-familiares", {
+              method: "POST", headers: {"Content-Type":"application/json"},
+              body: JSON.stringify({ parentesco: a.parentesco, condicion: a.condicion }),
+            });
+          } else if (tipo === "vacuna") {
+            const v = n.vacunasMencionadas[i];
+            const fecha = v.fecha || new Date(c.createdAt).toISOString().slice(0, 10);
+            await api("/medico/pacientes/" + c.pacienteId + "/vacunas", {
+              method: "POST", headers: {"Content-Type":"application/json"},
+              body: JSON.stringify({ nombre: v.nombre, dosis: v.dosis || "", fecha }),
+            });
+          }
+          btn.textContent = "✅ Agregado";
+        } catch (e) {
+          btn.disabled = false;
+          btn.textContent = "⚠️ Reintentar";
+        }
+      };
+    });
 
     if (c.estado === "procesando" || (c.estado === "completado" && c.notaClinicaEstado === "pendiente")) {
       pollTimeout = setTimeout(() => renderDetalle(id, true), 8000);

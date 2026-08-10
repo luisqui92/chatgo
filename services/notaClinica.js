@@ -1,6 +1,8 @@
 // ChatGo Salud — genera la nota clínica estructurada a partir de la
-// transcripción de una consulta (motivo, síntomas, diagnóstico, plan...).
-// Es un segundo paso de IA, separado de la transcripción en sí.
+// transcripción de una consulta (motivo, síntomas, diagnóstico, plan...),
+// y detecta sugerencias nuevas para el Kardex (antecedentes, vacunas) que
+// el médico puede aprobar con un toque. Es un segundo paso de IA, separado
+// de la transcripción en sí.
 const axios = require("axios");
 const { CONFIG, log } = require("../config");
 
@@ -19,23 +21,47 @@ RESPONDE SOLO JSON con esta estructura exacta:
   "plan": "string o null",
   "medicamentosRecetados": [{"nombre":"string","dosis":"string o null","frecuencia":"string o null"}],
   "examenesSolicitados": ["string", ...],
-  "proximoControl": "string o null"
+  "proximoControl": "string o null",
+  "antecedentesPersonalesNuevos": ["string", ...],
+  "antecedentesFamiliaresNuevos": [{"parentesco":"string","condicion":"string"}],
+  "vacunasMencionadas": [{"nombre":"string","dosis":"string o null","fecha":"YYYY-MM-DD o null"}]
 }
 
-Si algo no se menciona en la transcripción, usá null o un array vacío.
-NUNCA inventes información clínica que no esté en el texto. Esto es un
-apoyo para el médico, no reemplaza su criterio profesional.`;
+Reglas:
+- Si algo no se menciona en la transcripción, usá null o un array vacío.
+- NUNCA inventes información clínica que no esté en el texto. Esto es un
+  apoyo para el médico, no reemplaza su criterio profesional.
+- "antecedentesPersonalesNuevos"/"antecedentesFamiliaresNuevos"/"vacunasMencionadas":
+  te paso lo que el paciente YA tiene registrado (más abajo, si hay). Reportá
+  SOLO lo que se menciona en esta transcripción y que NO esté ya en esa lista
+  — no repitas algo que el paciente ya tenía anotado.`;
 
-async function generarNotaClinica(transcripcion) {
+function construirContexto(contexto) {
+  if (!contexto) return "";
+  const partes = [];
+  if (contexto.antecedentesPersonales?.length) {
+    partes.push(`Antecedentes personales ya registrados: ${contexto.antecedentesPersonales.join("; ")}`);
+  }
+  if (contexto.antecedentesFamiliares?.length) {
+    partes.push(`Antecedentes familiares ya registrados: ${contexto.antecedentesFamiliares.map(a => `${a.parentesco}: ${a.condicion}`).join("; ")}`);
+  }
+  if (contexto.medicamentosActivos?.length) {
+    partes.push(`Medicamentos ya activos: ${contexto.medicamentosActivos.join(", ")}`);
+  }
+  if (partes.length === 0) return "";
+  return `\n\n(Lo que el paciente ya tiene registrado, para no repetirlo como "nuevo":\n${partes.join("\n")})`;
+}
+
+async function generarNotaClinica(transcripcion, contexto) {
   const res = await axios.post(
     "https://api.openai.com/v1/chat/completions",
     {
       model: "gpt-4o-mini",
       messages: [
         { role: "system", content: PROMPT_SISTEMA },
-        { role: "user", content: transcripcion },
+        { role: "user", content: transcripcion + construirContexto(contexto) },
       ],
-      max_tokens: 800,
+      max_tokens: 1000,
       temperature: 0.1,
     },
     {
