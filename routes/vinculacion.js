@@ -3,11 +3,11 @@
 // el celular una vez al día con un código, lo dejan al lado de la compu con
 // la pantalla prendida, y desde la compu controlan cuándo arranca y termina
 // la grabación (el celular pregunta cada 1-2s si hay una orden pendiente).
-const { CONFIG, log } = require("../config");
 const { Vinculacion } = require("../db/models");
 const { requireAuth } = require("../services/auth");
 const { limitMedico } = require("../services/ratelimit");
 const { fechaStrBolivia } = require("../services/utils");
+const { asyncRoute, ErrorHttp } = require("../services/httpHelpers");
 
 const requireMedico = requireAuth(["medico"]);
 
@@ -36,73 +36,53 @@ async function obtenerOCrearHoy(medicoPhone) {
 
 module.exports = function (app) {
   // ─── ESTADO ACTUAL (compu y celular la usan para saber qué pasa) ───────
-  app.get("/medico/vinculacion", requireMedico, async (req, res) => {
-    try {
-      const v = await obtenerOCrearHoy(req.adminUser.usuario);
-      res.json({ vinculacion: v });
-    } catch (e) {
-      log.error("[VINCULACION_GET]", e.message);
-      res.status(500).json({ error: "Error obteniendo la vinculación" });
-    }
-  });
+  app.get("/medico/vinculacion", requireMedico, asyncRoute(async (req, res) => {
+    const v = await obtenerOCrearHoy(req.adminUser.usuario);
+    res.json({ vinculacion: v });
+  }));
 
   // ─── EL CELULAR CONFIRMA EL CÓDIGO ──────────────────────────────────────
-  app.post("/medico/vinculacion/vincular", limitMedico, requireMedico, async (req, res) => {
-    try {
-      const medicoPhone = req.adminUser.usuario;
-      const codigo = String(req.body?.codigo || "").trim();
-      const v = await obtenerOCrearHoy(medicoPhone);
-      if (codigo !== v.codigo) return res.status(401).json({ error: "Código incorrecto" });
-      v.vinculado = true;
-      v.estado = "armado";
-      await v.save();
-      res.json({ ok: true, vinculacion: v });
-    } catch (e) {
-      log.error("[VINCULACION_VINCULAR]", e.message);
-      res.status(500).json({ error: "Error vinculando el celular" });
-    }
-  });
+  app.post("/medico/vinculacion/vincular", limitMedico, requireMedico, asyncRoute(async (req, res) => {
+    const medicoPhone = req.adminUser.usuario;
+    const codigo = String(req.body?.codigo || "").trim();
+    const v = await obtenerOCrearHoy(medicoPhone);
+    if (codigo !== v.codigo) throw new ErrorHttp(401, "Código incorrecto");
+    v.vinculado = true;
+    v.estado = "armado";
+    await v.save();
+    res.json({ ok: true, vinculacion: v });
+  }));
 
   // ─── LA COMPU MANDA UNA ORDEN (iniciar/detener) ─────────────────────────
-  app.post("/medico/vinculacion/comando", limitMedico, requireMedico, async (req, res) => {
-    try {
-      const medicoPhone = req.adminUser.usuario;
-      const accion = String(req.body?.accion || "").trim();
-      if (!["iniciar", "detener"].includes(accion)) return res.status(400).json({ error: "accion inválida" });
+  app.post("/medico/vinculacion/comando", limitMedico, requireMedico, asyncRoute(async (req, res) => {
+    const medicoPhone = req.adminUser.usuario;
+    const accion = String(req.body?.accion || "").trim();
+    if (!["iniciar", "detener"].includes(accion)) throw new ErrorHttp(400, "accion inválida");
 
-      const v = await obtenerOCrearHoy(medicoPhone);
-      if (!v.vinculado) return res.status(409).json({ error: "Todavía no hay ningún celular vinculado hoy" });
+    const v = await obtenerOCrearHoy(medicoPhone);
+    if (!v.vinculado) throw new ErrorHttp(409, "Todavía no hay ningún celular vinculado hoy");
 
-      v.comandoPendiente = {
-        accion,
-        pacienteId: req.body?.pacienteId || null,
-        pacienteNombre: req.body?.pacienteNombre || "",
-        emitidoEn: new Date(),
-      };
-      await v.save();
-      res.json({ ok: true, vinculacion: v });
-    } catch (e) {
-      log.error("[VINCULACION_COMANDO]", e.message);
-      res.status(500).json({ error: "Error mandando el comando" });
-    }
-  });
+    v.comandoPendiente = {
+      accion,
+      pacienteId: req.body?.pacienteId || null,
+      pacienteNombre: req.body?.pacienteNombre || "",
+      emitidoEn: new Date(),
+    };
+    await v.save();
+    res.json({ ok: true, vinculacion: v });
+  }));
 
   // ─── EL CELULAR REPORTA QUE CAMBIÓ DE ESTADO (y limpia la orden) ───────
-  app.post("/medico/vinculacion/estado", limitMedico, requireMedico, async (req, res) => {
-    try {
-      const medicoPhone = req.adminUser.usuario;
-      const estado = String(req.body?.estado || "").trim();
-      if (!["armado", "grabando"].includes(estado)) return res.status(400).json({ error: "estado inválido" });
+  app.post("/medico/vinculacion/estado", limitMedico, requireMedico, asyncRoute(async (req, res) => {
+    const medicoPhone = req.adminUser.usuario;
+    const estado = String(req.body?.estado || "").trim();
+    if (!["armado", "grabando"].includes(estado)) throw new ErrorHttp(400, "estado inválido");
 
-      const v = await obtenerOCrearHoy(medicoPhone);
-      v.estado = estado;
-      v.comandoPendiente = undefined;
-      v.consultaId = req.body?.consultaId || (estado === "grabando" ? null : v.consultaId);
-      await v.save();
-      res.json({ ok: true, vinculacion: v });
-    } catch (e) {
-      log.error("[VINCULACION_ESTADO]", e.message);
-      res.status(500).json({ error: "Error actualizando el estado" });
-    }
-  });
+    const v = await obtenerOCrearHoy(medicoPhone);
+    v.estado = estado;
+    v.comandoPendiente = undefined;
+    v.consultaId = req.body?.consultaId || (estado === "grabando" ? null : v.consultaId);
+    await v.save();
+    res.json({ ok: true, vinculacion: v });
+  }));
 };

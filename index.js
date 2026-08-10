@@ -93,6 +93,7 @@ const allDeps = {
 require("./routes/webhook")(app, allDeps);
 require("./routes/admin")(app, allDeps);
 require("./routes/pagoNotificacion")(app, allDeps);
+require("./routes/medicoAuth")(app, allDeps);
 require("./routes/consultaMedica")(app, allDeps);
 require("./routes/pacientes")(app, allDeps);
 require("./routes/medicamentos")(app, allDeps);
@@ -126,12 +127,11 @@ app.get("/qr/:filename", (req, res) => {
   res.sendFile(file);
 });
 
-// Logo de Vitalis (ChatGo Salud)
-app.get("/salud/logo.png", (_req, res) => {
-  const path = require("path");
-  res.setHeader("Cache-Control", "public, max-age=86400");
-  res.sendFile(path.join(__dirname, "public", "salud", "logo.png"));
-});
+// Estáticos de Vitalis (logo, css, los módulos JS de salud.html) — todo lo
+// que se agregue a public/salud/ queda servido solo, sin tocar este archivo.
+app.use("/salud", require("express").static(require("path").join(__dirname, "public", "salud"), {
+  maxAge: "1d",
+}));
 
 // Web de consultas médicas (mismo dominio/certificado que la API, sin subdominio aparte)
 app.get("/salud", (_req, res) => {
