@@ -132,8 +132,11 @@ app.get("/qr/:filename", (req, res) => {
 
 // Estáticos de Vitalis (logo, css, los módulos JS de salud.html) — todo lo
 // que se agregue a public/salud/ queda servido solo, sin tocar este archivo.
+// maxAge corto a propósito: mientras el producto cambia seguido, que el
+// celular del médico siempre pida la versión nueva vale más que ahorrar
+// esas requests (son archivos chicos).
 app.use("/salud", require("express").static(require("path").join(__dirname, "public", "salud"), {
-  maxAge: "1d",
+  maxAge: "5m",
 }));
 
 // Web de consultas médicas (mismo dominio/certificado que la API, sin subdominio aparte)
