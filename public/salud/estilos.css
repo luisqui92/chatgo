@@ -96,3 +96,6 @@ button.link{background:none;border:none;color:var(--primary);font-size:13px;marg
 #memoriaChat{max-height:260px;overflow-y:auto;margin-bottom:12px;}
 .memoria-pregunta{font-size:13px;font-weight:600;margin-top:12px;}
 .memoria-respuesta{font-size:13px;color:var(--text-muted);line-height:1.5;margin-top:4px;padding-left:10px;border-left:2px solid var(--accent-2);}
+.mic-btn{flex:0 0 auto;width:44px;height:44px;border-radius:50%;border:1px solid var(--border);background:var(--card);color:var(--primary);font-size:17px;display:flex;align-items:center;justify-content:center;}
+.mic-btn:disabled{opacity:.4;}
+.mic-btn.escuchando{background:var(--danger);border-color:var(--danger);color:#fff;animation:pulse 1.6s infinite;}
