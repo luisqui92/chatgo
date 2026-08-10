@@ -24,8 +24,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;backgrou
 .card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:20px;margin-bottom:14px;box-shadow:0 1px 3px rgba(15,39,51,.05);}
 label{display:block;font-size:12px;color:var(--text-muted);margin-bottom:6px;margin-top:14px;}
 label:first-child{margin-top:0;}
-input,select{width:100%;background:#f7fafb;border:1px solid var(--border);color:var(--text);border-radius:8px;padding:11px;font-size:14px;}
-input:focus,select:focus{outline:none;border-color:var(--primary);}
+input,select,textarea{width:100%;background:#f7fafb;border:1px solid var(--border);color:var(--text);border-radius:8px;padding:11px;font-size:14px;font-family:inherit;}
+input:focus,select:focus,textarea:focus{outline:none;border-color:var(--primary);}
+textarea{resize:vertical;}
 button{font-family:inherit;}
 button.primary{width:100%;background:var(--primary);color:#fff;border:none;border-radius:8px;padding:13px;font-size:15px;font-weight:600;margin-top:18px;}
 button.primary:disabled{opacity:.5;}
@@ -99,3 +100,14 @@ button.link{background:none;border:none;color:var(--primary);font-size:13px;marg
 .mic-btn{flex:0 0 auto;width:44px;height:44px;border-radius:50%;border:1px solid var(--border);background:var(--card);color:var(--primary);font-size:17px;display:flex;align-items:center;justify-content:center;}
 .mic-btn:disabled{opacity:.4;}
 .mic-btn.escuchando{background:var(--danger);border-color:var(--danger);color:#fff;animation:pulse 1.6s infinite;}
+
+/* ─── Receta Digital ─────────────────────────────────────────────────── */
+.rec-row{border:1px solid var(--border);border-radius:10px;padding:12px;margin-top:10px;}
+.rec-row .quitar-fila{background:none;border:none;color:var(--danger);font-size:12px;font-weight:600;margin-top:8px;}
+
+@media print{
+  .no-imprimir{display:none !important;}
+  body{background:#fff;}
+  .wrap{padding:0;max-width:100%;}
+  #recetaHoja{box-shadow:none;border:none;padding:0 !important;}
+}

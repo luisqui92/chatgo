@@ -220,6 +220,7 @@ async function renderDetalle(id, esRefrescoAutomatico) {
             ${meds ? `<div class="nota-campo"><b>Medicamentos:</b> ${meds}</div>` : ""}
             ${(n.examenesSolicitados||[]).length ? `<div class="nota-campo"><b>Exámenes:</b> ${esc(n.examenesSolicitados.join(", "))}</div>` : ""}
             ${n.proximoControl ? `<div class="nota-campo"><b>Próximo control:</b> ${esc(n.proximoControl)}</div>` : ""}
+            ${(n.medicamentosRecetados||[]).length ? `<button class="secondary" id="btnGenerarReceta" style="margin-top:14px">📝 Generar receta con estos medicamentos</button>` : ""}
           </div>`;
       }
     }
@@ -280,6 +281,24 @@ async function renderDetalle(id, esRefrescoAutomatico) {
       <div style="margin-top:14px">${body}</div>
     `;
     document.getElementById("btnBack").onclick = () => renderPacienteDetalle(c.pacienteId, "consultas");
+
+    const btnGenerarReceta = document.getElementById("btnGenerarReceta");
+    if (btnGenerarReceta) {
+      btnGenerarReceta.onclick = async () => {
+        btnGenerarReceta.disabled = true;
+        btnGenerarReceta.textContent = "Generando...";
+        try {
+          const data = await api("/medico/pacientes/" + c.pacienteId + "/recetas", {
+            method: "POST", headers: {"Content-Type":"application/json"},
+            body: JSON.stringify({ medicamentos: c.notaClinica.medicamentosRecetados, consultaId: c._id }),
+          });
+          renderReceta(data.receta._id);
+        } catch (e) {
+          btnGenerarReceta.disabled = false;
+          btnGenerarReceta.textContent = "📝 Generar receta con estos medicamentos";
+        }
+      };
+    }
 
     document.querySelectorAll("[data-sugerencia]").forEach(btn => {
       btn.onclick = async () => {

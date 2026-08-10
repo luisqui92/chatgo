@@ -530,6 +530,26 @@ const estudioSchema = new mongoose.Schema({
 estudioSchema.index({ pacienteId: 1, fecha: -1 });
 const Estudio = mongoose.model("Estudio", estudioSchema);
 
+// Receta Digital: se arma a partir de lo recetado en una consulta (o a
+// mano) y queda lista para imprimir/guardar como PDF desde el navegador.
+// Crearla ES el acto de aprobación del médico — no hay estado de borrador,
+// mismo criterio que medicamentos/vacunas (se carga ya revisada).
+const recetaSchema = new mongoose.Schema({
+  pacienteId: { type: mongoose.Schema.Types.ObjectId, ref: "Paciente", required: true, index: true },
+  medicoPhone: { type: String, index: true, required: true },
+  consultaId: { type: mongoose.Schema.Types.ObjectId, ref: "ConsultaMedica", default: null },
+  medicamentos: [{
+    nombre: { type: String, required: true },
+    dosis: { type: String, default: "" },
+    frecuencia: { type: String, default: "" },
+    duracion: { type: String, default: "" },
+  }],
+  indicaciones: { type: String, default: "" },
+  fecha: { type: Date, required: true },
+}, { timestamps: true });
+recetaSchema.index({ pacienteId: 1, fecha: -1 });
+const Receta = mongoose.model("Receta", recetaSchema);
+
 // Vincula el celular de un médico como "micrófono remoto" para su compu de
 // escritorio (sin micrófono propio). Un código por médico por día; la compu
 // deja un comando pendiente ("iniciar"/"detener") que el celular recoge la
@@ -550,4 +570,4 @@ const vinculacionSchema = new mongoose.Schema({
 }, { timestamps: true });
 const Vinculacion = mongoose.model("Vinculacion", vinculacionSchema);
 
-module.exports = { Usuario, Chofer, Viaje, SessionState, ListaEspera, RateLimit, CodigoPromo, LocationReference, Demanda, EventoChofer, AlertaSeg, Surge, ViajeDemo, EsquinaMapeada, PreRegistroFlota, Flota, NotificacionPago, Medico, Paciente, ConsultaMedica, Vinculacion, Medicamento, Vacuna, Medicion, Estudio };
+module.exports = { Usuario, Chofer, Viaje, SessionState, ListaEspera, RateLimit, CodigoPromo, LocationReference, Demanda, EventoChofer, AlertaSeg, Surge, ViajeDemo, EsquinaMapeada, PreRegistroFlota, Flota, NotificacionPago, Medico, Paciente, ConsultaMedica, Vinculacion, Medicamento, Vacuna, Medicion, Estudio, Receta };
