@@ -102,6 +102,7 @@ require("./routes/mediciones")(app, allDeps);
 require("./routes/estudios")(app, allDeps);
 require("./routes/memoriaClinica")(app, allDeps);
 require("./routes/recetas")(app, allDeps);
+require("./routes/recordatorios")(app, allDeps);
 require("./routes/vinculacion")(app, allDeps);
 
 // ─── INTERVALS ────────────────────────────────────────────────────────────────

@@ -550,6 +550,23 @@ const recetaSchema = new mongoose.Schema({
 recetaSchema.index({ pacienteId: 1, fecha: -1 });
 const Receta = mongoose.model("Receta", recetaSchema);
 
+// Recordatorios Médicos: vencimientos/controles próximos, vistos en una
+// sola lista global del panel del médico (no por paciente) — "qué se viene"
+// en todo el consultorio. Mandarlo solo por WhatsApp queda pendiente hasta
+// resolver esa integración; por ahora el médico lo revisa dentro de Vitalis.
+const recordatorioSchema = new mongoose.Schema({
+  pacienteId: { type: mongoose.Schema.Types.ObjectId, ref: "Paciente", required: true, index: true },
+  pacienteNombre: { type: String, required: true }, // snapshot, evita un join para pintar la lista
+  medicoPhone: { type: String, index: true, required: true },
+  tipo: { type: String, default: "otro" }, // control, medicamento, estudio, vacuna, otro
+  titulo: { type: String, required: true },
+  fecha: { type: Date, required: true },
+  notas: { type: String, default: "" },
+  completado: { type: Boolean, default: false },
+}, { timestamps: true });
+recordatorioSchema.index({ medicoPhone: 1, completado: 1, fecha: 1 });
+const Recordatorio = mongoose.model("Recordatorio", recordatorioSchema);
+
 // Vincula el celular de un médico como "micrófono remoto" para su compu de
 // escritorio (sin micrófono propio). Un código por médico por día; la compu
 // deja un comando pendiente ("iniciar"/"detener") que el celular recoge la
@@ -570,4 +587,4 @@ const vinculacionSchema = new mongoose.Schema({
 }, { timestamps: true });
 const Vinculacion = mongoose.model("Vinculacion", vinculacionSchema);
 
-module.exports = { Usuario, Chofer, Viaje, SessionState, ListaEspera, RateLimit, CodigoPromo, LocationReference, Demanda, EventoChofer, AlertaSeg, Surge, ViajeDemo, EsquinaMapeada, PreRegistroFlota, Flota, NotificacionPago, Medico, Paciente, ConsultaMedica, Vinculacion, Medicamento, Vacuna, Medicion, Estudio, Receta };
+module.exports = { Usuario, Chofer, Viaje, SessionState, ListaEspera, RateLimit, CodigoPromo, LocationReference, Demanda, EventoChofer, AlertaSeg, Surge, ViajeDemo, EsquinaMapeada, PreRegistroFlota, Flota, NotificacionPago, Medico, Paciente, ConsultaMedica, Vinculacion, Medicamento, Vacuna, Medicion, Estudio, Receta, Recordatorio };

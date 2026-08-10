@@ -8,9 +8,13 @@ async function renderDashboard() {
   btnLogout.style.display = "inline-block";
   app.innerHTML = `<div class="loading">⏳ Cargando tus pacientes...</div>`;
   try {
-    const data = await api("/medico/pacientes");
-    const items = data.pacientes || [];
+    const [dataPacientes, dataRecordatorios] = await Promise.all([
+      api("/medico/pacientes"),
+      api("/medico/recordatorios"),
+    ]);
+    const items = dataPacientes.pacientes || [];
     app.innerHTML = `
+      ${tabRecordatoriosHtml(dataRecordatorios.recordatorios || [], items)}
       <button class="secondary" id="btnNuevoPaciente">➕ Nuevo paciente</button>
       <button class="link" id="btnVincular" style="margin-top:6px">🔗 Vincular este celular como micrófono</button>
       ${items.length === 0 ? `<div class="empty">Todavía no registraste ningún paciente.</div>` : ""}
@@ -25,9 +29,10 @@ async function renderDashboard() {
     `;
     document.getElementById("btnNuevoPaciente").onclick = renderNuevoPaciente;
     document.getElementById("btnVincular").onclick = renderVincular;
-    document.querySelectorAll(".item").forEach(el => {
+    document.querySelectorAll(".item[data-id]").forEach(el => {
       el.onclick = () => renderPacienteDetalle(el.dataset.id);
     });
+    wireRecordatorios(items);
   } catch (e) {
     if (e.status === 401) return logout();
     app.innerHTML = `<div class="error">${esc(e.error || "Error cargando pacientes")}</div>`;
