@@ -388,6 +388,21 @@ const medicoSchema = new mongoose.Schema({
   especialidad: { type: String, default: "" },
   passwordHash: { type: String, required: true },
   activo: { type: Boolean, default: true },
+  // Agenda: horario de atención (para calcular horarios disponibles) y,
+  // opcional, el calendario de Google donde se reflejan las citas (se
+  // comparte ese calendario con la cuenta de servicio de Vitalis).
+  horarioAtencion: {
+    type: [{ diaSemana: Number, horaInicio: String, horaFin: String }], // diaSemana: 0=domingo … 6=sábado
+    default: [
+      { diaSemana: 1, horaInicio: "08:00", horaFin: "17:00" },
+      { diaSemana: 2, horaInicio: "08:00", horaFin: "17:00" },
+      { diaSemana: 3, horaInicio: "08:00", horaFin: "17:00" },
+      { diaSemana: 4, horaInicio: "08:00", horaFin: "17:00" },
+      { diaSemana: 5, horaInicio: "08:00", horaFin: "17:00" },
+    ],
+  },
+  duracionConsultaMinutos: { type: Number, default: 30 },
+  googleCalendarId: { type: String, default: "" }, // ej: el gmail del médico, compartido con la cuenta de servicio
 }, { timestamps: true });
 const Medico = mongoose.model("Medico", medicoSchema);
 
@@ -567,6 +582,35 @@ const recordatorioSchema = new mongoose.Schema({
 recordatorioSchema.index({ medicoPhone: 1, completado: 1, fecha: 1 });
 const Recordatorio = mongoose.model("Recordatorio", recordatorioSchema);
 
+// Agenda: citas del médico. pacienteId es opcional porque una reserva por
+// WhatsApp puede venir de alguien que todavía no es un Paciente registrado
+// en el Kardex (se identifica por su número de WhatsApp hasta que el médico
+// lo vincule a una ficha real).
+const citaSchema = new mongoose.Schema({
+  medicoPhone: { type: String, index: true, required: true },
+  pacienteId: { type: mongoose.Schema.Types.ObjectId, ref: "Paciente", default: null },
+  pacienteNombre: { type: String, required: true },
+  pacienteTelefono: { type: String, default: "", index: true },
+  fecha: { type: Date, required: true }, // inicio de la cita
+  duracionMinutos: { type: Number, default: 30 },
+  motivo: { type: String, default: "" },
+  estado: { type: String, enum: ["confirmada", "cancelada", "completada"], default: "confirmada" },
+  origen: { type: String, enum: ["whatsapp", "manual"], default: "manual" },
+  googleEventId: { type: String, default: null }, // id del evento en Google Calendar, para poder editarlo/cancelarlo
+}, { timestamps: true });
+citaSchema.index({ medicoPhone: 1, fecha: 1 });
+const Cita = mongoose.model("Cita", citaSchema);
+
+// Estado de la conversación de reserva por WhatsApp, por número de paciente
+// (persistido, no en memoria, para no perder la conversación a mitad de
+// camino si el server se reinicia).
+const sesionCitaWaSchema = new mongoose.Schema({
+  numero: { type: String, unique: true, index: true, required: true },
+  paso: { type: String, required: true },
+  datos: { type: mongoose.Schema.Types.Mixed, default: {} },
+}, { timestamps: true });
+const SesionCitaWA = mongoose.model("SesionCitaWA", sesionCitaWaSchema);
+
 // Vincula el celular de un médico como "micrófono remoto" para su compu de
 // escritorio (sin micrófono propio). Un código por médico por día; la compu
 // deja un comando pendiente ("iniciar"/"detener") que el celular recoge la
@@ -587,4 +631,4 @@ const vinculacionSchema = new mongoose.Schema({
 }, { timestamps: true });
 const Vinculacion = mongoose.model("Vinculacion", vinculacionSchema);
 
-module.exports = { Usuario, Chofer, Viaje, SessionState, ListaEspera, RateLimit, CodigoPromo, LocationReference, Demanda, EventoChofer, AlertaSeg, Surge, ViajeDemo, EsquinaMapeada, PreRegistroFlota, Flota, NotificacionPago, Medico, Paciente, ConsultaMedica, Vinculacion, Medicamento, Vacuna, Medicion, Estudio, Receta, Recordatorio };
+module.exports = { Usuario, Chofer, Viaje, SessionState, ListaEspera, RateLimit, CodigoPromo, LocationReference, Demanda, EventoChofer, AlertaSeg, Surge, ViajeDemo, EsquinaMapeada, PreRegistroFlota, Flota, NotificacionPago, Medico, Paciente, ConsultaMedica, Vinculacion, Medicamento, Vacuna, Medicion, Estudio, Receta, Recordatorio, Cita, SesionCitaWA };

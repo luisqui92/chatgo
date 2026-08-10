@@ -16,6 +16,7 @@ async function renderDashboard() {
     app.innerHTML = `
       ${tabRecordatoriosHtml(dataRecordatorios.recordatorios || [], items)}
       <button class="secondary" id="btnNuevoPaciente">➕ Nuevo paciente</button>
+      <button class="secondary" id="btnAgenda" style="background:var(--card);color:var(--primary)">📅 Agenda de citas</button>
       <button class="link" id="btnVincular" style="margin-top:6px">🔗 Vincular este celular como micrófono</button>
       ${items.length === 0 ? `<div class="empty">Todavía no registraste ningún paciente.</div>` : ""}
       ${items.map(p => {
@@ -28,6 +29,7 @@ async function renderDashboard() {
       }).join("")}
     `;
     document.getElementById("btnNuevoPaciente").onclick = renderNuevoPaciente;
+    document.getElementById("btnAgenda").onclick = renderAgenda;
     document.getElementById("btnVincular").onclick = renderVincular;
     document.querySelectorAll(".item[data-id]").forEach(el => {
       el.onclick = () => renderPacienteDetalle(el.dataset.id);

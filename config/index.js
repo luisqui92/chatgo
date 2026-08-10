@@ -53,6 +53,20 @@ const CONFIG = {
   // Secreto compartido para validar notificaciones de pago bancario (MacroDroid → webhook).
   // Si no está configurado, el endpoint rechaza todas las llamadas.
   PAGO_WEBHOOK_SECRET: process.env.PAGO_WEBHOOK_SECRET || null,
+
+  // ─── Vitalis: reserva de citas por WhatsApp (Evolution API) + Google Calendar ──
+  // Número separado del bot de taxis. Si no están configuradas, los servicios
+  // fallan de forma controlada (no rompen el resto de la app).
+  EVOLUTION_API_URL: process.env.EVOLUTION_API_URL || "",
+  EVOLUTION_API_KEY: process.env.EVOLUTION_API_KEY || "",
+  EVOLUTION_INSTANCE: process.env.EVOLUTION_INSTANCE || "vitalis",
+  EVOLUTION_WEBHOOK_SECRET: process.env.EVOLUTION_WEBHOOK_SECRET || "",
+  // A qué médico (por su phone, el mismo que usa para loguearse en Vitalis)
+  // pertenece este número de WhatsApp de reservas. Un solo número por ahora.
+  EVOLUTION_MEDICO_PHONE: process.env.EVOLUTION_MEDICO_PHONE || "",
+  // JSON completo de la cuenta de servicio de Google (Calendar API), como un
+  // solo string en la variable de entorno.
+  GOOGLE_SERVICE_ACCOUNT_JSON: process.env.GOOGLE_SERVICE_ACCOUNT_JSON || "",
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
