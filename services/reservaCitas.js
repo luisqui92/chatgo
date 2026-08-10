@@ -32,7 +32,7 @@ async function limpiarSesion(numero) {
 }
 
 async function procesarMensajeEntrante(numero, texto, nombrePerfil) {
-  const medicoPhone = CONFIG.EVOLUTION_MEDICO_PHONE;
+  const medicoPhone = CONFIG.SALUD_WHATSAPP_MEDICO_PHONE;
   if (!medicoPhone) return "Este número todavía no está configurado. Avisale a la clínica.";
   const medico = await Medico.findOne({ phone: medicoPhone }).lean();
   if (!medico) return "Este número todavía no está configurado. Avisale a la clínica.";

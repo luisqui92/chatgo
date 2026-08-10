@@ -104,7 +104,12 @@ require("./routes/memoriaClinica")(app, allDeps);
 require("./routes/recetas")(app, allDeps);
 require("./routes/recordatorios")(app, allDeps);
 require("./routes/citas")(app, allDeps);
-require("./routes/citasWhatsapp")(app, allDeps);
+require("./routes/whatsappSalud")(app, allDeps);
+
+// WhatsApp de reservas de Vitalis (Baileys) — corre en este mismo proceso,
+// no hace falta ningún webhook externo. No hace nada si no está configurado
+// SALUD_WHATSAPP_MEDICO_PHONE.
+require("./services/baileysWhatsapp").iniciarWhatsapp().catch(e => log.error("[VITALIS_WHATSAPP]", e.message));
 require("./routes/vinculacion")(app, allDeps);
 
 // ─── INTERVALS ────────────────────────────────────────────────────────────────
