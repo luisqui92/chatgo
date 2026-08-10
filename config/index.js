@@ -10,7 +10,6 @@ const CONFIG = {
   META_APP_SECRET: process.env.META_APP_SECRET,
   GOOGLE_MAPS_KEY: process.env.GOOGLE_MAPS_KEY,
   OPENAI_KEY: process.env.OPENAI_KEY,
-  ASSEMBLYAI_API_KEY: process.env.ASSEMBLYAI_API_KEY,
   MONGODB_URI: process.env.MONGODB_URI,
   ADMIN_PHONE: process.env.ADMIN_PHONE || "59162741818",
   QR_IMAGE_URL: process.env.QR_IMAGE_URL || (process.env.APP_URL ? `${process.env.APP_URL}/qr/pago.jpg` : null),
@@ -18,8 +17,6 @@ const CONFIG = {
   TIMEOUT_OPENAI: 45000,
   TIMEOUT_GOOGLE: 10000,
   TIMEOUT_META: 15000,
-  TIMEOUT_ASSEMBLYAI: 120000, // por cada llamada (subir audio, pedir transcripción, cada poll)
-  TIMEOUT_TRANSCRIPCION_TOTAL: 1200000, // 20 min: corre en segundo plano, hay margen de sobra para consultas de 45 min
 
   TIMEOUT_ACEPTACION_CHOFER: 30,
   ESPERA_NOTIFICAR_SIN_CHOFER: 120,
@@ -53,18 +50,6 @@ const CONFIG = {
   // Secreto compartido para validar notificaciones de pago bancario (MacroDroid → webhook).
   // Si no está configurado, el endpoint rechaza todas las llamadas.
   PAGO_WEBHOOK_SECRET: process.env.PAGO_WEBHOOK_SECRET || null,
-
-  // ─── Vitalis: reserva de citas por WhatsApp (Baileys, corre en este mismo
-  // proceso, sin servicios externos) + Google Calendar. Número separado del
-  // bot de taxis. Si no están configuradas, los servicios fallan de forma
-  // controlada (no rompen el resto de la app).
-  // A qué médico (por su phone, el mismo que usa para loguearse en Vitalis)
-  // pertenece el número de WhatsApp de reservas. Un solo número por ahora —
-  // si no está seteado, Vitalis ni intenta conectar WhatsApp al arrancar.
-  SALUD_WHATSAPP_MEDICO_PHONE: process.env.SALUD_WHATSAPP_MEDICO_PHONE || "",
-  // JSON completo de la cuenta de servicio de Google (Calendar API), como un
-  // solo string en la variable de entorno.
-  GOOGLE_SERVICE_ACCOUNT_JSON: process.env.GOOGLE_SERVICE_ACCOUNT_JSON || "",
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -169,10 +154,6 @@ const log = {
 // FIX BUG#10 — advertir si META_APP_SECRET no está seteado
 if (!process.env.META_APP_SECRET) {
   log.warn("⚠️  META_APP_SECRET no configurado — el webhook acepta requests sin validar firma. Configúralo en producción.");
-}
-
-if (!process.env.ASSEMBLYAI_API_KEY) {
-  log.warn("⚠️  ASSEMBLYAI_API_KEY no configurado — la transcripción de consultas médicas fallará hasta que lo configures.");
 }
 
 

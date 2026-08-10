@@ -93,24 +93,6 @@ const allDeps = {
 require("./routes/webhook")(app, allDeps);
 require("./routes/admin")(app, allDeps);
 require("./routes/pagoNotificacion")(app, allDeps);
-require("./routes/medicoAuth")(app, allDeps);
-require("./routes/consultaMedica")(app, allDeps);
-require("./routes/pacientes")(app, allDeps);
-require("./routes/medicamentos")(app, allDeps);
-require("./routes/vacunas")(app, allDeps);
-require("./routes/mediciones")(app, allDeps);
-require("./routes/estudios")(app, allDeps);
-require("./routes/memoriaClinica")(app, allDeps);
-require("./routes/recetas")(app, allDeps);
-require("./routes/recordatorios")(app, allDeps);
-require("./routes/citas")(app, allDeps);
-require("./routes/whatsappSalud")(app, allDeps);
-
-// WhatsApp de reservas de Vitalis (Baileys) — corre en este mismo proceso,
-// no hace falta ningún webhook externo. No hace nada si no está configurado
-// SALUD_WHATSAPP_MEDICO_PHONE.
-require("./services/baileysWhatsapp").iniciarWhatsapp().catch(e => log.error("[VITALIS_WHATSAPP]", e.message));
-require("./routes/vinculacion")(app, allDeps);
 
 // ─── INTERVALS ────────────────────────────────────────────────────────────────
 const { iniciarIntervals } = require("./intervals");
@@ -137,21 +119,6 @@ app.get("/qr/:filename", (req, res) => {
   if (!fs.existsSync(file)) return res.status(404).send("Not found");
   res.setHeader("Cache-Control", "public, max-age=86400");
   res.sendFile(file);
-});
-
-// Estáticos de Vitalis (logo, css, los módulos JS de salud.html) — todo lo
-// que se agregue a public/salud/ queda servido solo, sin tocar este archivo.
-// maxAge corto a propósito: mientras el producto cambia seguido, que el
-// celular del médico siempre pida la versión nueva vale más que ahorrar
-// esas requests (son archivos chicos).
-app.use("/salud", require("express").static(require("path").join(__dirname, "public", "salud"), {
-  maxAge: "5m",
-}));
-
-// Web de consultas médicas (mismo dominio/certificado que la API, sin subdominio aparte)
-app.get("/salud", (_req, res) => {
-  const path = require("path");
-  res.sendFile(path.join(__dirname, "salud.html"));
 });
 
 // ─── SERVER ───────────────────────────────────────────────────────────────────
