@@ -136,6 +136,7 @@ function pintarKardex(p, consultas, medicamentos, vacunas, mediciones, estudios,
     </div>
 
     ${briefHtml}
+    ${tabMemoriaHtml(p._id)}
 
     <div class="stats-row">
       <div class="stat"><div class="stat-num">${consultas.length}</div><div class="stat-lbl">Consultas</div></div>
@@ -364,6 +365,10 @@ function pintarKardex(p, consultas, medicamentos, vacunas, mediciones, estudios,
         renderPacienteDetalle(p._id, "vacunas");
       };
     });
+  }
+
+  if (tabActiva === "paciente") {
+    wireTabMemoria(p);
   }
 
   if (tabActiva === "evolucion") {
