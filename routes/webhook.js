@@ -6,7 +6,7 @@ const http = require("http");
 const os = require("os");
 const { CONFIG, log } = require("../config");
 const { Usuario, Chofer, Viaje, ListaEspera, CodigoPromo, LocationReference } = require("../db/models");
-const { getSession, updateSession, deleteSession, checkRateLimit, sessionCache, yaProcesoMensaje } = require("../services/session");
+const { getSession, updateSession, setSession, deleteSession, checkRateLimit, sessionCache, yaProcesoMensaje } = require("../services/session");
 
 // Steps que NO se resetean por inactividad (viaje/pedido activo en curso).
 const STEPS_ACTIVOS_PROTEGIDOS = new Set([
@@ -83,12 +83,20 @@ app.post("/webhook", limitWebhook, async (req, res) => {
 
         log.info(`[WEBHOOK] From: ${phone}, Type: ${msg.type}, Text: "${msg.text?.body || ""}", Button: ${buttonId || "-"}`);
 
-        // Guardar nombre de perfil WhatsApp en sesión (viene en value.contacts, no en msg)
+        // Nombre de perfil WhatsApp (viene en value.contacts, no en msg). OJO: NO
+        // lo guardamos acá con updateSession porque eso re-estampa updatedAt en
+        // CADA mensaje y mataría el timeout de inactividad de abajo. Se persiste
+        // más adelante SIN contar como actividad.
         const waContacts = req.body.entry?.[0]?.changes?.[0]?.value?.contacts;
         const waName = waContacts?.find(c => c.wa_id === phone)?.profile?.name;
-        if (waName) await updateSession(phone, { waName });
 
-        const dentroLimite = await checkRateLimit(phone);
+        // CAMINO CRÍTICO: las 3 consultas independientes en paralelo (antes eran
+        // seriales: rate-limit → chofer → sesión). En cada mensaje se nota.
+        const [dentroLimite, choferReg, sessionInicial] = await Promise.all([
+          checkRateLimit(phone),
+          Chofer.findUnique({ where: { phone } }),
+          getSession(phone),
+        ]);
         if (!dentroLimite) {
           log.warn(`[WEBHOOK] Rate limit excedido para ${phone}`);
           // Avisar (una vez cada 15 min) en lugar de quedar mudo. Anti-spam:
@@ -139,12 +147,12 @@ app.post("/webhook", limitWebhook, async (req, res) => {
           continue;
         }
 
-        // ROUTING chofer/pasajero
-        const esChofer = !!(await Chofer.findUnique({ where: { phone } }));
+        // ROUTING chofer/pasajero (reutiliza la consulta paralela de arriba)
+        const esChofer = !!choferReg;
         // Los CHOFERES siempre se atienden por el número padre: las órdenes de
         // trabajo, botones y chat les llegan de UN solo número, escriban donde escriban
         if (esChofer) registrarNumeroEntrada(phone, CONFIG.WHATSAPP_PHONE_ID);
-        let session = await getSession(phone);
+        let session = sessionInicial;
 
         // ─── TIMEOUT DE INACTIVIDAD: reset silencioso al inicio ────────────────
         // Si el usuario dejó una conversación a medias (pedir viaje, vinculación
@@ -159,6 +167,14 @@ app.post("/webhook", limitWebhook, async (req, res) => {
             try { await deleteSession(phone); } catch (_) {}
             session = null; // el flujo lo trata como usuario nuevo (inicio)
           }
+        }
+
+        // Persistir el nombre de perfil de WhatsApp SIN contar como actividad:
+        // setSession NO toca updatedAt (a diferencia de updateSession), así que el
+        // timeout de inactividad de arriba sigue midiendo la última actividad real.
+        if (waName && session && session.waName !== waName) {
+          session = { ...session, waName };
+          try { await setSession(phone, session); } catch (_) {}
         }
 
         // Si es chofer registrado, NUNCA lo tratamos como pasajero por sesión residual.

@@ -17,6 +17,27 @@ const { asignarChofer, procesarCancelacionPasajero, procesarPedidoAyuda, registr
 const { buscarChoferDisponibleTraccar } = require("../services/traccar");
 const { procesarMensajeChofer } = require("../flows/chofer");
 
+// Fija la ciudad del pasajero a partir de un PIN de origen (la ubicación real
+// manda). Actualiza SIEMPRE session.ciudadUsuario y persiste en el perfil si
+// cambió, para que las direcciones de texto/audio de ESTE pedido se geocodifiquen
+// en la ciudad correcta. Antes solo se seteaba la primera vez y solo en el case
+// "esperando_origen" → un perfil viejo de otra ciudad hacía que un pin en La Paz
+// se ignorara, y "Av. América" resolvía a la calle homónima de Cochabamba.
+async function fijarCiudadPorPin(phone, coords, session) {
+  try {
+    if (!coords) return null;
+    const ciudad = detectarCiudadPorCoords(coords.lat, coords.lng);
+    if (!ciudad) return null;
+    if (session) session.ciudadUsuario = ciudad;
+    const u = await Usuario.findUnique({ where: { phone } }).catch(() => null);
+    if (!u?.ciudad || u.ciudad !== ciudad) {
+      await Usuario.updateMany({ where: { phone }, data: { ciudad, ciudadDetectada: true } }).catch(() => {});
+      log.info(`[CIUDAD] Pin fija ciudad → ${ciudad} para ${phone}`);
+    }
+    return ciudad;
+  } catch (e) { log.warn("[CIUDAD_PIN]", e.message); return null; }
+}
+
 // ─── SISTEMA DE VOZ GLOBAL (Opción C: espejo + forzado) ──────────────────────
 // enviarMensaje() es un wrapper inteligente: si el usuario está en modo voz
 // (mandó audio, o tiene respuestasPorVoz/modoAdultoMayor), responde HABLANDO.
@@ -151,7 +172,9 @@ async function flujoRapidoVoz(phone, session) {
     const { km, duracion } = distRes;
     const auto = calcularPrecio(km, "auto", subidaRes?.recargoBs || 0);
     const { multiplier } = surgeRes;
-    const precioAuto = aplicarSurge(auto.total, multiplier);
+    // El surge (alta demanda) multiplica SOLO la tarifa base; el recargo por
+    // subida es un costo fijo de topografía y se suma después (así respeta su tope).
+    const precioAuto = aplicarSurge(auto.total - auto.recargoSubida, multiplier) + auto.recargoSubida;
 
     // Ver si hay un chofer cerca
     let infoChofer;
@@ -255,9 +278,11 @@ async function procesarCalculoViaje(phone, session) {
 
     // IA PRICING: surge según demanda y hora (ya calculado en paralelo arriba)
     const { multiplier, motivos } = surgeRes;
-    const precioAutoFinal = aplicarSurge(auto.total, multiplier);
-    const precioMotoFinal = aplicarSurge(moto.total, multiplier);
-    const precioVanFinal = aplicarSurge(van.total, multiplier);
+    // El surge multiplica SOLO la tarifa base; el recargo por subida (topografía)
+    // se suma después para que no escale con la demanda y respete su tope en Bs.
+    const precioAutoFinal = aplicarSurge(auto.total - auto.recargoSubida, multiplier) + auto.recargoSubida;
+    const precioMotoFinal = aplicarSurge(moto.total - moto.recargoSubida, multiplier) + moto.recargoSubida;
+    const precioVanFinal  = aplicarSurge(van.total  - van.recargoSubida,  multiplier) + van.recargoSubida;
     const textoSurgeMsg = textoSurge(multiplier, motivos);
 
     const nuevaSession = {
@@ -1001,7 +1026,7 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
   // FEATURE: Detectar link de Google Maps en texto ──────────────────────────
   if (!coords && texto && (texto.includes("google.com/maps") || texto.includes("maps.app.goo.gl") || texto.includes("maps.google.com"))) {
     try {
-      const ciudadParaMaps = session.ciudadUsuario || usuario?.ciudad || "Cochabamba";
+      const ciudadParaMaps = session.ciudadUsuario || usuario?.ciudad || CONFIG.CIUDAD_DEFAULT;
       const coordsMaps = await detectarYExtrarCoordsMaps(texto, ciudadParaMaps);
       if (coordsMaps) {
         coords = coordsMaps;
@@ -1188,7 +1213,7 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
       // Ciudad del usuario para geocoding correcto — se calcula acá arriba porque
       // el CASO 2 (referencia vaga) también geocodifica y necesita el dato.
       const usuarioParaGeocode = await Usuario.findUnique({ where: { phone } });
-      const ciudadParaAudio = session.ciudadUsuario || usuarioParaGeocode?.ciudad || "Cochabamba";
+      const ciudadParaAudio = session.ciudadUsuario || usuarioParaGeocode?.ciudad || CONFIG.CIUDAD_DEFAULT;
 
       // ─── CASO 2: Referencia vaga (zona amplia o lugar grande) ────────────
       // Si la IA detecta algo vago, pedir referencia adicional antes de seguir
@@ -1573,6 +1598,7 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
       if (coords) {
         const origen = { ...coords };
         try { const dir = await obtenerDireccion(coords.lat, coords.lng); if (dir) origen.nombre = dir; } catch {}
+        await fijarCiudadPorPin(phone, coords, session); // el pin fija la ciudad de este pedido
         await updateSession(phone, { ...session, origen, step: "esperando_destino" });
         await enviarMensaje(phone, `✅ *Origen recibido:* ${origen.nombre || "tu ubicación"}\n\n🏁 Ahora envía tu *ubicación de destino* (a dónde quieres ir).`);
         break;
@@ -1617,6 +1643,7 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
       if (coords) {
         const origen = { ...coords };
         try { const dir = await obtenerDireccion(coords.lat, coords.lng); if (dir) origen.nombre = dir; } catch {}
+        await fijarCiudadPorPin(phone, coords, session); // el pin fija la ciudad de este pedido
         await updateSession(phone, { ...session, origen, step: "esperando_destino" });
         await enviarMensaje(phone, `✅ *Origen recibido:* ${origen.nombre || "tu ubicación actual"}\n\n🏁 Ahora envía tu *ubicación de destino* (a dónde quieres ir).`);
       } else {
@@ -1715,11 +1742,11 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
 
         // Guardar en memoria para futuros usuarios
         if (session.referenciaVozOrigen) {
-          await guardarReferenciaVoz(session.referenciaVozOrigen, origen.lat, origen.lng, origen.nombre || session.referenciaVozOrigen, session.ciudadUsuario || "Cochabamba");
+          await guardarReferenciaVoz(session.referenciaVozOrigen, origen.lat, origen.lng, origen.nombre || session.referenciaVozOrigen, session.ciudadUsuario || CONFIG.CIUDAD_DEFAULT);
           log.info(`[APRENDIZAJE] Origen guardado: "${session.referenciaVozOrigen}" → (${origen.lat}, ${origen.lng})`);
           // Si era una esquina (calle1+calle2 del detalle GPT), también guardarla en memoria compartida
           if (session._detOrigenCalle1 && session._detOrigenCalle2) {
-            await guardarEsquina(session._detOrigenCalle1, session._detOrigenCalle2, origen.lat, origen.lng, { phone, zona: session._detOrigenZona, ciudad: session.ciudadUsuario || "Cochabamba" });
+            await guardarEsquina(session._detOrigenCalle1, session._detOrigenCalle2, origen.lat, origen.lng, { phone, zona: session._detOrigenZona, ciudad: session.ciudadUsuario || CONFIG.CIUDAD_DEFAULT });
             log.info(`[CROWDSOURCE] Esquina compartida guardada: ${session._detOrigenCalle1} y ${session._detOrigenCalle2}`);
           }
         }
@@ -1782,10 +1809,10 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
 
         // Guardar en memoria para futuros usuarios
         if (session.referenciaVozDestino) {
-          await guardarReferenciaVoz(session.referenciaVozDestino, destino.lat, destino.lng, destino.nombre || session.referenciaVozDestino, session.ciudadUsuario || "Cochabamba");
+          await guardarReferenciaVoz(session.referenciaVozDestino, destino.lat, destino.lng, destino.nombre || session.referenciaVozDestino, session.ciudadUsuario || CONFIG.CIUDAD_DEFAULT);
           log.info(`[APRENDIZAJE] Destino guardado: "${session.referenciaVozDestino}" → (${destino.lat}, ${destino.lng})`);
           if (session._detDestinoCalle1 && session._detDestinoCalle2) {
-            await guardarEsquina(session._detDestinoCalle1, session._detDestinoCalle2, destino.lat, destino.lng, { phone, zona: session._detDestinoZona, ciudad: session.ciudadUsuario || "Cochabamba" });
+            await guardarEsquina(session._detDestinoCalle1, session._detDestinoCalle2, destino.lat, destino.lng, { phone, zona: session._detDestinoZona, ciudad: session.ciudadUsuario || CONFIG.CIUDAD_DEFAULT });
             log.info(`[CROWDSOURCE] Esquina compartida guardada: ${session._detDestinoCalle1} y ${session._detDestinoCalle2}`);
           }
         }
@@ -1823,19 +1850,11 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
         const origen = { ...coords };
         try { const dir = await obtenerDireccion(coords.lat, coords.lng); if (dir) origen.nombre = dir; } catch {}
 
-        // DETECCIÓN AUTOMÁTICA DE CIUDAD por el pin del usuario
-        const ciudadDetectada = detectarCiudadPorCoords(coords.lat, coords.lng);
-        if (ciudadDetectada) {
-          const usuarioCiudad = await Usuario.findUnique({ where: { phone } });
-          if (!usuarioCiudad?.ciudad) {
-            // Primera vez — guardar ciudad detectada y confirmar al usuario
-            await Usuario.updateMany({ where: { phone }, data: { ciudad: ciudadDetectada, ciudadDetectada: true } });
-            log.info(`[CIUDAD] Detectada: ${ciudadDetectada} para ${phone}`);
-            // Actualizar sesión con la ciudad
-            session.ciudadUsuario = ciudadDetectada;
-          }
-        } else if (!session.ciudadUsuario) {
-          // No detectamos la ciudad — preguntar
+        // DETECCIÓN AUTOMÁTICA DE CIUDAD por el pin (la ubicación real manda;
+        // re-fija aunque el perfil traiga una ciudad vieja de otra ciudad)
+        const ciudadDetectada = await fijarCiudadPorPin(phone, coords, session);
+        if (!ciudadDetectada && !session.ciudadUsuario) {
+          // No pudimos detectar la ciudad — preguntar
           await updateSession(phone, { ...session, origen, step: "confirmando_ciudad", origenPendiente: origen });
           await enviarBotones(phone,
             `✅ *Origen recibido.* ¿En qué ciudad estás?`,
@@ -1848,9 +1867,9 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
         if (session.referenciaVozOrigen) {
           try {
             const refNorm = normalizarReferencia(session.referenciaVozOrigen);
-            const yaExiste = await LocationReference.findFirst({ where: { referencia: refNorm } });
+            const yaExiste = await LocationReference.findFirst({ where: { referencia: refNorm, ciudad: session.ciudadUsuario || CONFIG.CIUDAD_DEFAULT } });
             if (!yaExiste) {
-              await guardarReferenciaVoz(session.referenciaVozOrigen, coords.lat, coords.lng, origen.nombre || session.referenciaVozOrigen, session.ciudadUsuario || "Cochabamba");
+              await guardarReferenciaVoz(session.referenciaVozOrigen, coords.lat, coords.lng, origen.nombre || session.referenciaVozOrigen, session.ciudadUsuario || CONFIG.CIUDAD_DEFAULT);
               log.info(`[CROWDSOURCE] Origen mapeado silenciosamente: "${session.referenciaVozOrigen}" → (${coords.lat}, ${coords.lng})`);
             }
           } catch (e) { log.error("[CROWDSOURCE_ORIGEN]", e.message); }
@@ -1939,9 +1958,9 @@ async function procesarMensajeUsuario(phone, mensaje, buttonId) {
         // asociarla automáticamente con el pin
         if (session.referenciaVozDestino) {
           const refNorm = normalizarReferencia(session.referenciaVozDestino);
-          const yaExiste = await LocationReference.findFirst({ where: { referencia: refNorm } });
+          const yaExiste = await LocationReference.findFirst({ where: { referencia: refNorm, ciudad: session.ciudadUsuario || CONFIG.CIUDAD_DEFAULT } });
           if (!yaExiste) {
-            await guardarReferenciaVoz(session.referenciaVozDestino, coords.lat, coords.lng, destino.nombre || session.referenciaVozDestino, session.ciudadUsuario || "Cochabamba");
+            await guardarReferenciaVoz(session.referenciaVozDestino, coords.lat, coords.lng, destino.nombre || session.referenciaVozDestino, session.ciudadUsuario || CONFIG.CIUDAD_DEFAULT);
             log.info(`[CROWDSOURCE] Destino mapeado silenciosamente: "${session.referenciaVozDestino}" → (${coords.lat}, ${coords.lng})`);
           }
         }

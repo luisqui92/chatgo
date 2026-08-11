@@ -3,6 +3,15 @@
 // ─── CONFIGURACIÓN ─────────────────────────────────────────────────────────
 const crypto = require("crypto");
 
+// Normaliza un número a formato boliviano de WhatsApp: solo dígitos, y si viene
+// el celular de 8 dígitos sin código de país, le antepone 591. Así el mismo
+// número calza escríbase "79159396", "591 79159396" o "+59179159396".
+function normalizarPhoneBolivia(n) {
+  const d = String(n || "").replace(/\D/g, "");
+  if (d.length === 8) return "591" + d;
+  return d;
+}
+
 const CONFIG = {
   WHATSAPP_TOKEN: process.env.WHATSAPP_TOKEN,
   WHATSAPP_PHONE_ID: process.env.WHATSAPP_PHONE_ID,
@@ -32,6 +41,11 @@ const CONFIG = {
   CODIGO_DESCUENTO_PORCENTAJE: 40,
   CODIGO_VIGENCIA_DIAS: 15,
 
+  // Ciudad asumida cuando todavía no se conoce la del usuario (usuario nuevo que
+  // pide por audio/texto/link antes de mandar un pin). Antes estaba clavado en
+  // "Cochabamba" en varios archivos → una dirección de La Paz resolvía a la calle
+  // homónima de Cochabamba. Para el piloto de La Paz: CIUDAD_DEFAULT=La Paz
+  CIUDAD_DEFAULT: process.env.CIUDAD_DEFAULT || "Cochabamba",
   MAX_PARADAS: 3,
   // Tiempo máximo inactividad en flujo de pedido antes de limpiar sesión (30 minutos)
   SESSION_PEDIDO_TIMEOUT_MS: 30 * 60 * 1000,
@@ -51,17 +65,23 @@ const CONFIG = {
   // números separados por coma para ver la secuencia de llegada de trabajos:
   // el más cercano recibe primero, y si rechaza/vence pasa al siguiente.
   // CHOFER_PRUEBA_PHONE queda por retrocompatibilidad (primer número).
-  CHOFER_PRUEBA_PHONE: (process.env.CHOFER_PRUEBA_PHONE || "59176496075").split(",")[0].trim(),
+  // Se normalizan a formato boliviano (591 + 8 dígitos) para que calcen con el
+  // phone guardado en la tabla Chofer AUNQUE en el .env se carguen sin el 591
+  // (ej. "79159396" → "59179159396"). Sin esto, el forzado nunca se activaba.
+  CHOFER_PRUEBA_PHONE: normalizarPhoneBolivia((process.env.CHOFER_PRUEBA_PHONE || "59176496075").split(",")[0]),
   CHOFER_PRUEBA_PHONES: (process.env.CHOFER_PRUEBA_PHONE || "59176496075")
     .split(",")
-    .map((n) => n.trim())
+    .map(normalizarPhoneBolivia)
     .filter(Boolean),
   // Cuota diaria que debe pagar cada chofer (en Bs)
   CUOTA_DIARIA_BS: Number(process.env.CUOTA_DIARIA_BS || 10),
   // ─── RECARGO POR SUBIDA (La Paz es una olla entre cerros) ─────────────────
   // Cobra un extra cuando el viaje SUBE (destino más alto que el origen), medido
   // con la API de Elevación de Google. En bajada o plano no se cobra extra.
-  RECARGO_SUBIDA_ENABLED: process.env.RECARGO_SUBIDA_ENABLED === "1",
+  // Encendido por defecto (antes exigía exactamente "=1" y quedaba muerto en
+  // silencio si se olvidaban). Se apaga solo con RECARGO_SUBIDA_ENABLED=0/false.
+  // El estado activo se loguea al arrancar (ver más abajo).
+  RECARGO_SUBIDA_ENABLED: !["0", "false", "no", "off"].includes(String(process.env.RECARGO_SUBIDA_ENABLED || "").trim().toLowerCase()),
   RECARGO_SUBIDA_BS_POR_100M: Number(process.env.RECARGO_SUBIDA_BS_POR_100M || 2), // Bs por cada 100 m de subida neta
   RECARGO_SUBIDA_UMBRAL_M: Number(process.env.RECARGO_SUBIDA_UMBRAL_M || 60),       // no cobrar si sube menos que esto (viaje casi plano)
   RECARGO_SUBIDA_MAX_BS: Number(process.env.RECARGO_SUBIDA_MAX_BS || 15),           // tope del recargo
@@ -112,17 +132,21 @@ const CIUDADES = {
     contextoGeocode: "Santa Cruz de la Sierra, Bolivia",
     refs: ["santa cruz","cruceño","la ramada","equipetrol","urubo","montero"],
   },
+  // La Paz "hoyada" (la ciudad en el valle) + Zona Sur. Recortada al ESTE de la
+  // ceja (lng > -68.16) para NO solaparse con El Alto (que está en la planicie al
+  // oeste). Antes la caja llegaba a -68.25 y contenía por completo a El Alto.
   "La Paz": {
-    bounds: { latMin: -16.65, latMax: -16.30, lngMin: -68.25, lngMax: -68.00 },
-    centro: { lat: -16.5000, lng: -68.1500 },
+    bounds: { latMin: -16.58, latMax: -16.46, lngMin: -68.16, lngMax: -68.03 },
+    centro: { lat: -16.4957, lng: -68.1336 }, // Plaza Murillo (antes estaba mal, caía en El Alto)
     contextoGeocode: "La Paz, Bolivia",
-    refs: ["la paz","miraflores","sopocachi","obrajes","calacoto","paceño"],
+    refs: ["la paz","miraflores","sopocachi","obrajes","calacoto","san miguel","cota cota","irpavi","paceño"],
   },
+  // El Alto: planicie al OESTE de la ceja (lng < -68.16). Disjunta de La Paz.
   "El Alto": {
-    bounds: { latMin: -16.55, latMax: -16.45, lngMin: -68.25, lngMax: -68.05 },
-    centro: { lat: -16.5000, lng: -68.1833 },
+    bounds: { latMin: -16.56, latMax: -16.46, lngMin: -68.25, lngMax: -68.16 },
+    centro: { lat: -16.5047, lng: -68.1633 }, // La Ceja
     contextoGeocode: "El Alto, Bolivia",
-    refs: ["el alto","ciudad satelite","16 de julio"],
+    refs: ["el alto","ciudad satelite","16 de julio","villa adela","rio seco"],
   },
   "Oruro": {
     bounds: { latMin: -18.05, latMax: -17.85, lngMin: -67.20, lngMax: -66.95 },
@@ -163,11 +187,18 @@ const CIUDADES = {
 };
 
 function detectarCiudadPorCoords(lat, lng) {
+  // Si dos cajas llegaran a solaparse, gana la MÁS ESPECÍFICA (menor área), para
+  // que un punto de El Alto nunca se clasifique como La Paz por orden de lista.
+  let mejor = null;
+  let mejorArea = Infinity;
   for (const [nombre, ciudad] of Object.entries(CIUDADES)) {
     const b = ciudad.bounds;
-    if (lat >= b.latMin && lat <= b.latMax && lng >= b.lngMin && lng <= b.lngMax) return nombre;
+    if (lat >= b.latMin && lat <= b.latMax && lng >= b.lngMin && lng <= b.lngMax) {
+      const area = (b.latMax - b.latMin) * (b.lngMax - b.lngMin);
+      if (area < mejorArea) { mejorArea = area; mejor = nombre; }
+    }
   }
-  return null;
+  return mejor;
 }
 
 function detectarCiudadPorTexto(texto) {
@@ -179,12 +210,16 @@ function detectarCiudadPorTexto(texto) {
   return null;
 }
 
+function ciudadPorDefecto() {
+  return CIUDADES[CONFIG.CIUDAD_DEFAULT] ? CONFIG.CIUDAD_DEFAULT : "Cochabamba";
+}
+
 function getContextoGeocode(ciudadUsuario) {
-  return (CIUDADES[ciudadUsuario] || CIUDADES["Cochabamba"]).contextoGeocode;
+  return (CIUDADES[ciudadUsuario] || CIUDADES[ciudadPorDefecto()]).contextoGeocode;
 }
 
 function getBoundsUsuario(ciudadUsuario) {
-  return (CIUDADES[ciudadUsuario] || CIUDADES["Cochabamba"]).bounds;
+  return (CIUDADES[ciudadUsuario] || CIUDADES[ciudadPorDefecto()]).bounds;
 }
 
 // ─── LOGGER ────────────────────────────────────────────────────────────────
@@ -226,7 +261,12 @@ function validateConfig() {
     console.warn("⚠️ Variables recomendadas no definidas:", warnings.join(", "));
     console.warn("   El bot funcionará pero con menos seguridad.");
   }
+  // Estado de flags sensibles del piloto — visibles de un vistazo al arrancar,
+  // para no descubrir en producción que una feature quedó apagada en silencio.
+  log.info(`🌆 Ciudad por defecto: ${ciudadPorDefecto()}${CIUDADES[CONFIG.CIUDAD_DEFAULT] ? "" : " (CIUDAD_DEFAULT inválida, usando Cochabamba)"}`);
+  log.info(`⛰️ Recargo por subida: ${CONFIG.RECARGO_SUBIDA_ENABLED ? "ENCENDIDO" : "apagado"} (Bs ${CONFIG.RECARGO_SUBIDA_BS_POR_100M}/100m, umbral ${CONFIG.RECARGO_SUBIDA_UMBRAL_M}m, tope Bs ${CONFIG.RECARGO_SUBIDA_MAX_BS})`);
+  log.info(`🚕 Superchoferes de prueba: ${CONFIG.CHOFER_PRUEBA_PHONES.join(", ") || "(ninguno)"}`);
   return true;
 }
 
-module.exports = { CONFIG, CIUDADES, log, detectarCiudadPorCoords, detectarCiudadPorTexto, getContextoGeocode, getBoundsUsuario, validateConfig };
+module.exports = { CONFIG, CIUDADES, log, detectarCiudadPorCoords, detectarCiudadPorTexto, getContextoGeocode, getBoundsUsuario, ciudadPorDefecto, validateConfig };

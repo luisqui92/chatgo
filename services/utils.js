@@ -519,7 +519,7 @@ async function guardarEsquina(calle1, calle2, lat, lng, opciones = {}) {
     if (!llave) return null;
     // La MISMA llave puede existir en varias ciudades (calles con igual nombre):
     // la identidad real es (llave, ciudad).
-    const ciudad = opciones.ciudad || "Cochabamba";
+    const ciudad = opciones.ciudad || CONFIG.CIUDAD_DEFAULT;
 
     const existente = await EsquinaMapeada.findFirst({ where: { llave, ciudad } });
     if (existente) {

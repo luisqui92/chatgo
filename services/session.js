@@ -102,7 +102,9 @@ async function checkRateLimit(phone) {
       updatedAt = NOW()
   `;
   const doc = await RateLimit.findUnique({ where: { phone } });
-  return doc.count <= CONFIG.MAX_MENSAJES_POR_HORA;
+  // Guard de null: si por un hipo de MySQL el SELECT viene vacío, NO tirar
+  // TypeError (eso descartaría un mensaje real). Ante la duda, dejar pasar.
+  return !doc || doc.count <= CONFIG.MAX_MENSAJES_POR_HORA;
 }
 
 

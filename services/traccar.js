@@ -131,6 +131,13 @@ async function buscarChoferDisponibleTraccar(origenUsuario, excludeTraccarIds = 
       // chofer no reportó hace rato, la distancia se calcula con una posición
       // vieja — mostrar los minutos deja eso a la vista.
       const minutosPos = pos.fixTime ? Math.round((Date.now() - new Date(pos.fixTime).getTime()) / 60000) : 0;
+      // GPS congelado (app cerrada / sin señal): NO forzar sobre una posición
+      // vieja, el flujo normal también descarta a >10 min. Si todos los de prueba
+      // están viejos, cae al flujo normal.
+      if (minutosPos > 15) {
+        log.warn(`[TRACCAR_PRUEBA] Chofer de prueba ${phone} con GPS viejo (${minutosPos} min) → se salta`);
+        continue;
+      }
       candidatosPrueba.push({
         ...choferPrueba,
         ubicacion: { lat: pos.latitude, lng: pos.longitude, minutos: minutosPos },
@@ -220,8 +227,17 @@ async function buscarChoferDisponibleTraccar(origenUsuario, excludeTraccarIds = 
 // ─── RESERVA ─────────────────────────────────────────────────────────────────
 async function reservarChoferTraccar(traccarId, viajeId) {
   const reservadoHasta = new Date(Date.now() + (CONFIG.TIMEOUT_ACEPTACION_CHOFER + 10) * 1000);
+  // Los SUPERCHOFERES de prueba se reservan AUNQUE no estén en estado "libre".
+  // Antes se exigía estado:"libre" a todos; si el superchofer no había tocado
+  // "🟢 Libre", la reserva devolvía count=0 (fallo SILENCIOSO) → se borraba el
+  // viaje y no se asignaba a nadie. El forzado ahora es forzado de verdad.
+  const choferPrev = await Chofer.findUnique({ where: { traccarId } });
+  const esPrueba = choferPrev && CONFIG.CHOFER_PRUEBA_PHONES.includes(choferPrev.phone);
+  const where = esPrueba
+    ? { traccarId, viajeReservado: null }                      // prueba: sin exigir "libre"
+    : { traccarId, estado: "libre", viajeReservado: null };    // real: como siempre
   const { count } = await Chofer.updateMany({
-    where: { traccarId, estado: "libre", viajeReservado: null },
+    where,
     data: { viajeReservado: String(viajeId), reservadoHasta },
   });
   if (count === 0) return null;

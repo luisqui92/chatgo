@@ -161,7 +161,7 @@ function extraerNombreLugarDeUrl(url) {
 
 // Detecta si un texto contiene un link de Google Maps y extrae coords
 
-async function detectarYExtrarCoordsMaps(texto, ciudadUsuario = "Cochabamba") {
+async function detectarYExtrarCoordsMaps(texto, ciudadUsuario = CONFIG.CIUDAD_DEFAULT) {
   if (!texto) return null;
 
   // URL corta de Google Maps (maps.app.goo.gl)
@@ -276,7 +276,7 @@ async function buscarReferenciaEnMemoria(referencia, ciudadUsuario) {
   if (!referencia || referencia.length < 4) return null;
   if (!ciudadUsuario) {
     log.warn(`[VOICE_MEM] buscarReferenciaEnMemoria llamado sin ciudad para "${referencia}" — usando Cochabamba por defecto. Revisar call site.`);
-    ciudadUsuario = "Cochabamba";
+    ciudadUsuario = CONFIG.CIUDAD_DEFAULT;
   }
   const norm = normalizarReferencia(referencia);
 
@@ -325,7 +325,7 @@ async function guardarReferenciaVoz(referenciaOriginal, lat, lng, nombre, ciudad
   if (!referenciaOriginal || referenciaOriginal.length < 4) return;
   if (!ciudadUsuario) {
     log.warn(`[VOICE_MEM] guardarReferenciaVoz llamado sin ciudad para "${referenciaOriginal}" — usando Cochabamba por defecto. Revisar call site.`);
-    ciudadUsuario = "Cochabamba";
+    ciudadUsuario = CONFIG.CIUDAD_DEFAULT;
   }
   try {
     const norm = normalizarReferencia(referenciaOriginal);
@@ -360,7 +360,7 @@ async function geocodificarConMemoria(referencia, ciudadUsuario) {
   if (!referencia) return null;
   if (!ciudadUsuario) {
     log.warn(`[VOICE_MEM] geocodificarConMemoria llamado sin ciudad para "${referencia}" — usando Cochabamba por defecto. Revisar call site.`);
-    ciudadUsuario = "Cochabamba";
+    ciudadUsuario = CONFIG.CIUDAD_DEFAULT;
   }
 
   // 1. Buscar en memoria local filtrada por ciudad
@@ -610,7 +610,7 @@ function generarLinkRutaConParadas(origen, paradas, destino) {
   return url;
 }
 
-async function geocodificarDireccion(direccion, reintentoInterseccion = true, ciudadUsuario = "Cochabamba") {
+async function geocodificarDireccion(direccion, reintentoInterseccion = true, ciudadUsuario = CONFIG.CIUDAD_DEFAULT) {
   try {
     const contexto = getContextoGeocode(ciudadUsuario);
     const boundsC = getBoundsUsuario(ciudadUsuario);
