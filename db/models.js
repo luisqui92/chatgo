@@ -377,5 +377,4 @@ const notificacionPagoSchema = new mongoose.Schema({
 notificacionPagoSchema.index({ createdAt: 1 }, { expireAfterSeconds: 1200 });
 const NotificacionPago = mongoose.model("NotificacionPago", notificacionPagoSchema, "notificacionespago");
 
-
 module.exports = { Usuario, Chofer, Viaje, SessionState, ListaEspera, RateLimit, CodigoPromo, LocationReference, Demanda, EventoChofer, AlertaSeg, Surge, ViajeDemo, EsquinaMapeada, PreRegistroFlota, Flota, NotificacionPago };
