@@ -129,6 +129,7 @@ require("./routes/webhook")(app, allDeps);
 require("./routes/admin")(app, allDeps);
 require("./routes/pagoNotificacion")(app, allDeps);
 require("./routes/mapa")(app);
+require("./routes/extracto")(app); // Extracto de carreras del chofer (boleto) — GET /extracto/:phone
 require("./routes/web")(app); // Canal web premium (Etapa 1) — GET /pedir
 require("./routes/bus")(app); // ChatGo Bus demo — GET /bus/:lineaId
 require("./routes/flota")(app); // Mapa de flota en vivo — GET /flota
